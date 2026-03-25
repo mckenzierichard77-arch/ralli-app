@@ -54,7 +54,7 @@ const T = {
 
 const GS = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@900&display=swap');
-  *{box-sizing:border-box;} body{margin:0;background:#F8F9FB;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;letter-spacing:0;overscroll-behavior-y:none;}
+  *{box-sizing:border-box;} body{margin:0;background:#F8F9FB;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;letter-spacing:0;}
   ::placeholder{color:${T.textLight};}
   .share-toast{position:fixed;bottom:calc(5rem + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:${T.text};color:#fff;padding:0.5rem 1.1rem;border-radius:999px;font-size:0.78rem;font-family:'Inter',sans-serif;font-weight:500;z-index:9999;opacity:0;animation:toastIn 2.2s ease forwards;pointer-events:none;white-space:nowrap;}
   @keyframes toastIn{0%{opacity:0;transform:translateX(-50%) translateY(8px)}12%{opacity:1;transform:translateX(-50%) translateY(0)}80%{opacity:1}100%{opacity:0;transform:translateX(-50%) translateY(-4px)}}
@@ -92,7 +92,6 @@ const GS = `
   .tap-scale:active{transform:scale(0.97);transition:transform 0.08s ease;}
   .save-toast{position:fixed;bottom:calc(5.5rem + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:${T.sage};color:#fff;padding:0.45rem 1rem;border-radius:999px;font-size:0.76rem;font-family:'Inter',sans-serif;font-weight:600;z-index:9999;pointer-events:none;white-space:nowrap;animation:toastIn 2s ease forwards;}
   input,button,textarea{font-family:'Inter',sans-serif;}
-  input[type="text"],input[type="email"],input[type="password"],input[type="search"],textarea{font-size:16px !important;}
   /* Brand hero header used on every page */
   .ralli-page-hero{background:#111827;padding:1.1rem 1rem 1rem;margin-bottom:0;}
   .ralli-wordmark{font-family:'Poppins',sans-serif;font-weight:900;font-size:2.2rem;color:#FFFFFF;letter-spacing:-0.04em;line-height:1;}
@@ -120,20 +119,15 @@ async function fetchCuratedRecs() {
   try {
     const snap = await getDocs(query(
       collection(db, "products"),
-      where("approved", "==", true),
-      limit(50)
+      where("featured", "==", true),
+      orderBy("communityRating", "desc"),
+      limit(12)
     ));
     if (!snap.empty) {
-      return snap.docs
-        .map(d => ({id: d.id, ...d.data()}))
-        .filter(p => {
-          const img = (p.adminImage || p.image || "").trim();
-          return img && img.startsWith("http") && !img.startsWith("data:");
-        })
-        .sort((a,b) => (b.communityRating||0) - (a.communityRating||0));
+      return snap.docs.map(d => ({id: d.id, ...d.data()}));
     }
   } catch {}
-  return [];
+  return CURATED_RECS_FALLBACK;
 }
 
 // ── PRODUCT_IMG_MAP removed — images now live on product documents in Firestore ──
@@ -752,13 +746,10 @@ const _imgValidCache = {};
 function hasValidImage(p) {
   const url = ((p.adminImage || p.image) || "").trim();
   if (!url || !url.startsWith("http")) return false;
-  // Reject known unstable or non-product image sources
+  // Reject known non-image patterns
   if (url.includes("media-amazon.com")) return false;
-  if (url.includes("encrypted-tbn0.gstatic.com")) return false;
-  if (url.includes("gstatic.com")) return false;
-  if (url.startsWith("data:")) return false;
   if (!/\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(url)) return false;
-  return true;
+  return true; // URL looks like a real image — display it and let onError handle failures
 }
 // For admin display, use actual image load test
 function AdminImageStatus({ p }) {
@@ -929,7 +920,7 @@ let _productCache = null;
 async function getProductCache() {
   if (_productCache) return _productCache;
   const snap = await getDocs(collection(db,"products"));
-  _productCache = snap.docs.map(d=>({id:d.id,...d.data()})).filter(p=>!p.deleted);
+  _productCache = snap.docs.map(d=>({id:d.id,...d.data()}));
   // Expire cache after 5 minutes
   setTimeout(()=>{ _productCache = null; }, 5*60*1000);
   return _productCache;
@@ -1068,15 +1059,11 @@ async function searchProducts(searchTerm) {
 
   return results
     .sort((a, b) => {
-      const hasImg = p => {
-        const img = (p.image||"").trim();
-        return img && img.startsWith("http") && !img.startsWith("data:");
-      };
-      // Rank: 0) approved + valid image, 1) approved no image, 2) in DB not approved, 3) OBF/external
-      const scoreA = a._cached && a._approved && hasImg(a) ? 0 : a._cached && a._approved ? 1 : a._cached ? 2 : 3;
-      const scoreB = b._cached && b._approved && hasImg(b) ? 0 : b._cached && b._approved ? 1 : b._cached ? 2 : 3;
+      // Rank: 1) approved DB products with image, 2) approved DB products, 3) DB products, 4) OBF/external
+      const scoreA = a._cached && a._approved ? (a.image ? 0 : 1) : a._cached ? 2 : 3;
+      const scoreB = b._cached && b._approved ? (b.image ? 0 : 1) : b._cached ? 2 : 3;
       if (scoreA !== scoreB) return scoreA - scoreB;
-      // Within same tier: exact name match first
+      // Within same tier: sort by name match quality (exact first)
       const q = searchTerm.toLowerCase().trim();
       const aExact = (a.name||"").toLowerCase().startsWith(q) ? 0 : 1;
       const bExact = (b.name||"").toLowerCase().startsWith(q) ? 0 : 1;
@@ -1391,54 +1378,29 @@ function BarcodeScanner({onDetected, onError}) {
   const [status, setStatus] = useState("loading");
   useEffect(()=>{
     let reader=null,stopped=false;
-
-    // First check camera permission
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      onError("Camera not supported on this browser. Try Chrome or Safari.");
-      return;
-    }
-
     const s=document.createElement("script");
     s.src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js";
     s.onload=async()=>{
       if(stopped) return;
       try {
-        // Request camera permission explicitly first
-        await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-
         reader=new window.ZXing.BrowserMultiFormatReader();
         const devices=await reader.listVideoInputDevices();
-        if(!devices.length) throw new Error("No camera found — please allow camera access and try again.");
-
-        // Prefer back camera on mobile
-        const cam = devices.find(d=>/back|rear|environment/i.test(d.label))
-          || devices.find(d=>!/front|user|face/i.test(d.label))
-          || devices[devices.length-1];
-
+        if(!devices.length) throw new Error("No camera found");
+        const cam=devices.find(d=>/back|rear/i.test(d.label))||devices[devices.length-1];
         setStatus("scanning");
-        await reader.decodeFromVideoDevice(cam.deviceId, videoRef.current, (result)=>{
+        await reader.decodeFromVideoDevice(cam.deviceId,videoRef.current,(result)=>{
           if(stopped||!result) return;
           stopped=true; reader.reset(); onDetected(result.getText());
         });
-      } catch(e){
-        if(!stopped){
-          setStatus("error");
-          const msg = e.name === "NotAllowedError"
-            ? "Camera access denied — please allow camera access in your browser settings and try again."
-            : e.name === "NotFoundError"
-            ? "No camera found on this device."
-            : e.message || "Camera error";
-          onError(msg);
-        }
-      }
+      } catch(e){if(!stopped){setStatus("error");onError(e.message);}}
     };
-    s.onerror=()=>onError("Failed to load scanner — check your connection and try again.");
+    s.onerror=()=>onError("Failed to load scanner");
     document.head.appendChild(s);
-    return()=>{stopped=true;if(reader)try{reader.reset();}catch{}if(s.parentNode)s.parentNode.removeChild(s);};
+    return()=>{stopped=true;if(reader)reader.reset();if(s.parentNode)s.parentNode.removeChild(s);};
   },[]);
   return (
     <div style={{position:"relative",borderRadius:"1rem",overflow:"hidden",background:"#000"}}>
-      <video ref={videoRef} style={{width:"100%",display:"block",maxHeight:"260px",objectFit:"cover"}} playsInline muted autoPlay/>
+      <video ref={videoRef} style={{width:"100%",display:"block",maxHeight:"260px",objectFit:"cover"}}/>
       {status==="scanning"&&(
         <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:"0.75rem"}}>
           <div style={{width:"200px",height:"100px",position:"relative"}}>
@@ -1450,7 +1412,7 @@ function BarcodeScanner({onDetected, onError}) {
           <span style={{color:"white",fontSize:"0.8rem",background:"rgba(0,0,0,0.5)",padding:"4px 12px",borderRadius:"999px"}}>Point at barcode</span>
         </div>
       )}
-      {status==="loading"&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontSize:"0.85rem"}}>Starting camera…</div>}
+      {status==="loading"&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",color:"white"}}>Starting camera…</div>}
     </div>
   );
 }
@@ -1524,7 +1486,7 @@ function ProductImage({src, name, brand, barcode, size="full"}) {
 
   const dim = size==="full" ? {width:"100%",height:"100%"} : {width:size,height:size};
   if (!imgSrc || failed) return <div style={{...dim,borderRadius:"inherit",overflow:"hidden",flexShrink:0}}><PlaceholderCard name={name} brand={brand}/></div>;
-  return <img src={imgSrc} alt={name||""} style={{...dim,objectFit:"contain",padding:"8px",background:"#ffffff",mixBlendMode:"multiply"}} onError={handleError}/>;
+  return <img src={imgSrc} alt={name||""} style={{...dim,objectFit:"contain",padding:"8px",background:"#ffffff",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={handleError}/>;
 }
 
 // ── Avatar ────────────────────────────────────────────────────
@@ -1889,7 +1851,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
             style={{display:"flex",gap:"0.75rem",alignItems:"center",padding:"0.75rem 0.85rem",cursor:onProductTap?"pointer":"default",background:T.surface}}>
             <div style={{width:"54px",height:"54px",flexShrink:0,borderRadius:"0.6rem",overflow:"hidden",background:T.surfaceAlt,display:"flex",alignItems:"center",justifyContent:"center"}}>
               {liveImage
-                ? <img src={liveImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"5px",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/>
+                ? <img src={liveImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"5px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
                 : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.border} strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
               }
             </div>
@@ -1991,10 +1953,6 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
   const [existingRating, setExistingRating] = useState(null);
   const [loadingExisting, setLoadingExisting] = useState(true);
   const [shareOpen, setShareOpen] = useState(false);
-  const [reportOpen, setReportOpen] = useState(false);
-  const [reportSubmitted, setReportSubmitted] = useState(false);
-  const [reportType, setReportType] = useState("");
-  const [reportNote, setReportNote] = useState("");
   const [friendsUsing, setFriendsUsing] = useState(product?.friends || []);
 
   // Load who in your network uses this product
@@ -2174,12 +2132,10 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
         </div>
         {shareOpen&&user&&<ShareProductModal user={user} product={product} onClose={()=>setShareOpen(false)}/>}
 
-        {/* Product image — only show if there's a real image */}
-        {(product.image||product.adminImage||product.productImage) ? (
-          <div style={{width:"100%",height:"200px",background:T.surfaceAlt,borderRadius:"1rem",overflow:"hidden",marginBottom:"1.25rem",display:"flex",alignItems:"center",justifyContent:"center"}}>
-            <ProductImage src={product.image||product.adminImage||product.productImage} name={product.productName} brand={product.brand} barcode={product.barcode}/>
-          </div>
-        ) : null}
+        {/* Product image */}
+        <div style={{width:"100%",height:"200px",background:T.surfaceAlt,borderRadius:"1rem",overflow:"hidden",marginBottom:"1.25rem",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <ProductImage src={product.image} name={product.productName} brand={product.brand} barcode={product.barcode}/>
+        </div>
 
         {/* Name + brand */}
         <div style={{marginBottom:"1rem"}}>
@@ -2283,7 +2239,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
                       <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
                         {cloggers.map((ing,i)=>{
                           const ingPs = poreStyle(ing.score);
-                          const pctMap = {5:"High risk for most acne-prone skin",4:"Likely to cause breakouts",3:"May cause breakouts in sensitive skin",2:"Low risk — can affect some acne-prone skin",1:"Very low risk — rarely causes issues"};
+                          const pctMap = {5:"~70% of users",4:"~55% of users",3:"~35% of users",2:"~20% of users",1:"~10% of users"};
                           return (
                             <div key={i} style={{display:"flex",alignItems:"flex-start",gap:"0.6rem",padding:"0.5rem 0.65rem",background:ingPs.color+"0A",borderRadius:"0.6rem",border:`1px solid ${ingPs.color}20`}}>
                               <div style={{flexShrink:0,marginTop:"1px",width:"20px",height:"20px",borderRadius:"0.35rem",background:ingPs.color,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -2292,7 +2248,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
                               <div style={{flex:1,minWidth:0}}>
                                 <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>{ing.name}</div>
                                 <div style={{fontSize:"0.68rem",color:T.textMid,marginTop:"1px",lineHeight:1.35}}>{ing.note || "May clog pores"}</div>
-                                <div style={{fontSize:"0.62rem",color:ingPs.color,marginTop:"2px",fontWeight:"500"}}>{pctMap[ing.score]||"May affect some skin"}</div>
+                                <div style={{fontSize:"0.62rem",color:ingPs.color,marginTop:"2px",fontWeight:"500"}}>Affects {pctMap[ing.score]||"some users"} with acne-prone skin</div>
                               </div>
                             </div>
                           );
@@ -2323,11 +2279,11 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
 
                   {/* Safe highlights */}
                   {safeHighlights.length > 0 && (
-                    <div style={{marginBottom: cloggers.length===0&&irritants.length===0 ? "0.6rem" : "0"}}>
-                      <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.35rem"}}>Good stuff in here</div>
-                      <div style={{display:"flex",flexWrap:"wrap",gap:"0.25rem"}}>
+                    <div>
+                      <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.4rem"}}>Good stuff in here</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:"0.35rem"}}>
                         {safeHighlights.map((ing,i)=>(
-                          <span key={i} style={{padding:"0.2rem 0.55rem",background:T.sage+"12",border:`1px solid ${T.sage}30`,borderRadius:"999px",fontSize:"0.68rem",color:T.sage,fontWeight:"500",fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>✓ {ing.name}</span>
+                          <span key={i} style={{padding:"0.25rem 0.6rem",background:T.sage+"12",border:`1px solid ${T.sage}30`,borderRadius:"999px",fontSize:"0.7rem",color:T.sage,fontWeight:"500",fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>✓ {ing.name}</span>
                         ))}
                       </div>
                     </div>
@@ -2335,9 +2291,9 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
 
                   {/* All clear */}
                   {cloggers.length === 0 && irritants.length === 0 && (
-                    <div style={{display:"flex",alignItems:"center",gap:"0.4rem",padding:"0.45rem 0.6rem",background:T.sage+"0D",borderRadius:"0.5rem",border:`1px solid ${T.sage}20`}}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.sage} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                      <span style={{fontSize:"0.72rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>No flagged ingredients — this formula is pore-safe</span>
+                    <div style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.5rem 0.65rem",background:T.sage+"0D",borderRadius:"0.6rem",border:`1px solid ${T.sage}25`}}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.sage} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      <span style={{fontSize:"0.75rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>No flagged ingredients — this formula is pore-safe</span>
                     </div>
                   )}
                 </div>
@@ -2347,6 +2303,29 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
         })()}
 
         {/* Followers who use this */}
+        {followersWhoUse.length>0&&(
+          <div style={{marginBottom:"1rem",padding:"0.65rem 0.85rem",background:T.surfaceAlt,borderRadius:"0.75rem",border:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:"0.65rem"}}>
+            <div style={{display:"flex",flexShrink:0}}>
+              {followersWhoUse.slice(0,4).map((u,i)=>(
+                <div key={u.uid} style={{width:"26px",height:"26px",borderRadius:"50%",overflow:"hidden",border:`2px solid ${T.surface}`,marginLeft:i>0?"-7px":"0",background:"#e0e0e0",flexShrink:0,position:"relative",zIndex:4-i}}>
+                  {u.photoURL
+                    ? <img src={u.photoURL} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                    : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:T.accent,fontSize:"0.52rem",fontWeight:"700",color:"#fff"}}>{(u.displayName||"?")[0].toUpperCase()}</div>
+                  }
+                </div>
+              ))}
+            </div>
+            <span style={{fontSize:"0.75rem",color:T.textMid,fontWeight:"500",fontFamily:"'Inter',sans-serif",lineHeight:1.35}}>
+              <b style={{color:T.text,fontWeight:"700"}}>
+                {followersWhoUse.length===1
+                  ? followersWhoUse[0].displayName||"Someone you follow"
+                  : followersWhoUse.slice(0,2).map(u=>u.displayName||"?").join(" & ")}
+              </b>
+              {followersWhoUse.length>2 ? ` + ${followersWhoUse.length-2} more` : ""} {followersWhoUse.length===1?"uses":"use"} this
+            </span>
+          </div>
+        )}
+
         {/* Skin types */}
         {product.skinTypes?.length>0&&(
           <div style={{marginBottom:"1rem"}}>
@@ -2548,66 +2527,6 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
               </p>
             </div>
             <div style={{fontSize:"0.58rem",color:T.textLight,marginTop:"0.35rem",fontStyle:"italic"}}>Flagged ingredients shown in red</div>
-          </div>
-        )}
-
-        {/* Report an issue */}
-        {user && (
-          <div style={{marginTop:"1.5rem",borderTop:`1px solid ${T.border}`,paddingTop:"1rem"}}>
-            {!reportOpen && !reportSubmitted && (
-              <button onClick={()=>setReportOpen(true)}
-                style={{background:"none",border:"none",cursor:"pointer",color:T.textLight,fontSize:"0.68rem",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",gap:"0.3rem",padding:0}}>
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                Report an issue with this product
-              </button>
-            )}
-            {reportSubmitted && (
-              <div style={{fontSize:"0.72rem",color:T.sage,fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",gap:"0.3rem"}}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.sage} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                Thanks for the report — we'll review it soon.
-              </div>
-            )}
-            {reportOpen && !reportSubmitted && (
-              <div style={{background:T.surfaceAlt,borderRadius:"0.85rem",padding:"0.85rem",border:`1px solid ${T.border}`}}>
-                <div style={{fontSize:"0.75rem",fontWeight:"700",color:T.text,marginBottom:"0.6rem",fontFamily:"'Inter',sans-serif"}}>Report an issue</div>
-                <div style={{display:"flex",flexDirection:"column",gap:"0.3rem",marginBottom:"0.6rem"}}>
-                  {["Wrong ingredients","Wrong pore score","Wrong product image","Duplicate product","Product doesn't exist","Other"].map(type=>(
-                    <button key={type} onClick={()=>setReportType(type)}
-                      style={{padding:"0.4rem 0.65rem",borderRadius:"0.5rem",border:`1.5px solid ${reportType===type?T.rose:T.border}`,background:reportType===type?T.rose+"12":"transparent",color:reportType===type?T.rose:T.textMid,fontSize:"0.72rem",fontWeight:reportType===type?"700":"400",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif",transition:"all 0.12s"}}>
-                      {type}
-                    </button>
-                  ))}
-                </div>
-                <textarea value={reportNote} onChange={e=>setReportNote(e.target.value)}
-                  placeholder="Any extra details? (optional)"
-                  style={{width:"100%",padding:"0.4rem 0.55rem",borderRadius:"0.5rem",border:`1px solid ${T.border}`,fontSize:"0.72rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface,resize:"none",boxSizing:"border-box",minHeight:"56px",outline:"none"}}/>
-                <div style={{display:"flex",gap:"0.4rem",marginTop:"0.5rem"}}>
-                  <button onClick={async()=>{
-                    if (!reportType) return;
-                    try {
-                      await addDoc(collection(db,"reports"),{
-                        productName: productName,
-                        brand: product.brand||"",
-                        productId: product.id||"",
-                        reportType,
-                        note: reportNote.trim(),
-                        uid: user.uid,
-                        createdAt: Date.now(),
-                        status: "open",
-                      });
-                      setReportSubmitted(true); setReportOpen(false);
-                    } catch(e){ alert("Failed to submit: "+e.message); }
-                  }} disabled={!reportType}
-                    style={{flex:1,padding:"0.45rem",background:reportType?T.rose:"#ccc",color:"#fff",border:"none",borderRadius:"0.5rem",fontSize:"0.75rem",fontWeight:"700",cursor:reportType?"pointer":"not-allowed",fontFamily:"'Inter',sans-serif"}}>
-                    Submit Report
-                  </button>
-                  <button onClick={()=>{setReportOpen(false);setReportType("");setReportNote("");}}
-                    style={{padding:"0.45rem 0.75rem",background:"transparent",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.75rem",color:T.textMid,cursor:"pointer"}}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -2894,13 +2813,13 @@ function AuthPage() {
   return (
     <div style={{minHeight:"100vh",background:T.bg,display:"flex",flexDirection:"column"}}>
       {/* Auth header — clean minimal */}
-      <div style={{padding:"2.5rem 2rem 1.5rem",textAlign:"center",borderBottom:`1px solid ${T.border}`,background:T.bg}}>
+      <div style={{padding:"2.5rem 2rem 1.5rem",textAlign:"center",borderBottom:`1px solid ${T.border}`}}>
         <div style={{lineHeight:1}}>
           <div style={{fontFamily:"'Poppins',sans-serif",fontWeight:"900",fontSize:"3rem",color:T.navy,letterSpacing:"-0.04em",lineHeight:1}}>Ralli</div>
-          <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"300",fontSize:"0.72rem",color:"#9AACBC",letterSpacing:"0.22em",textTransform:"uppercase",marginTop:"0.4rem"}}>by GoodSisters</div>
+          <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"300",fontSize:"0.72rem",color:T.textLight,letterSpacing:"0.22em",textTransform:"uppercase",marginTop:"0.4rem"}}>by GoodSisters</div>
         </div>
-        <div style={{width:"32px",height:"1px",background:"#BBC5CE",margin:"0.75rem auto"}}/>
-        <div style={{fontSize:"0.58rem",color:"#BBC5CE",letterSpacing:"0.22em",textTransform:"uppercase",fontFamily:"'Inter',sans-serif",fontWeight:"400"}}>
+        <div style={{width:"32px",height:"1px",background:T.border,margin:"0.75rem auto"}}/>
+        <div style={{fontSize:"0.58rem",color:T.textLight,letterSpacing:"0.22em",textTransform:"uppercase",fontFamily:"'Inter',sans-serif",fontWeight:"400"}}>
           Real people. Real skin. Real insights.
         </div>
       </div>
@@ -3039,23 +2958,8 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack}) {
               {lists.map(l=>(
                 <ListSection key={l.field} title={l.title} icon={l.icon} color={l.color}
                   items={profile[l.field]||[]} readOnly={true}
-                  onItemTap={async name=>{
-                    let found = null;
-                    try {
-                      const snap = await getDocs(query(collection(db,"products"), where("productName","==",name), limit(1)));
-                      if (!snap.empty) found = {id:snap.docs[0].id,...snap.docs[0].data()};
-                    } catch {}
-                    setSelectedProduct({
-                      productName: name,
-                      brand: found?.brand||"",
-                      poreScore: found?.poreScore??0,
-                      communityRating: found?.communityRating||null,
-                      image: found?.adminImage||found?.image||"",
-                      ingredients: found?.ingredients||"",
-                      flaggedIngredients: found?.flaggedIngredients||[],
-                      buyUrl: found?.buyUrl||"",
-                    });
-                  }}/>              ))}
+                  onItemTap={name=>setSelectedProduct({productName:name,poreScore:0,communityRating:null,image:null,ingredients:"",flaggedIngredients:[]})}/>
+              ))}
             </div>
           );
         })()}
@@ -3746,7 +3650,7 @@ function NetworkGroupCard({productName, brand, productImage, poreScore, users, o
       <div onClick={onProductTap} style={{display:"flex",gap:"0.75rem",alignItems:"center",background:T.surfaceAlt,borderRadius:"0.85rem",padding:"0.7rem 0.75rem",cursor:onProductTap?"pointer":"default"}}>
         <div style={{width:"52px",height:"52px",flexShrink:0,borderRadius:"0.5rem",overflow:"hidden",background:T.surface}}>
           {productImage
-            ? <img src={productImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/>
+            ? <img src={productImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
             : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",color:T.border}}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
           }
         </div>
@@ -3994,8 +3898,11 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
         getFeed(profile?.following, user.uid),
         getNotifications(user.uid),
       ]);
+      // Merge real posts with mock posts, deduplicate by productName+uid, sort by time
+      const realIds = new Set(p.map(post => post.uid + post.productName));
+      const filtered = MOCK_POSTS.filter(m => !realIds.has(m.uid + m.productName));
       const FEED_TYPES = new Set(["brokeout","wantToTry","loved","commented"]);
-      const merged = p
+      const merged = [...p, ...filtered]
         .filter(post => FEED_TYPES.has(post.postType))
         .sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
       setPosts(merged);
@@ -4055,18 +3962,6 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
       try {
         const followingIds = profile?.following||[];
 
-        // Get product image map fresh from DB so we can filter reliably
-        const prodSnap = await getDocs(collection(db,"products"));
-        const imgMap = {};
-        prodSnap.docs.forEach(d => {
-          const p = d.data();
-          const img = p.adminImage||p.image||"";
-          if (img && img.startsWith("http") && p.productName) {
-            imgMap[p.productName.toLowerCase().trim()] = img;
-          }
-        });
-        const hasImg = name => !!(imgMap[(name||"").toLowerCase().trim()]);
-
         // Build "what friends are using" from their routines
         if (followingIds.length > 0) {
           const friendDocs = await Promise.all(
@@ -4099,8 +3994,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
               image: null,
               friendCount: count,
               friendNames: productFriends[key],
-            }))
-            .filter(r => hasImg(r.productName));
+            }));
 
           if (friendRecs.length >= 2) {
             setRecPosts(friendRecs);
@@ -4121,7 +4015,6 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
         const seen = new Set();
         const communityRecs = allPosts
           .filter(p => p.communityRating >= 7 && (p.poreScore ?? 5) <= 1 && p.productName)
-          .filter(p => !!(p.productImage||p.image||hasImg(p.productName)))
           .filter(p => { const key=p.productName.toLowerCase(); if(seen.has(key))return false; seen.add(key); return true; })
           .slice(0, 6);
 
@@ -4129,11 +4022,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
           setRecPosts(communityRecs);
         } else {
           const curated = await fetchCuratedRecs();
-          const curatedNeeded = curated.filter(c =>
-            (c.poreScore??99) <= 1 &&
-            !!(c.adminImage||c.image||hasImg(c.productName)) &&
-            !communityRecs.some(r=>r.productName.toLowerCase()===c.productName.toLowerCase())
-          );
+          const curatedNeeded = curated.filter(c => (c.poreScore??99) <= 1 && !communityRecs.some(r=>r.productName.toLowerCase()===c.productName.toLowerCase()));
           setRecPosts([...communityRecs, ...curatedNeeded].slice(0, 6));
         }
 
@@ -4143,7 +4032,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
         const recent = allGlobal.filter(p=>{ const ts=p.createdAt?.seconds?p.createdAt.seconds*1000:0; return ts>weekAgo; });
         if (recent.length) { const top=recent.reduce((a,b)=>(b.likes?.length||0)>(a.likes?.length||0)?b:a); if(top.productName)setTrendingList([top]); }
       } catch {
-        setRecPosts([]);
+        setRecPosts(CURATED_RECS_FALLBACK);
       }
     }
     loadRecs();
@@ -4491,8 +4380,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
 
             // ── FOR YOU TAB: always shows rich community content ───
             if (tab==="forYou") {
-              const hasImg = p => !!(p.productImage||p.image||productImageMap[(p.productName||"").toLowerCase().trim()]);
-              const allCommunity = posts.filter(hasImg);
+              const allCommunity = [...posts, ...MOCK_POSTS];
               const seen = new Set();
               const topPosts = allCommunity
                 .filter(p=>{ const k=p.productName?.toLowerCase()||p.id; if(seen.has(k))return false; seen.add(k); return true; })
@@ -4546,12 +4434,11 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
 
             // Dedupe: remove posts that appear in a network group card
             const groupedProductKeys = new Set(networkGroups.map(g => g.post.productName.toLowerCase().trim()));
-            const hasImg = p => !!(p.productImage||p.image||productImageMap[(p.productName||"").toLowerCase().trim()]);
-            const soloPost = posts.filter(p => !groupedProductKeys.has((p.productName||"").toLowerCase().trim()) && hasImg(p));
+            const soloPost = posts.filter(p => !groupedProductKeys.has((p.productName||"").toLowerCase().trim()));
 
             // ── Trending global (non-follows) ──
             const trendingGlobal = globalPostsRef.current
-              .filter(p => !followingSet.has(p.uid) && p.productName && ["routine","brokeout","wantToTry","loved","commented"].includes(p.postType) && hasImg(p))
+              .filter(p => !followingSet.has(p.uid) && p.productName && ["routine","brokeout","wantToTry","loved","commented"].includes(p.postType))
               .sort((a,b) => (b.likes?.length||0) - (a.likes?.length||0))
               .slice(0, 6);
 
@@ -4645,7 +4532,7 @@ function ListItemImage({name, color}) {
   return (
     <div style={{width:"100%",height:"100%",position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
       {!img&&<PlaceholderCard name={name} brand=""  />}
-      {img&&<img src={img} alt={name} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",padding:"6px",mixBlendMode:"multiply"}} onError={()=>setImg(null)}/>}
+      {img&&<img src={img} alt={name} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",padding:"6px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={()=>setImg(null)}/>}
     </div>
   );
 }
@@ -4699,7 +4586,7 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
               }
             </button>
           )}
-          {onAdd&&(
+          {!readOnly&&(
             <button onClick={()=>setAdding(a=>!a)}
               style={{width:"26px",height:"26px",borderRadius:"50%",background:adding?color:color+"15",border:`1.5px solid ${adding?color:color+"30"}`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:adding?"#FFFFFF":color,transition:"all 0.15s",padding:0,flexShrink:0}}>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{transform:adding?"rotate(45deg)":"none",transition:"transform 0.2s"}}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -4778,7 +4665,7 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
                 {/* Image area */}
                 <div style={{width:"100%",height:"90px",background:hasImg?"#fff":color+"10",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",borderBottom:`1px solid ${T.border}`}}>
                   {hasImg
-                    ? <img src={imgSrc} style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply"}} onError={e=>{e.target.style.display="none";}}/>
+                    ? <img src={imgSrc} style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>{e.target.style.display="none";}}/>
                     : <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"4px",padding:"0.5rem"}}>
                         <div style={{width:"28px",height:"28px",borderRadius:"50%",background:color+"25",display:"flex",alignItems:"center",justifyContent:"center"}}>
                           <div style={{width:"10px",height:"10px",borderRadius:"50%",background:color}}/>
@@ -5495,7 +5382,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       {/* Followers/Following modal */}
       {userListModal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(28,28,26,0.45)",zIndex:200,display:"flex",alignItems:"flex-end"}} onClick={()=>setUserListModal(null)}>
-          <div style={{width:"100%",maxWidth:"480px",margin:"0 auto",background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",padding:"1.25rem 1rem",paddingBottom:"calc(4.5rem + env(safe-area-inset-bottom))",maxHeight:"70vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+          <div style={{width:"100%",maxWidth:"480px",margin:"0 auto",background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",padding:"1.25rem 1rem",maxHeight:"60vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem"}}>
               <span style={{fontSize:"0.95rem",fontWeight:"700",fontFamily:"'Inter',sans-serif",color:T.text,textTransform:"capitalize"}}>{userListModal}</span>
               <button onClick={()=>setUserListModal(null)} style={{background:"none",border:"none",cursor:"pointer",color:T.textLight,padding:"0.25rem"}}>
@@ -5710,7 +5597,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
                       onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
                       {(p.productImage||(p.adminImage||p.image))&&(
                         <div style={{width:"40px",height:"40px",flexShrink:0,borderRadius:"0.5rem",overflow:"hidden",background:"#ffffff",border:`1px solid ${T.border}`}}>
-                          <img src={p.productImage||p.adminImage||p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"3px",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/>
+                          <img src={p.productImage||p.adminImage||p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"3px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
                         </div>
                       )}
                       <div style={{flex:1,minWidth:0}}>
@@ -5740,23 +5627,14 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
         <div className="fu">
           {(()=>{
             const allProds = [...shopProducts, ...posts];
-            async function openListItem(name) {
-              let found = allProds.find(p=>(p.productName||p.name||"").toLowerCase()===name.toLowerCase());
-              try {
-                const snap = await getDocs(query(collection(db,"products"), where("productName","==", name), limit(3)));
-                if (!snap.empty) {
-                  const docs = snap.docs.map(d=>({id:d.id,...d.data()}));
-                  const best = docs.sort((a,b)=>((b.adminImage||b.image)?1:0)-((a.adminImage||a.image)?1:0))[0];
-                  if (best) found = best;
-                }
-              } catch {}
+            function openListItem(name) {
+              const found = allProds.find(p=>(p.productName||p.name||"").toLowerCase()===name.toLowerCase());
               setSelectedProduct({
-                productName: found?.productName||name,
+                productName: name,
                 brand: found?.brand||"",
                 poreScore: found?.poreScore??0,
                 communityRating: found?.communityRating||null,
                 image: found?.adminImage||found?.image||found?.productImage||"",
-                adminImage: found?.adminImage||"",
                 ingredients: found?.ingredients||"",
                 flaggedIngredients: found?.flaggedIngredients||[],
                 buyUrl: found?.buyUrl||"",
@@ -6419,17 +6297,6 @@ const SHOP_CATEGORIES = [
     {productName:"Soft Matte Complete Concealer", brand:"NARS", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=NARS+Soft+Matte+Complete+Concealer", skinTypes:["All","Oily"], reason:"Full coverage, non-comedogenic, long-wearing concealer", ingredients:"water, dimethicone, glycerin, titanium dioxide, niacinamide, panthenol, allantoin"},
     {productName:"Radiant Longwear Foundation", brand:"NARS", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=NARS+Radiant+Longwear+Foundation", skinTypes:["All","Normal","Dry"], reason:"Buildable coverage, non-comedogenic, 16hr wear", ingredients:"water, dimethicone, glycerin, titanium dioxide, niacinamide, panthenol, allantoin"},
     {productName:"Serum Skin Tint SPF 40", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+Serum+Skin+Tint+SPF+40", skinTypes:["All","Dry","Normal"], reason:"Clean, buildable tinted SPF serum — skincare meets makeup", ingredients:"water, zinc oxide, glycerin, niacinamide, sodium hyaluronate, panthenol, allantoin, tocopherol"},
-    {productName:"True Skin Serum Concealer", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+True+Skin+Serum+Concealer", skinTypes:["All","Acne-prone","Dry"], reason:"Buildable clean concealer with hyaluronic acid — non-comedogenic, no fragrance", ingredients:"water, glycerin, sodium hyaluronate, niacinamide, panthenol, allantoin, tocopherol, dimethicone"},
-    {productName:"True Skin Radiant Priming Serum", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+True+Skin+Radiant+Priming+Serum", skinTypes:["All","Dry","Dull"], reason:"Hydrating primer serum — smooths skin pre-makeup, non-comedogenic", ingredients:"water, glycerin, sodium hyaluronate, niacinamide, squalane, panthenol, allantoin, tocopherol"},
-    {productName:"Skin Rewind Complexion Stick", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+Skin+Rewind+Complexion+Stick", skinTypes:["All","Dry","Normal"], reason:"Blurring foundation stick with skincare benefits — clean, non-comedogenic", ingredients:"dimethicone, glycerin, niacinamide, sodium hyaluronate, panthenol, allantoin, tocopherol, mica"},
-    {productName:"Multi-Stick", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+Multi-Stick", skinTypes:["All","Dry","Sensitive"], reason:"Lip + cheek cream color stick — clean, no pore-cloggers, sheer buildable finish", ingredients:"caprylic/capric triglyceride, squalane, glycerin, tocopherol, rosehip oil, allantoin, panthenol"},
-    {productName:"Limitless Lash Mascara", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+Limitless+Lash+Mascara", skinTypes:["All"], reason:"Clean mascara — no pore-clogging waxes, conditioning formula", ingredients:"water, beeswax, carnauba wax, glycerin, panthenol, allantoin, tocopherol, niacinamide"},
-    {productName:"In Full Micro-Tip Brow Pencil", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+In+Full+Micro-Tip+Brow+Pencil", skinTypes:["All"], reason:"Clean brow pencil — micro tip for natural hair strokes, no nasties", ingredients:"hydrogenated castor oil, carnauba wax, tocopherol, allantoin, panthenol"},
-    {productName:"Lip Wrap Nourishing Mask", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+Lip+Wrap+Nourishing+Mask", skinTypes:["All","Dry"], reason:"Overnight lip treatment — clean ingredients, deeply conditioning", ingredients:"caprylic/capric triglyceride, squalane, glycerin, tocopherol, allantoin, panthenol, sodium hyaluronate"},
-    {productName:"Balmy Gloss Tinted Lip Oil", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+Balmy+Gloss+Tinted+Lip+Oil", skinTypes:["All"], reason:"Non-sticky tinted lip oil — clean, squalane base, no pore-cloggers", ingredients:"squalane, caprylic/capric triglyceride, glycerin, tocopherol, rosehip oil, allantoin, panthenol"},
-    {productName:"Color Haze Multi-Use Pigment", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+Color+Haze+Multi-Use+Pigment", skinTypes:["All"], reason:"Eye, lip, and cheek cream pigment — clean formula, no pore-cloggers", ingredients:"dimethicone, glycerin, mica, tocopherol, panthenol, allantoin, squalane"},
-    {productName:"Night Light Highlighting Fluid", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+Night+Light+Highlighting+Fluid", skinTypes:["All","Dry","Normal"], reason:"Liquid highlighter with hyaluronic acid — clean glow, non-comedogenic", ingredients:"water, glycerin, sodium hyaluronate, mica, niacinamide, panthenol, allantoin, tocopherol"},
-    {productName:"Skin Filter Complexion Primer", brand:"Ilia", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Ilia+Skin+Filter+Complexion+Primer", skinTypes:["All","Oily","Combination"], reason:"Blurring primer with hyaluronic acid — clean, non-comedogenic, longwear base", ingredients:"water, dimethicone, glycerin, sodium hyaluronate, niacinamide, panthenol, allantoin, tocopherol"},
     {productName:"Slip Tint Moisturizing Tinted Primer", brand:"Tower 28", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Tower+28+Slip+Tint", skinTypes:["Sensitive","Acne-prone","All"], reason:"Fragrance-free, non-comedogenic, SkinSafe certified", ingredients:"water, glycerin, niacinamide, dimethicone, sodium hyaluronate, panthenol, allantoin"},
     {productName:"Kush High Volume Mascara", brand:"Milk Makeup", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Milk+Makeup+Kush+Mascara", skinTypes:["All"], reason:"Hemp-derived formula, no pore-clogging waxes", ingredients:"water, beeswax, carnauba wax, hemp seed oil, panthenol, tocopherol"},
   ]},
@@ -6474,68 +6341,6 @@ const SHOP_CATEGORIES = [
     {productName:"Cica Repair Cream Mask", brand:"Dr. Jart+", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Dr+Jart+Cica+Repair+Cream+Mask&i=beauty", skinTypes:["Sensitive","Acne-prone","Irritated"], reason:"Centella asiatica repairs and calms — no pore-cloggers", ingredients:"water, centella asiatica extract, glycerin, niacinamide, allantoin, panthenol, sodium hyaluronate"},
     {productName:"Clearing + Live Kombucha Tonic", brand:"Youth To The People", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Youth+To+The+People+Kombucha+Tonic&i=beauty", skinTypes:["Acne-prone","Oily","Combination"], reason:"Live kombucha + niacinamide + willow bark, microbiome-balancing toner", ingredients:"water, kombucha filtrate, niacinamide, willow bark extract, glycerin, allantoin, panthenol"},
     {productName:"Bright On Mask Vitamin C", brand:"Versed", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Versed+Bright+On+Mask+Vitamin+C&i=beauty", skinTypes:["All","Dull","Acne-prone"], reason:"Vitamin C + niacinamide glow mask — clean, acne-safe formula", ingredients:"water, ascorbic acid, niacinamide, glycerin, kaolin, allantoin, panthenol"},
-    {productName:"T.L.C. Instant Gekko Mask", brand:"Drunk Elephant", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Drunk+Elephant+TLC+Instant+Gekko+Mask&i=beauty", skinTypes:["Dry","Dehydrated","All"], reason:"Moisture-surge mask with marula oil + hyaluronic acid, no pore-cloggers", ingredients:"water, glycerin, marula oil, sodium hyaluronate, niacinamide, panthenol, allantoin, squalane"},
-    {productName:"Hydro Intensive Mask", brand:"Face Reality", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Face+Reality+Hydro+Intensive+Mask&i=beauty", skinTypes:["Dry","Sensitive","Acne-prone"], reason:"Professional acne-safe hydrating mask — deeply replenishes without clogging", ingredients:"water, glycerin, hyaluronic acid, niacinamide, allantoin, panthenol, sodium pca, xanthan gum"},
-    {productName:"CELLRENEW Stem Cell Mask", brand:"Clearstem", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Clearstem+CELLRENEW+Mask&i=beauty", skinTypes:["All","Acne-prone","Mature"], reason:"Stem cell technology in a 100% acne-safe mask formula", ingredients:"water, stem cell extract, glycerin, niacinamide, sodium hyaluronate, allantoin, panthenol, salicylic acid"},
-  ]},
-  { id:"face-wash", label:"Face Wash", emoji:"🫧", products:[
-    {productName:"Beste No. 9 Jelly Cleanser", brand:"Drunk Elephant", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Drunk+Elephant+Beste+No+9+Jelly+Cleanser&i=beauty", skinTypes:["All","Sensitive","Acne-prone"], reason:"Gentle jelly cleanser — removes makeup and SPF without stripping, zero pore-cloggers", ingredients:"water, glycerin, cocamidopropyl betaine, sodium lauroyl methyl isethionate, panthenol, allantoin, niacinamide, sodium hyaluronate"},
-    {productName:"Milkymake Hydrating Cleanser", brand:"Tower 28", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Tower+28+Milkymake+Cleanser&i=beauty", skinTypes:["Sensitive","Dry","Acne-prone"], reason:"SkinSafe certified, fragrance-free milky cleanser — NEA seal for eczema", ingredients:"water, glycerin, sodium cocoyl isethionate, panthenol, allantoin, niacinamide, sodium hyaluronate, ceramide np"},
-    {productName:"AHA/BHA Exfoliating Cleanser", brand:"Face Reality", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Face+Reality+AHA+BHA+Exfoliating+Cleanser&i=beauty", skinTypes:["Oily","Acne-prone","Combination"], reason:"Dual-acid professional cleanser — clears congestion at the wash step", ingredients:"water, glycolic acid, salicylic acid, glycerin, niacinamide, panthenol, allantoin, sodium pca"},
-    {productName:"Soothe Cleansing Milk", brand:"SkinMedica", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=SkinMedica+Soothe+Cleansing+Milk&i=beauty", skinTypes:["Sensitive","Dry","Mature"], reason:"Derm-developed milky cleanser — calms and hydrates while cleansing", ingredients:"water, glycerin, niacinamide, ceramide np, panthenol, allantoin, sodium hyaluronate, tocopherol"},
-    {productName:"Cleanser Balm", brand:"Elemis", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Elemis+Pro-Collagen+Cleansing+Balm&i=beauty", skinTypes:["Dry","Mature","All"], reason:"Melts into oil to remove makeup — elderberry + starflower, no pore-cloggers", ingredients:"water, glycerin, elderberry extract, starflower oil, panthenol, allantoin, squalane, tocopherol"},
-    {productName:"Jelly Facial Cleanser", brand:"Naturium", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Naturium+Jelly+Facial+Cleanser&i=beauty", skinTypes:["All","Oily","Combination"], reason:"Gentle glycerin-based jelly cleanser, fragrance-free, no pore-cloggers", ingredients:"water, glycerin, cocamidopropyl betaine, niacinamide, panthenol, allantoin, sodium hyaluronate"},
-  ]},
-  { id:"moisturizer", label:"Moisturizer", emoji:"💧", products:[
-    {productName:"Lala Retro Whipped Cream", brand:"Drunk Elephant", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Drunk+Elephant+Lala+Retro+Whipped+Cream&i=beauty", skinTypes:["Dry","Sensitive","Mature"], reason:"6 African oils + ceramides — rich barrier repair without pore-cloggers", ingredients:"water, glycerin, marula oil, baobab oil, mongongo oil, kalahari melon oil, ceramide np, niacinamide, panthenol, allantoin"},
-    {productName:"Waterfacial Moisturizer", brand:"Tower 28", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Tower+28+Waterfacial+Moisturizer&i=beauty", skinTypes:["Sensitive","Oily","Acne-prone"], reason:"Lightweight gel moisturizer — SkinSafe certified, NEA eczema seal, zero fragrance", ingredients:"water, glycerin, niacinamide, sodium hyaluronate, panthenol, allantoin, ceramide np, squalane"},
-    {productName:"TNS Advanced+ Serum", brand:"SkinMedica", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=SkinMedica+TNS+Advanced+Serum&i=beauty", skinTypes:["Mature","All","Dull"], reason:"Growth factor serum — clinically proven to reduce fine lines, non-comedogenic", ingredients:"water, glycerin, human fibroblast conditioned media, niacinamide, panthenol, allantoin, sodium hyaluronate, tocopherol"},
-    {productName:"HA5 Rejuvenate Hydrator", brand:"SkinMedica", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=SkinMedica+HA5+Rejuvenate+Hydrator&i=beauty", skinTypes:["All","Dry","Mature"], reason:"5 forms of hyaluronic acid — plumping, non-comedogenic, derm staple", ingredients:"water, glycerin, sodium hyaluronate, hyaluronic acid, sodium hyaluronate crosspolymer, panthenol, allantoin, niacinamide"},
-    {productName:"Acne Moisturizer", brand:"Face Reality", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Face+Reality+Acne+Moisturizer&i=beauty", skinTypes:["Acne-prone","Oily","Combination"], reason:"Oil-free, acne-safe moisturizer formulated specifically for breakout-prone skin", ingredients:"water, glycerin, niacinamide, sodium hyaluronate, allantoin, panthenol, salicylic acid, xanthan gum"},
-    {productName:"CELLRENEW Stem Cell Moisturizer", brand:"Clearstem", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Clearstem+CELLRENEW+Moisturizer&i=beauty", skinTypes:["All","Acne-prone","Mature"], reason:"100% acne-safe moisturizer with stem cell technology and growth factors", ingredients:"water, stem cell extract, glycerin, niacinamide, sodium hyaluronate, allantoin, panthenol, squalane"},
-    {productName:"Barrier+ Moisturizer", brand:"Naturium", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Naturium+Barrier+Moisturizer&i=beauty", skinTypes:["Sensitive","Dry","All"], reason:"Ceramide + peptide barrier moisturizer — fragrance-free, non-comedogenic", ingredients:"water, glycerin, ceramide np, ceramide ap, ceramide eop, niacinamide, panthenol, allantoin, sodium hyaluronate"},
-    {productName:"Cicaplast Baume B5+", brand:"La Roche-Posay", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=La+Roche-Posay+Cicaplast+Baume+B5&i=beauty", skinTypes:["Sensitive","Dry","Damaged"], reason:"Panthenol + madecassoside repair balm — dermatologist go-to for barrier recovery", ingredients:"water, glycerin, panthenol, madecassoside, niacinamide, allantoin, shea butter, ceramide np"},
-  ]},
-  { id:"serum", label:"Serum", emoji:"✨", products:[
-    {productName:"C-Firma Fresh Day Serum", brand:"Drunk Elephant", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Drunk+Elephant+C-Firma+Fresh+Day+Serum&i=beauty", skinTypes:["All","Dull","Mature"], reason:"15% L-ascorbic acid + ferulic acid + vitamin E — potent antioxidant brightening", ingredients:"water, ascorbic acid, glycerin, ferulic acid, tocopherol, sodium hyaluronate, niacinamide, panthenol, allantoin"},
-    {productName:"A-Passioni Retinol Cream", brand:"Drunk Elephant", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Drunk+Elephant+A-Passioni+Retinol+Cream&i=beauty", skinTypes:["All","Mature","Acne-prone"], reason:"1% vegan retinol in a non-comedogenic base — smoothing and resurfacing", ingredients:"water, retinol, glycerin, squalane, niacinamide, sodium hyaluronate, panthenol, allantoin, tocopherol"},
-    {productName:"B-Hydra Intensive Hydration Serum", brand:"Drunk Elephant", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Drunk+Elephant+B-Hydra+Intensive+Hydration+Serum&i=beauty", skinTypes:["All","Dehydrated","Oily"], reason:"Pro-vitamin B5 + pineapple ceramide — weightless hydration serum", ingredients:"water, panthenol, glycerin, sodium hyaluronate, niacinamide, allantoin, pineapple ceramide, squalane"},
-    {productName:"Umbra Tinte Physical Daily Defense SPF 30", brand:"Drunk Elephant", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Drunk+Elephant+Umbra+Tinte+SPF+30&i=beauty", skinTypes:["All","Sensitive","Acne-prone"], reason:"Tinted mineral SPF 30 with 20% zinc oxide — lightweight, non-comedogenic", ingredients:"zinc oxide 20%, water, glycerin, niacinamide, sodium hyaluronate, panthenol, allantoin, tocopherol"},
-    {productName:"Glycolic Serum 10%", brand:"Face Reality", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Face+Reality+Glycolic+Serum&i=beauty", skinTypes:["Acne-prone","Oily","Dull"], reason:"Professional-strength glycolic acid serum — resurfaces and brightens acne-prone skin", ingredients:"water, glycolic acid, niacinamide, glycerin, panthenol, allantoin, sodium hyaluronate"},
-    {productName:"TNS Eye Repair", brand:"SkinMedica", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=SkinMedica+TNS+Eye+Repair&i=beauty", skinTypes:["Mature","All"], reason:"Growth factors + retinol for the eye area — derm-developed, non-comedogenic", ingredients:"water, glycerin, human fibroblast conditioned media, retinol, niacinamide, panthenol, allantoin, sodium hyaluronate"},
-    {productName:"Lytera 2.0 Pigment Correcting Serum", brand:"SkinMedica", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=SkinMedica+Lytera+2.0+Pigment+Correcting+Serum&i=beauty", skinTypes:["All","Dull","Post-acne","Hyperpigmentation"], reason:"Tranexamic acid + niacinamide — derm gold standard for stubborn dark spots", ingredients:"water, tranexamic acid, niacinamide, glycerin, phytic acid, panthenol, allantoin, sodium hyaluronate"},
-    {productName:"CLEARSTEM MINSCAPE Retinol Serum", brand:"Clearstem", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Clearstem+MINSCAPE+Retinol+Serum&i=beauty", skinTypes:["Acne-prone","Mature","All"], reason:"Acne-safe retinol — no pore-cloggers in the base, stem cells enhance results", ingredients:"water, retinol, stem cell extract, glycerin, niacinamide, sodium hyaluronate, allantoin, panthenol"},
-    {productName:"SOS Daily Rescue Facial Spray", brand:"Tower 28", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Tower+28+SOS+Daily+Rescue+Facial+Spray&i=beauty", skinTypes:["Sensitive","Acne-prone","Redness"], reason:"Hypochlorous acid spray — anti-inflammatory, kills acne bacteria, SkinSafe certified", ingredients:"hypochlorous acid, water, sodium chloride"},
-    {productName:"BeachPlease Luminous Tinted Balm SPF 25", brand:"Tower 28", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Tower+28+BeachPlease+Tinted+Balm+SPF+25&i=beauty", skinTypes:["Sensitive","All","Acne-prone"], reason:"Clean tinted SPF balm — fragrance-free, SkinSafe certified, non-comedogenic", ingredients:"zinc oxide, titanium dioxide, water, glycerin, niacinamide, squalane, panthenol, allantoin"},
-    {productName:"ShineOn Lip Jelly", brand:"Tower 28", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Tower+28+ShineOn+Lip+Jelly&i=beauty", skinTypes:["All","Sensitive"], reason:"Non-sticky lip gloss — SkinSafe certified, fragrance-free, no pore-cloggers", ingredients:"hydrogenated polyisobutene, glycerin, squalane, vitamin e, allantoin"},
-  ]},
-  { id:"spf", label:"SPF", emoji:"☀️", products:[
-    {productName:"Umbra Sheer Physical Daily Defense SPF 30", brand:"Drunk Elephant", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Drunk+Elephant+Umbra+Sheer+Physical+Defense+SPF+30&i=beauty", skinTypes:["All","Sensitive","Acne-prone"], reason:"20% zinc oxide sheer mineral SPF — lightweight, non-comedogenic, no white cast", ingredients:"zinc oxide 20%, water, glycerin, niacinamide, squalane, panthenol, allantoin, tocopherol"},
-    {productName:"Daily Physical Defense SPF 30", brand:"SkinMedica", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=SkinMedica+Daily+Physical+Defense+SPF+30&i=beauty", skinTypes:["All","Sensitive","Mature"], reason:"Derm-developed mineral SPF — antioxidant-rich, non-comedogenic", ingredients:"zinc oxide, titanium dioxide, water, glycerin, niacinamide, tocopherol, panthenol, allantoin"},
-    {productName:"Even Up Physical Tinted Sunscreen SPF 50", brand:"Colorescience", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Colorescience+Even+Up+Physical+Tinted+Sunscreen+SPF+50&i=beauty", skinTypes:["All","Post-acne","Redness"], reason:"Tinted mineral SPF 50 with optical blurring — corrects redness and spots", ingredients:"zinc oxide, titanium dioxide, water, glycerin, niacinamide, panthenol, allantoin, iron oxides"},
-    {productName:"Total Protection Face Shield SPF 50+", brand:"Colorescience", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Colorescience+Total+Protection+Face+Shield+SPF+50&i=beauty", skinTypes:["All","Sensitive","Acne-prone"], reason:"Broad spectrum mineral SPF 50+ — pollution shield, non-comedogenic", ingredients:"zinc oxide, titanium dioxide, water, glycerin, niacinamide, panthenol, allantoin, tocopherol"},
-    {productName:"Daily Sun Defense SPF 30 Moisturizer", brand:"Face Reality", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Face+Reality+Daily+Sun+Defense+SPF+30+Moisturizer&i=beauty", skinTypes:["Acne-prone","Oily","Combination"], reason:"Acne-safe SPF moisturizer combo — oil-free, professional formulation", ingredients:"zinc oxide, water, glycerin, niacinamide, dimethicone, panthenol, allantoin, sodium hyaluronate"},
-  ]},
-  { id:"exfoliant", label:"Exfoliant", emoji:"🌀", products:[
-    {productName:"T.L.C. Framboos Glycolic Night Serum", brand:"Drunk Elephant", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Drunk+Elephant+TLC+Framboos+Glycolic+Night+Serum&i=beauty", skinTypes:["All","Dull","Acne-prone"], reason:"12% AHA + 2% BHA blend — resurfacing night serum, no pore-cloggers", ingredients:"water, glycolic acid, tartaric acid, lactic acid, citric acid, salicylic acid, glycerin, niacinamide, panthenol, allantoin"},
-    {productName:"Lactic Acid 8%", brand:"Face Reality", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Face+Reality+Lactic+Acid+8%25&i=beauty", skinTypes:["Sensitive","Acne-prone","Dry"], reason:"Professional lactic acid exfoliant — gentler than glycolic, hydrating while resurfacing", ingredients:"water, lactic acid, glycerin, niacinamide, panthenol, allantoin, sodium hyaluronate"},
-    {productName:"Ultra Sheer Micro-Exfoliating Lotion", brand:"SkinMedica", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=SkinMedica+AHA+BHA+Exfoliating+Cleanser&i=beauty", skinTypes:["All","Acne-prone","Dull"], reason:"AHA/BHA blend in a derm-developed exfoliating lotion — non-comedogenic", ingredients:"water, glycolic acid, salicylic acid, glycerin, niacinamide, panthenol, allantoin, sodium hyaluronate"},
-  ]},
-  { id:"eye", label:"Eye Cream", emoji:"👁️", products:[
-    {productName:"Shaba Complex Eye Serum", brand:"Drunk Elephant", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Drunk+Elephant+Shaba+Complex+Eye+Serum&i=beauty", skinTypes:["All","Mature","Puffiness"], reason:"Copper peptides + kiwi fruit water — firms and brightens under eyes, no pore-cloggers", ingredients:"water, copper tripeptide-1, glycerin, niacinamide, kiwi fruit water, panthenol, allantoin, sodium hyaluronate"},
-    {productName:"Retinol Complex Eye Cream", brand:"SkinMedica", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=SkinMedica+Retinol+Complex+Eye+Cream&i=beauty", skinTypes:["Mature","All"], reason:"Derm-developed retinol eye cream — smooths crow's feet, non-comedogenic", ingredients:"water, retinol, glycerin, niacinamide, peptides, panthenol, allantoin, sodium hyaluronate"},
-    {productName:"Bright Eyes Illuminating Eye Cream", brand:"Naturium", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Naturium+Bright+Eyes+Illuminating+Eye+Cream&i=beauty", skinTypes:["All","Dark Circles","Puffiness"], reason:"Caffeine + niacinamide + peptides — brightens dark circles, non-comedogenic", ingredients:"water, caffeine, niacinamide, peptides, glycerin, sodium hyaluronate, panthenol, allantoin"},
-  ]},
-  { id:"body", label:"Body Care", emoji:"🧴", products:[
-    {productName:"Body Lochi Hydrating Milk", brand:"Drunk Elephant", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Drunk+Elephant+Body+Lochi+Hydrating+Milk&i=beauty", skinTypes:["All","Dry","Sensitive"], reason:"Lightweight body milk with 7 AHAs + enzymes — non-comedogenic, no fragrance", ingredients:"water, glycerin, lactic acid, glycolic acid, malic acid, niacinamide, panthenol, allantoin, sodium hyaluronate"},
-    {productName:"Acne Body Lotion", brand:"Face Reality", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Face+Reality+Acne+Body+Lotion&i=beauty", skinTypes:["Acne-prone","Body","Oily"], reason:"Professional acne-safe body lotion — clears bacne and chest breakouts", ingredients:"water, salicylic acid, glycerin, niacinamide, allantoin, panthenol, sodium hyaluronate, xanthan gum"},
-    {productName:"CLEARSTEM CLEARBODY Acne Spray", brand:"Clearstem", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Clearstem+CLEARBODY+Acne+Spray&i=beauty", skinTypes:["Acne-prone","Body"], reason:"Hard-to-reach back acne spray — salicylic + stem cells, 100% acne-safe", ingredients:"water, salicylic acid, stem cell extract, glycerin, niacinamide, allantoin, panthenol, sodium hyaluronate"},
-  ]},
-  { id:"acne", label:"Acne Treatment", emoji:"🎯", products:[
-    {productName:"Acne Med 10%", brand:"Face Reality", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Face+Reality+Acne+Med+10%25&i=beauty", skinTypes:["Acne-prone","Oily"], reason:"Maximum strength benzoyl peroxide treatment — professional acne brand", ingredients:"water, benzoyl peroxide 10%, glycerin, niacinamide, panthenol, allantoin, carbomer"},
-    {productName:"Sulfur Spot Treatment", brand:"Face Reality", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Face+Reality+Sulfur+Spot+Treatment&i=beauty", skinTypes:["Acne-prone","Sensitive","Oily"], reason:"Sulfur-based spot treatment — dries breakouts without over-drying skin", ingredients:"water, sulfur, glycerin, niacinamide, allantoin, panthenol, kaolin"},
-    {productName:"CLEARSTEM BOUNCEBACK Post-Breakout Serum", brand:"Clearstem", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Clearstem+BOUNCEBACK+Serum&i=beauty", skinTypes:["Post-acne","Acne-prone","All"], reason:"Fades post-acne marks fast — stem cells + niacinamide, 100% acne-safe", ingredients:"water, stem cell extract, niacinamide, tranexamic acid, glycerin, allantoin, panthenol, sodium hyaluronate"},
-    {productName:"MakeWaves Scalp + Body Serum", brand:"Tower 28", poreScore:0, image:"", buyUrl:"https://www.amazon.com/s?k=Tower+28+MakeWaves+Scalp+Body+Serum&i=beauty", skinTypes:["Acne-prone","Sensitive","Body"], reason:"Hypochlorous acid for scalp and body — anti-inflammatory, SkinSafe certified", ingredients:"hypochlorous acid, water, sodium chloride"},
   ]},
 ];
 
@@ -6560,10 +6365,6 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
     ? (products||[]).filter(p => getLiveScore(p) <= 1 && p.skinTypes?.some(s => skinType.includes(s) || s === "All"))
     : [];
   const recs = (skinMatched.length >= 4 ? skinMatched : [...(products||[])].filter(p => getLiveScore(p) <= 1))
-    .filter(p => {
-      const img = (p.adminImage||p.image||p.productImage||productImageMap[(p.productName||"").toLowerCase().trim()]||"").trim();
-      return img && img.startsWith("http") && !img.startsWith("data:");
-    })
     .sort((a,b) => (a.poreScore??99)-(b.poreScore??99) || (b.communityRating||0)-(a.communityRating||0))
     .slice(0, 10);
 
@@ -6588,7 +6389,7 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
               onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.transform="translateY(-2px)";}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.transform="";}}>
               <div style={{width:"100%",height:"100px",background:"#ffffff",overflow:"hidden",position:"relative",borderBottom:`1px solid ${T.border}`}}>
-                {img ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/> : null}
+                {img ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/> : <PlaceholderCard name={rec.productName} brand={rec.brand||""}/>}
                 <div style={{position:"absolute",top:"5px",right:"5px",background:ps.color,borderRadius:"0.35rem",padding:"2px 5px"}}>
                   {liveRecScore != null
                     ? <span style={{fontSize:"0.6rem",fontWeight:"800",color:"#fff"}}>{liveRecScore}/5</span>
@@ -6798,7 +6599,7 @@ function FounderPicksSection({onTap, friendScans={}}) {
               {/* Product image */}
               <div style={{width:"100%",aspectRatio:"4/3",background:"#ffffff",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
                 {img
-                  ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply"}} onError={e=>e.target.style.display="none"}/>
+                  ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.display="none"}/>
                   : <PlaceholderCard name={pick.productName} brand={pick.brand||""}/>
                 }
                 {/* Pore clog score chip — only if we have real ingredient data */}
@@ -7045,23 +6846,25 @@ const MOCK_FRIEND_PRODUCTS = [
 ];
 
 function FriendsUsingSection({ friendScans, products, onTap, profile }) {
+  // Build list from real friendScans if available, else use mock
   const friendProducts = React.useMemo(() => {
     const entries = Object.entries(friendScans || {});
-    if (entries.length < 1) return [];
-    const productMap = {};
-    products.forEach(p => { productMap[(p.productName||"").toLowerCase().trim()] = p; });
-    return entries
-      .filter(([, friends]) => friends.length >= 1)
-      .sort((a, b) => b[1].length - a[1].length)
-      .slice(0, 6)
-      .map(([key, friends]) => {
-        const p = productMap[key];
-        if (!p) return null;
-        const img = (p.adminImage||p.image||"").trim();
-        if (!img || !img.startsWith("http")) return null; // must have real image
-        return { ...p, friends };
-      })
-      .filter(Boolean);
+    if (entries.length >= 2) {
+      // Real data: build product cards from friendScans
+      const productMap = {};
+      products.forEach(p => { productMap[(p.productName||"").toLowerCase().trim()] = p; });
+      return entries
+        .filter(([, friends]) => friends.length >= 1)
+        .sort((a, b) => b[1].length - a[1].length)
+        .slice(0, 6)
+        .map(([key, friends]) => {
+          const p = productMap[key];
+          if (!p) return null;
+          return { ...p, friends };
+        })
+        .filter(Boolean);
+    }
+    return MOCK_FRIEND_PRODUCTS;
   }, [friendScans, products]);
 
   if (!friendProducts.length) return null;
@@ -7087,14 +6890,16 @@ function FriendsUsingSection({ friendScans, products, onTap, profile }) {
               style={{ flexShrink: 0, width: "148px", background: T.surface, borderRadius: "1.1rem", border: `1px solid ${T.border}`, padding: 0, cursor: "pointer", textAlign: "left", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}>
               {/* Product image */}
               <div style={{ position: "relative", background: T.surfaceAlt, height: "120px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {(p.adminImage || p.image) ? (
+                {(p.adminImage || p.image || null) ? (
                   <img
-                    src={p.adminImage || p.image}
+                    src={p.adminImage || p.image || null}
                     alt={p.productName}
                     style={{ width: "80px", height: "80px", objectFit: "contain", mixBlendMode: "multiply" }}
                     onError={e => { e.target.style.display="none"; }}
                   />
-                ) : null}
+                ) : (
+                  <div style={{ fontSize: "1.4rem", fontWeight: "800", color: T.textLight, opacity: 0.3 }}>{(p.brand||"?").slice(0,2).toUpperCase()}</div>
+                )}
                 {/* Pore clog score badge */}
                 <div style={{ position: "absolute", top: "0.5rem", right: "0.5rem", background: ps.color, borderRadius: "0.5rem", padding: "2px 6px", display: "flex", flexDirection: "column", alignItems: "center" }}>
                   <span style={{ fontSize: "0.55rem", fontWeight: "700", color: "#fff", lineHeight: 1 }}>PORE</span>
@@ -7219,8 +7024,7 @@ function ShopPage({user, profile, onUpdateProfile}) {
   ).slice(0, 100);
 
   const filteredProducts = brandFilter
-    ? completeProducts.filter(p => (p.brand||"").toLowerCase() === brandFilter.toLowerCase())
-        .sort((a,b) => (a.poreScore??99)-(b.poreScore??99) || (b.communityRating||0)-(a.communityRating||0) || (b.scanCount||0)-(a.scanCount||0))
+    ? rankedProducts.filter(p => (p.brand||"").toLowerCase() === brandFilter.toLowerCase())
     : rankedProducts;
   const grouped = {};
   filteredProducts.forEach(p=>{
@@ -7244,14 +7048,7 @@ function ShopPage({user, profile, onUpdateProfile}) {
     });
 
   const searchFiltered = searchQuery.trim().length > 1
-    ? completeProducts
-        .filter(p=>(p.productName+" "+p.brand).toLowerCase().includes(searchQuery.toLowerCase()))
-        .sort((a,b) => {
-          const hasImg = p => { const img=(p.adminImage||p.image||"").trim(); return img&&img.startsWith("http")&&!img.startsWith("data:"); };
-          const scoreA = a.approved && hasImg(a) ? 0 : a.approved ? 1 : hasImg(a) ? 2 : 3;
-          const scoreB = b.approved && hasImg(b) ? 0 : b.approved ? 1 : hasImg(b) ? 2 : 3;
-          return scoreA - scoreB;
-        })
+    ? completeProducts.filter(p=>(p.productName+" "+p.brand).toLowerCase().includes(searchQuery.toLowerCase()))
     : null;
   const displayCats = searchFiltered
     ? [{id:"search",label:`Results for "${searchQuery}"`,emoji:"🔍",products:searchFiltered.slice(0,20),total:searchFiltered.length,isExpanded:true}]
@@ -7425,29 +7222,10 @@ function ShopPage({user, profile, onUpdateProfile}) {
           {/* Horizontal scroll shelf */}
           <div style={{display:"flex",gap:"0.7rem",overflowX:"auto",paddingBottom:"0.75rem",scrollbarWidth:"none",WebkitOverflowScrolling:"touch",marginLeft:"-1rem",paddingLeft:"1rem",marginRight:"-1rem",paddingRight:"1rem"}}>
             {cat.products.map((p,i)=>{
-              const liveCardScore = (p.ingredients && p.ingredients.trim().length >= 10)
-                ? (() => { const r = analyzeIngredients(p.ingredients); return r.avgScore != null ? Math.round(r.avgScore) : (p.poreScore??null); })()
-                : (p.poreScore != null ? p.poreScore : null);
+              const liveCardScore = (p.ingredients && p.ingredients.trim().length >= 10) ? (() => { const r = analyzeIngredients(p.ingredients); return r.avgScore != null ? Math.round(r.avgScore) : null; })() : null;
               const ps = poreStyle(liveCardScore??0);
               const img = (p.adminImage||p.image||"").trim();
               const friends = getFriendRoutineUsers(friendScans, p.productName, p.id);
-              const inRoutine = (profile?.routine||[]).includes(p.productName);
-              const inWantToTry = (profile?.wantToTry||[]).includes(p.productName);
-              const keyActives = ["niacinamide","retinol","vitamin c","hyaluronic acid","salicylic acid","glycolic acid","azelaic acid","ceramide","peptide","zinc oxide","bakuchiol","squalane"];
-              const keyIng = p.ingredients ? keyActives.find(a => p.ingredients.toLowerCase().includes(a)) : null;
-
-              const quickAdd = async (list, e) => {
-                e.stopPropagation();
-                if (!user?.uid || !profile) return;
-                const current = profile[list] || [];
-                if (current.includes(p.productName)) return;
-                const updated = [...current, p.productName];
-                try {
-                  await updateDoc(doc(db,"users",user.uid), {[list]: updated});
-                  if (onUpdateProfile) onUpdateProfile(prev => ({...prev, [list]: updated}));
-                } catch {}
-              };
-
               return (
                 <button key={p.id} onClick={()=>setSelectedProduct(p)}
                   style={{flexShrink:0,width:"148px",background:T.surface,borderRadius:"1.1rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",transition:"all 0.18s",display:"flex",flexDirection:"column",boxShadow:"0 1px 6px rgba(17,24,39,0.04)"}}
@@ -7457,7 +7235,7 @@ function ShopPage({user, profile, onUpdateProfile}) {
                   {/* Big image area */}
                   <div style={{width:"100%",height:"148px",background:"#ffffff",position:"relative",overflow:"hidden"}}>
                     {img
-                      ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/>
+                      ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
                       : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}>
                           <div style={{width:"44px",height:"44px",borderRadius:"50%",background:T.accent+"18",display:"flex",alignItems:"center",justifyContent:"center"}}>
                             <span style={{fontSize:"1rem",fontWeight:"800",color:T.accent}}>{(p.brand||"?")[0].toUpperCase()}</span>
@@ -7470,14 +7248,8 @@ function ShopPage({user, profile, onUpdateProfile}) {
                         <div style={{fontSize:"0.7rem",fontWeight:"800",color:"#fff",lineHeight:1}}>{liveCardScore}<span style={{fontSize:"0.42rem",opacity:0.85}}>/5</span></div>
                       </div>
                     )}
-                    {/* Acne-safe badge — top left when score is 0 */}
-                    {liveCardScore === 0 && (
-                      <div style={{position:"absolute",top:"7px",left:"7px",background:T.sage,borderRadius:"999px",padding:"2px 7px",boxShadow:"0 1px 4px rgba(0,0,0,0.15)"}}>
-                        <span style={{fontSize:"0.5rem",fontWeight:"700",color:"#fff"}}>✓ Acne-safe</span>
-                      </div>
-                    )}
-                    {/* Rank badge — only top 3, only if NOT showing acne-safe */}
-                    {i<3 && liveCardScore !== 0 &&<div style={{position:"absolute",top:"6px",left:"6px",background:"rgba(17,24,39,0.65)",backdropFilter:"blur(4px)",borderRadius:"999px",padding:"2px 6px"}}>
+                    {/* Rank — top left */}
+                    {i<3&&<div style={{position:"absolute",top:"6px",left:"6px",background:"rgba(17,24,39,0.65)",backdropFilter:"blur(4px)",borderRadius:"999px",padding:"2px 6px"}}>
                       <span style={{fontSize:"0.5rem",fontWeight:"700",color:"#fff",letterSpacing:"0.03em",fontFamily:"'Inter',sans-serif"}}>{i===0?"#1":i===1?"#2":"#3"}</span>
                     </div>}
                     {/* Friend routine pill */}
@@ -7488,7 +7260,6 @@ function ShopPage({user, profile, onUpdateProfile}) {
                   <div style={{padding:"0.6rem 0.7rem 0.75rem",flex:1,display:"flex",flexDirection:"column",gap:"2px",borderTop:`1px solid ${T.border}`}}>
                     {p.brand&&<div style={{fontSize:"0.52rem",color:T.accent,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.07em",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.brand}</div>}
                     <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",minHeight:"2.4em"}}>{p.productName}</div>
-                    {keyIng && <div style={{fontSize:"0.57rem",color:T.textMid,marginTop:"2px",textTransform:"capitalize"}}>✦ {keyIng}</div>}
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:"4px"}}>
                       <span style={{fontSize:"0.58rem",fontWeight:"600",color:ps.color,background:ps.color+"12",padding:"2px 6px",borderRadius:"999px"}}>{ps.label}</span>
                       {p.buyUrl&&(
@@ -7499,7 +7270,7 @@ function ShopPage({user, profile, onUpdateProfile}) {
                     {p.scanCount>0&&<div style={{fontSize:"0.55rem",color:"#6366f1",fontWeight:"600",marginTop:"1px"}}>🔥 {p.scanCount} scans</div>}
                     {(()=>{
                       const fr = getFriendRoutineUsers(friendScans, p.productName, p.id);
-                      if (fr.length > 0) return null;
+                      if (fr.length > 0) return null; // pill on image already handles this
                       const st = profile?.skinType;
                       const skinLabel = Array.isArray(st) ? st[0] : st;
                       if (skinLabel && p.skinTypes?.some(s=>s.toLowerCase().includes(skinLabel.toLowerCase()))) {
@@ -7508,19 +7279,6 @@ function ShopPage({user, profile, onUpdateProfile}) {
                       if ((p.communityRating||0) >= 8 && (p.ratingCount||p.scanCount||0) >= 3) return <div style={{fontSize:"0.55rem",color:T.rose,fontWeight:"600",marginTop:"1px"}}>⭐ Top rated this week</div>;
                       return null;
                     })()}
-                    {/* Quick-add buttons */}
-                    {user?.uid && (
-                      <div style={{display:"flex",gap:"0.25rem",marginTop:"0.4rem"}} onClick={e=>e.stopPropagation()}>
-                        <button onClick={e=>quickAdd("routine",e)}
-                          style={{flex:1,padding:"0.22rem 0",borderRadius:"999px",border:`1px solid ${inRoutine?T.sage:T.border}`,background:inRoutine?T.sage+"18":"transparent",color:inRoutine?T.sage:T.textLight,fontSize:"0.55rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                          {inRoutine?"✓ Routine":"+ Routine"}
-                        </button>
-                        <button onClick={e=>quickAdd("wantToTry",e)}
-                          style={{flex:1,padding:"0.22rem 0",borderRadius:"999px",border:`1px solid ${inWantToTry?T.amber:T.border}`,background:inWantToTry?T.amber+"18":"transparent",color:inWantToTry?T.amber:T.textLight,fontSize:"0.55rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                          {inWantToTry?"✓ Want to Try":"+ Try"}
-                        </button>
-                      </div>
-                    )}
                   </div>
                 </button>
               );
@@ -7588,7 +7346,7 @@ function ShopImageCell({p}) {
     <div style={{width:"100%",height:"100%",position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
       {showImg&&(
         <img src={imgSrc} alt={p.productName}
-          style={{width:"82%",height:"82%",objectFit:"contain",display:status==="loaded"?"block":"none",position:"relative",zIndex:2,mixBlendMode:"multiply"}}
+          style={{width:"82%",height:"82%",objectFit:"contain",display:status==="loaded"?"block":"none",position:"relative",zIndex:2,mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}}
           onLoad={()=>setStatus("loaded")}
           onError={handleError}/>
       )}
@@ -7609,32 +7367,10 @@ function ShopImageCell({p}) {
   );
 }
 
-function ShopCard({p, onTap, currentUid, profile, onUpdateProfile}) {
+function ShopCard({p, onTap, currentUid}) {
   const ps = poreStyle(p.poreScore||0);
   const bc = BRAND_COLORS[p.brand] || {bg:"#F5F5F5", accent:"#444", text:"#222"};
   const [shareOpen, setShareOpen] = useState(false);
-  const [addedTo, setAddedTo] = useState(null);
-
-  const inRoutine   = (profile?.routine||[]).includes(p.productName);
-  const inWantToTry = (profile?.wantToTry||[]).includes(p.productName);
-
-  // Key ingredient — pick first recognizable active
-  const keyActives = ["niacinamide","retinol","vitamin c","hyaluronic acid","salicylic acid","glycolic acid","azelaic acid","ceramide","peptide","zinc oxide","bakuchiol","squalane"];
-  const keyIng = p.ingredients ? keyActives.find(a => p.ingredients.toLowerCase().includes(a)) : null;
-
-  async function quickAdd(list, e) {
-    e.stopPropagation();
-    if (!currentUid || !profile) return;
-    const current = profile[list] || [];
-    if (current.includes(p.productName)) return;
-    const updated = [...current, p.productName];
-    try {
-      await updateDoc(doc(db,"users",currentUid), {[list]: updated});
-      if (onUpdateProfile) onUpdateProfile(prev => ({...prev, [list]: updated}));
-      setAddedTo(list);
-      setTimeout(() => setAddedTo(null), 2000);
-    } catch {}
-  }
 
   return (
     <>
@@ -7644,73 +7380,35 @@ function ShopCard({p, onTap, currentUid, profile, onUpdateProfile}) {
         overflow:"hidden",transition:"transform 0.15s,box-shadow 0.15s",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}
       onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 6px 20px rgba(0,0,0,0.1)";}}
       onMouseLeave={e=>{e.currentTarget.style.transform="translateY(0)";e.currentTarget.style.boxShadow="0 1px 4px rgba(0,0,0,0.04)";}}>
-      {/* Image area */}
+      {/* Image area — tall with brand gradient bg */}
       <div style={{width:"100%",aspectRatio:"4/5",background:`linear-gradient(160deg, ${bc.bg} 0%, ${bc.accent}14 100%)`,
         display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",position:"relative"}}>
         <ShopImageCell p={p}/>
-        {/* Pore score badge top-right */}
+        {/* Score badge top-right */}
         <div style={{position:"absolute",top:"8px",right:"8px",background:"rgba(255,255,255,0.92)",
           backdropFilter:"blur(4px)",borderRadius:"999px",padding:"0.18rem 0.5rem",
           fontSize:"0.6rem",fontWeight:"700",color:ps.color,border:`1px solid ${ps.color}22`}}>
           {p.poreScore}/5
         </div>
-        {/* Acne-safe badge top-left */}
-        {(p.poreScore||0) === 0 && (
-          <div style={{position:"absolute",top:"8px",left:"8px",background:T.sage,
-            borderRadius:"999px",padding:"0.18rem 0.5rem",fontSize:"0.55rem",fontWeight:"700",color:"#fff"}}>
-            ✓ Acne-safe
-          </div>
-        )}
       </div>
       {/* Info */}
-      <div style={{padding:"0.65rem 0.75rem 0.75rem",borderTop:`1px solid ${T.border}`}}>
+      <div style={{padding:"0.7rem 0.75rem 0.8rem",borderTop:`1px solid ${T.border}`}}>
         <div style={{fontSize:"0.52rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",
           letterSpacing:"0.08em",marginBottom:"0.2rem",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.brand}</div>
         <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,lineHeight:1.3,
           display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",
-          marginBottom:"0.4rem",minHeight:"2em"}}>{p.productName}</div>
-
-        {/* Key ingredient */}
-        {keyIng && (
-          <div style={{fontSize:"0.58rem",color:T.textMid,marginBottom:"0.4rem",fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>
-            ✦ {keyIng}
-          </div>
-        )}
-
-        {/* Community rating + scans */}
+          marginBottom:"0.45rem",minHeight:"2em"}}>{p.productName}</div>
         {p.scanCount>0 && p.communityRating
-          ? <div style={{marginBottom:"0.45rem"}}>
-              <span style={{fontSize:"0.6rem",padding:"0.15rem 0.45rem",background:T.sage+"14",color:T.sage,borderRadius:"999px",fontWeight:"600"}}>
-                ★ {p.communityRating}/10 · {p.scanCount} {p.scanCount===1?"check":"checks"}
-              </span>
-            </div>
-          : p.scanCount>0
-            ? <div style={{marginBottom:"0.45rem"}}>
-                <span style={{fontSize:"0.6rem",padding:"0.15rem 0.45rem",background:T.surfaceAlt,color:T.textLight,borderRadius:"999px",fontWeight:"500"}}>
-                  {p.scanCount} {p.scanCount===1?"check":"checks"}
-                </span>
-              </div>
-            : null
+          ? <span style={{fontSize:"0.6rem",padding:"0.15rem 0.45rem",background:T.sage+"14",color:T.sage,borderRadius:"999px",fontWeight:"600"}}>
+              ★ {p.communityRating}/10 Rallier · {p.scanCount} {p.scanCount===1?"check":"checks"}
+            </span>
+          : null
         }
-
-        {/* Quick-add buttons */}
-        {currentUid && (
-          <div style={{display:"flex",gap:"0.3rem",marginTop:"0.35rem"}} onClick={e=>e.stopPropagation()}>
-            <button onClick={e=>quickAdd("routine",e)}
-              style={{flex:1,padding:"0.28rem 0",borderRadius:"999px",border:`1px solid ${inRoutine||addedTo==="routine"?T.sage:T.border}`,
-                background:inRoutine||addedTo==="routine"?T.sage+"18":"transparent",
-                color:inRoutine||addedTo==="routine"?T.sage:T.textLight,
-                fontSize:"0.58rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.15s"}}>
-              {inRoutine||addedTo==="routine" ? "✓ Routine" : "+ Routine"}
-            </button>
-            <button onClick={e=>quickAdd("wantToTry",e)}
-              style={{flex:1,padding:"0.28rem 0",borderRadius:"999px",border:`1px solid ${inWantToTry||addedTo==="wantToTry"?T.amber:T.border}`,
-                background:inWantToTry||addedTo==="wantToTry"?T.amber+"18":"transparent",
-                color:inWantToTry||addedTo==="wantToTry"?T.amber:T.textLight,
-                fontSize:"0.58rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.15s"}}>
-              {inWantToTry||addedTo==="wantToTry" ? "✓ Want to Try" : "+ Want to Try"}
-            </button>
-          </div>
+        {currentUid&&(
+          <button onClick={e=>{e.stopPropagation();setShareOpen(true);}} style={{marginTop:"0.5rem",display:"flex",alignItems:"center",gap:"0.35rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"999px",padding:"0.2rem 0.6rem",cursor:"pointer",color:T.textLight,fontSize:"0.62rem",fontFamily:"'Inter',sans-serif",fontWeight:"500"}}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            Share
+          </button>
         )}
       </div>
     </button>
@@ -8451,8 +8149,6 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
     const BATCH = 6;
 
     const queue = products.filter(p => !hasValidImage(p) || (!p.ingredients || p.ingredients.trim().length < 10));
-    // Track which products already have a manually-set image so we never overwrite them
-    const hasExistingImage = new Set(products.filter(p => hasValidImage(p)).map(p => p.id));
 
     if (!queue.length) {
       addLog("info", "✓ All products already have images and ingredients!");
@@ -8484,7 +8180,7 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
         const {img, ingredients, buyUrl, source} = results[j].value;
         try {
           const updates = { updatedAt: Date.now() };
-          if (img && !hasExistingImage.has(p.id)) { updates.adminImage = img; updates.image = img; }
+          if (img) { updates.adminImage = img; updates.image = img; }
           if (buyUrl && !p.buyUrl) updates.buyUrl = buyUrl;
           if (ingredients && (!p.ingredients || p.ingredients.trim().length < 10)) {
             updates.ingredients = ingredients;
@@ -8627,9 +8323,6 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
 function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog, autoOpenTriage=false}) {
   // ── Product list state ──
   const [products, setProducts] = useState([]);
-  const [localDeletedIds, setLocalDeletedIds] = useState(() => {
-    try { return new Set(JSON.parse(sessionStorage.getItem("ralli_deleted_ids")||"[]")); } catch { return new Set(); }
-  });
   const [loading, setLoading]   = useState(true);
   const [editing, setEditing]   = useState(null);
   const [editSaving, setEditSaving] = useState(false);
@@ -8692,7 +8385,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
     setLoading(true);
     try {
       const snap = await getDocs(query(collection(db,"products"), orderBy("createdAt","desc")));
-      setProducts(snap.docs.map(d=>({id:d.id,...d.data()})).filter(p=>!p.deleted && !localDeletedIds.has(p.id)));
+      setProducts(snap.docs.map(d=>({id:d.id,...d.data()})));
     } catch(e) { console.error(e); }
     setLoading(false);
   }
@@ -8716,25 +8409,16 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
     setEditSaving(true);
     try {
       const updates = {
-        productName: (editing.productName||"").trim(),
-        brand: (editing.brand||"").trim(),
-        category: editing.category || "other",
+        productName: editing.productName.trim(),
+        brand: editing.brand.trim(),
+        category: editing.category,
         image: editing.image||"",
         adminImage: editing.image||"",
         buyUrl: editing.buyUrl||"",
         approved: true,
         lastVerified: Date.now(),
-        updatedAt: Date.now(),
       };
-      Object.keys(updates).forEach(k => { if (updates[k] === undefined) delete updates[k]; });
-      const ref = doc(db,"products",editing.id);
-      const snap = await getDoc(ref);
-      if (snap.exists()) {
-        await updateDoc(ref, updates);
-      } else {
-        // Doc doesn't exist in Firestore yet — create it
-        await setDoc(ref, { ...editing, ...updates, createdAt: Date.now() });
-      }
+      await updateDoc(doc(db,"products",editing.id), updates);
       const postsSnap = await getDocs(query(collection(db,"posts"), where("productId","==",editing.id)));
       if (!postsSnap.empty) {
         const batch = writeBatch(db);
@@ -8765,20 +8449,16 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
   }
 
   async function deleteProduct(p) {
-    if (!confirm(`Permanently delete "${p.productName}"?\n\nThis will hide it from all views. Cannot be undone.`)) return;
+    if (!confirm(`Permanently delete "${p.productName}"?\n\nThis also removes all scan records. Cannot be undone.`)) return;
     try {
-      const ref = doc(db,"products",p.id);
-      const snap = await getDoc(ref);
-      if (snap.exists()) {
-        await updateDoc(ref, { deleted: true, hidden: true, approved: false, updatedAt: Date.now() });
-      }
-      // Track locally so it stays gone even after load()
-      setLocalDeletedIds(prev => {
-        const next = new Set([...prev, p.id]);
-        try { sessionStorage.setItem("ralli_deleted_ids", JSON.stringify([...next])); } catch {}
-        return next;
-      });
-      setProducts(ps => ps.filter(q => q.id !== p.id));
+      const batch = writeBatch(db);
+      batch.delete(doc(db,"products",p.id));
+      const postsSnap = await getDocs(query(collection(db,"posts"), where("productId","==",p.id)));
+      postsSnap.docs.forEach(d=>batch.delete(d.ref));
+      const scansSnap = await getDocs(query(collection(db,"scans"), where("productId","==",p.id)));
+      scansSnap.docs.forEach(d=>batch.delete(d.ref));
+      await batch.commit();
+      setProducts(ps=>ps.filter(q=>q.id!==p.id));
     } catch(e) { alert("Delete failed: "+e.message); }
   }
 
@@ -8896,28 +8576,11 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
     if (!confirm(`Found ${toDelete.length} duplicate products. Delete them?\n\nThe copy with the most data (image, ingredients, approved status) will be kept.`)) return;
     setDeletingDupes(true);
     try {
-      // Check which IDs actually exist in Firestore before trying to update
-      const existenceChecks = await Promise.all(
-        toDelete.map(id => getDoc(doc(db,"products",id)).then(s => s.exists() ? id : null).catch(()=>null))
-      );
-      const existingIds = existenceChecks.filter(Boolean);
-
-      // Soft-delete the ones that exist in Firestore
-      for (let i = 0; i < existingIds.length; i += 25) {
-        const batch = writeBatch(db);
-        existingIds.slice(i, i+25).forEach(id => batch.update(doc(db,"products",id), {
-          deleted: true, hidden: true, approved: false, updatedAt: Date.now(),
-        }));
-        await batch.commit();
-      }
-      // Remove ALL from local state (including ones that never existed in Firestore)
-      setLocalDeletedIds(prev => {
-        const next = new Set([...prev, ...toDelete]);
-        try { sessionStorage.setItem("ralli_deleted_ids", JSON.stringify([...next])); } catch {}
-        return next;
-      });
+      const batch = writeBatch(db);
+      toDelete.forEach(id => batch.delete(doc(db,"products",id)));
+      await batch.commit();
       setProducts(ps => ps.filter(p => !toDelete.includes(p.id)));
-      alert(`✓ Removed ${toDelete.length} duplicates.`);
+      alert(`✓ Deleted ${toDelete.length} duplicates.`);
     } catch(e) { alert("Delete failed: "+e.message); }
     setDeletingDupes(false);
   }
@@ -8926,12 +8589,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
 
     const bad = products.filter(p => {
       const url = (p.adminImage || p.image || "").trim();
-      return url && (
-        !url.startsWith("http") ||
-        url.startsWith("data:") ||
-        url.includes("encrypted-tbn0.gstatic.com") ||
-        url.includes("gstatic.com")
-      );
+      return url && (!url.startsWith("http") || url.startsWith("data:"));
     });
     if (!bad.length) { alert("✓ No bad image URLs found!"); return; }
     if (!confirm(`Found ${bad.length} products with bad image URLs (base64 or non-http).\n\nClear them so they can be properly triaged?`)) return;
@@ -8963,29 +8621,6 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
       await load();
     } catch(e) { alert("Fix failed: "+e.message); }
     setSeeding(false);
-  }
-
-  const [fixingUrls, setFixingUrls] = useState(false);
-  async function fixAllBuyUrls() {
-    if (!confirm(`This will overwrite ALL product buy URLs with Amazon search links.\n\nEvery product will get: amazon.com/s?k=Brand+ProductName&i=beauty\n\nContinue?`)) return;
-    setFixingUrls(true);
-    try {
-      const snap = await getDocs(collection(db,"products"));
-      let count = 0;
-      for (let i = 0; i < snap.docs.length; i += 25) {
-        const batch = writeBatch(db);
-        snap.docs.slice(i, i+25).forEach(d => {
-          const p = d.data();
-          const q = encodeURIComponent(((p.brand||"")+" "+(p.productName||"")).trim());
-          batch.update(d.ref, { buyUrl: `https://www.amazon.com/s?k=${q}&i=beauty`, updatedAt: Date.now() });
-          count++;
-        });
-        await batch.commit();
-      }
-      alert(`✓ Updated ${count} product URLs to Amazon search links`);
-      await load();
-    } catch(e) { alert("Failed: "+e.message); }
-    setFixingUrls(false);
   }
 
     function handleSeedClick() {
@@ -9156,25 +8791,14 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
 
   // Triage queue — skipped items go to the back, done/hidden items excluded
   const triageQueue = React.useMemo(()=>{
-    const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
     const base = products
-      .filter(p => {
-        if (triageDone.has(p.id) || p.hidden) return false;
-        const missingIng = !p.ingredients || p.ingredients.trim().length < 10;
-        const neverVerified = !p.lastVerified;
-        const recentlyVerified = p.lastVerified && (Date.now() - p.lastVerified) < THIRTY_DAYS;
-        // Skip recently verified products — don't drag them back for image URL issues
-        if (recentlyVerified && !missingIng) return false;
-        const missingImg = !hasValidImage(p);
-        // Include if: never verified, missing ingredients, or missing image AND not recently verified
-        return neverVerified || missingIng || (missingImg && !recentlyVerified);
-      })
+      .filter(p => !triageDone.has(p.id) && !p.hidden && !p.lastVerified)
       .sort((a,b)=>{
         const aSkipped = triageSkipped.has(a.id) ? 1 : 0;
         const bSkipped = triageSkipped.has(b.id) ? 1 : 0;
         if (aSkipped !== bSkipped) return aSkipped - bSkipped;
-        const aHasImg = hasValidImage(a);
-        const bHasImg = hasValidImage(b);
+        const aHasImg = !!(a.adminImage||a.image);
+        const bHasImg = !!(b.adminImage||b.image);
         if (!aHasImg && bHasImg) return -1;
         if (aHasImg && !bHasImg) return 1;
         return (b.scanCount||0)-(a.scanCount||0);
@@ -9266,13 +8890,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
       if (triageLink.trim()) updates.buyUrl = triageLink.trim();
       if (triageIng.trim()) updates.ingredients = triageIng.trim();
       if (triageName.trim() && triageName.trim() !== p.productName) updates.productName = triageName.trim();
-      const ref = doc(db,"products",p.id);
-      const snap = await getDoc(ref);
-      if (snap.exists()) {
-        await updateDoc(ref, updates);
-      } else {
-        await setDoc(ref, { ...p, ...updates, createdAt: Date.now() });
-      }
+      await updateDoc(doc(db,"products",p.id), updates);
       // Update local state immediately
       setProducts(ps=>ps.map(q=>q.id===p.id?{...q,...updates}:q));
       setTriageDone(d => new Set([...d, p.id]));
@@ -9332,27 +8950,13 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
       filter==="approved" ? (p.approved && !stale) :
       filter==="top100"   ? top100Ids.has(p.id) :
       filter==="topclicks"? ((p.clickCount||0) > 0) :
-      filter==="dupes"    ? (window.__adminDupeKeys||new Set()).has(`${(p.brand||"").toLowerCase().trim()}|${(p.productName||"").toLowerCase().trim()}`) :
       filter==="recheck"  ? (p.approved && stale) : true;
     return matchSearch && matchCat && matchFilter;
   });
 
-  // Sort: when searching, approved+image first; topclicks by click count; default order otherwise
-  const sortedFiltered = search.trim()
-    ? [...filtered].sort((a,b) => {
-        const scoreA = a.approved && hasValidImage(a) ? 0 : a.approved ? 1 : hasValidImage(a) ? 2 : 3;
-        const scoreB = b.approved && hasValidImage(b) ? 0 : b.approved ? 1 : hasValidImage(b) ? 2 : 3;
-        return scoreA - scoreB;
-      })
-    : filter === "topclicks"
-      ? [...filtered].sort((a,b) => (b.clickCount||0) - (a.clickCount||0))
-    : filter === "dupes"
-      ? [...filtered].sort((a,b) => {
-          const brandA = (a.brand||"").toLowerCase().trim();
-          const brandB = (b.brand||"").toLowerCase().trim();
-          if (brandA !== brandB) return brandA.localeCompare(brandB);
-          return (a.productName||"").toLowerCase().localeCompare((b.productName||"").toLowerCase());
-        })
+  // Sort topclicks by clickCount desc
+  const sortedFiltered = filter === "topclicks"
+    ? [...filtered].sort((a,b) => (b.clickCount||0) - (a.clickCount||0))
     : filtered;
 
   const counts = {
@@ -9366,7 +8970,6 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
     noingred: products.filter(p => !p.ingredients || p.ingredients.trim() === "").length,
     recheck:  products.filter(p=>p.approved&&needsReverification(p)).length,
     topclicks: products.filter(p=>(p.clickCount||0)>0).length,
-    dupes:    (window.__adminDupeKeys||new Set()).size,
     all:      products.length,
   };
 
@@ -9375,7 +8978,6 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
     {id:"approved",  label:"✓ In App",        color:T.sage},
     {id:"pending",   label:"⏳ Pending",       color:T.amber},
     {id:"hidden",    label:"🚫 Rejected",      color:T.rose},
-    {id:"dupes",     label:"⚠ Dupes",         color:"#f59e0b"},
     {id:"userscans", label:"👤 User Scans",    color:"#6366f1"},
     {id:"reviewed",  label:"✋ Reviewed",      color:"#0891b2"},
     {id:"noimage",   label:"🖼 No Image",      color:T.textMid},
@@ -9418,10 +9020,6 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
           <button onClick={clearBadImages}
             style={{padding:"0.35rem 0.75rem",background:"none",border:`1px solid ${T.amber}66`,borderRadius:"0.5rem",fontSize:"0.68rem",color:T.amber,cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>
             🧹 Clear Bad Imgs
-          </button>
-          <button onClick={fixAllBuyUrls} disabled={fixingUrls}
-            style={{padding:"0.35rem 0.75rem",background:"none",border:`1px solid ${T.iceBlue}`,borderRadius:"0.5rem",fontSize:"0.68rem",color:"#3b82f6",cursor:fixingUrls?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"600",opacity:fixingUrls?0.5:1}}>
-            {fixingUrls?"Fixing…":"🔗 Fix All URLs"}
           </button>
           <button onClick={handleSeedClick} disabled={seeding}
             style={{padding:"0.35rem 0.75rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.68rem",color:T.textMid,cursor:seeding?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"600",opacity:seeding?0.5:1}}>
@@ -9525,23 +9123,13 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
       )}
 
       {/* ── Product list ── */}
-      {/* Compute which brand+name combos appear more than once in the FULL product list */}
-      {(()=>{
-        const _keyCount = new Map();
-        products.forEach(p=>{
-          const k = `${(p.brand||"").toLowerCase().trim()}|${(p.productName||"").toLowerCase().trim()}`;
-          _keyCount.set(k, (_keyCount.get(k)||0)+1);
-        });
-        window.__adminDupeKeys = new Set([..._keyCount.entries()].filter(([,v])=>v>1).map(([k])=>k));
-      })()}
       <div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}>
         {sortedFiltered.map(p=>{
           const stale = needsReverification(p);
-          const isDupe = (window.__adminDupeKeys||new Set()).has(`${(p.brand||"").toLowerCase().trim()}|${(p.productName||"").toLowerCase().trim()}`);
           const lvTs = p.lastVerified?.seconds ? p.lastVerified.seconds*1000 : (p.lastVerified||0);
           const lvLabel = lvTs ? new Date(lvTs).toLocaleDateString("en-US",{month:"short",year:"numeric"}) : "Never";
           return (
-            <div key={p.id} style={{background:T.surface,borderRadius:"0.85rem",border:`2px solid ${saved===p.id?T.sage:isDupe?"#f59e0b":stale&&p.approved?T.rose+"66":p.approved?T.sage+"44":T.border}`,padding:"0.75rem",transition:"border-color 0.3s"}}>
+            <div key={p.id} style={{background:T.surface,borderRadius:"0.85rem",border:`2px solid ${saved===p.id?T.sage:stale&&p.approved?T.rose+"66":p.approved?T.sage+"44":T.border}`,padding:"0.75rem",transition:"border-color 0.3s"}}>
               {editing?.id===p.id ? (
                 <div>
                   <div style={{fontSize:"0.65rem",fontWeight:"700",color:T.accent,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"0.5rem"}}>Editing: {p.id}</div>
@@ -9593,7 +9181,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
                 <div style={{display:"flex",alignItems:"center",gap:"0.65rem"}}>
                   <div style={{width:"48px",height:"48px",borderRadius:"0.5rem",overflow:"hidden",flexShrink:0,background:"#ffffff",border:`1px solid ${T.border}`}}>
                     {p.image
-                      ? <img src={p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply"}} onError={e=>e.target.style.display="none"}/>
+                      ? <img src={p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.display="none"}/>
                       : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1.1rem"}}>📷</div>}
                   </div>
                   <div style={{flex:1,minWidth:0}}>
@@ -9604,7 +9192,6 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
                       {!p.approved&&!p.hidden&&<span style={{fontSize:"0.5rem",fontWeight:"700",color:T.amber,background:T.amber+"18",padding:"0.07rem 0.3rem",borderRadius:"999px"}}>{p.isRequest?"👤 Requested":"⏳ Pending"}</span>}
                       {p.hidden&&<span style={{fontSize:"0.5rem",fontWeight:"700",color:T.textLight,background:T.border,padding:"0.07rem 0.3rem",borderRadius:"999px"}}>Hidden</span>}
                       {p.scanCount>0&&<span style={{fontSize:"0.5rem",color:"#6366f1",background:"#6366f118",fontWeight:"700",padding:"0.07rem 0.3rem",borderRadius:"999px"}}>{p.scanCount} scans</span>}
-                      {isDupe&&<span style={{fontSize:"0.5rem",fontWeight:"700",color:"#92400e",background:"#fef3c7",padding:"0.07rem 0.3rem",borderRadius:"999px",border:"1px solid #f59e0b55"}}>⚠ Dupe</span>}
                     </div>
                     <div style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
                     <div style={{fontSize:"0.6rem",color:T.textLight,display:"flex",gap:"0.35rem",marginTop:"1px",flexWrap:"wrap"}}>
@@ -11336,84 +10923,6 @@ function AdminIngredientFiller() {
 }
 
 
-// ── Admin Reports Tab ─────────────────────────────────────────
-function AdminReportsTab() {
-  const [reports, setReports] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState("open");
-
-  useEffect(()=>{
-    setLoading(true);
-    getDocs(query(collection(db,"reports"), orderBy("createdAt","desc"), limit(100)))
-      .then(snap => {
-        setReports(snap.docs.map(d=>({id:d.id,...d.data()})));
-        setLoading(false);
-      }).catch(()=>setLoading(false));
-  },[]);
-
-  async function updateStatus(id, status) {
-    try {
-      await updateDoc(doc(db,"reports",id), {status, resolvedAt: Date.now()});
-      setReports(rs => rs.map(r => r.id===id ? {...r, status} : r));
-    } catch(e) { alert("Failed: "+e.message); }
-  }
-
-  const filtered = reports.filter(r => filter==="all" || r.status===filter);
-  const counts = {open: reports.filter(r=>r.status==="open").length, resolved: reports.filter(r=>r.status==="resolved").length, dismissed: reports.filter(r=>r.status==="dismissed").length};
-
-  if (loading) return <div style={{padding:"2rem",textAlign:"center",color:T.textLight}}>Loading reports…</div>;
-
-  return (
-    <div>
-      {/* Filter tabs */}
-      <div style={{display:"flex",gap:"0.35rem",marginBottom:"0.85rem"}}>
-        {[["open","🚩 Open"],["resolved","✓ Resolved"],["dismissed","– Dismissed"],["all","All"]].map(([id,lbl])=>(
-          <button key={id} onClick={()=>setFilter(id)}
-            style={{padding:"0.35rem 0.65rem",borderRadius:"0.5rem",border:`1px solid ${filter===id?T.accent:T.border}`,background:filter===id?T.accent+"12":"transparent",color:filter===id?T.accent:T.textMid,fontSize:"0.65rem",fontWeight:filter===id?"700":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-            {lbl} {id!=="all"&&counts[id]>0&&<span style={{fontWeight:"800"}}>({counts[id]})</span>}
-          </button>
-        ))}
-      </div>
-
-      {filtered.length===0 ? (
-        <div style={{textAlign:"center",padding:"3rem",color:T.textLight,fontSize:"0.82rem"}}>No {filter==="all"?"":""+filter} reports</div>
-      ) : (
-        <div style={{display:"flex",flexDirection:"column",gap:"0.6rem"}}>
-          {filtered.map(r=>(
-            <div key={r.id} style={{background:T.surface,borderRadius:"0.85rem",border:`1px solid ${r.status==="open"?T.rose+"44":T.border}`,padding:"0.85rem"}}>
-              <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:"0.5rem",marginBottom:"0.4rem"}}>
-                <div>
-                  <div style={{fontSize:"0.72rem",fontWeight:"700",color:T.rose,fontFamily:"'Inter',sans-serif",marginBottom:"2px"}}>{r.reportType}</div>
-                  <div style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{r.brand&&`${r.brand} — `}{r.productName}</div>
-                </div>
-                <span style={{fontSize:"0.55rem",fontWeight:"700",padding:"0.15rem 0.45rem",borderRadius:"999px",background:r.status==="open"?T.rose+"15":r.status==="resolved"?T.sage+"15":T.surfaceAlt,color:r.status==="open"?T.rose:r.status==="resolved"?T.sage:T.textLight,flexShrink:0}}>
-                  {r.status}
-                </span>
-              </div>
-              {r.note&&<div style={{fontSize:"0.7rem",color:T.textMid,fontFamily:"'Inter',sans-serif",marginBottom:"0.5rem",background:T.surfaceAlt,borderRadius:"0.4rem",padding:"0.35rem 0.5rem"}}>"{r.note}"</div>}
-              <div style={{fontSize:"0.58rem",color:T.textLight,marginBottom:"0.5rem"}}>
-                {new Date(r.createdAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"})}
-              </div>
-              {r.status==="open"&&(
-                <div style={{display:"flex",gap:"0.35rem"}}>
-                  <button onClick={()=>updateStatus(r.id,"resolved")}
-                    style={{padding:"0.28rem 0.65rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.4rem",fontSize:"0.65rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                    ✓ Resolve
-                  </button>
-                  <button onClick={()=>updateStatus(r.id,"dismissed")}
-                    style={{padding:"0.28rem 0.65rem",background:"transparent",color:T.textLight,border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.65rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                    Dismiss
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog}) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -11444,9 +10953,9 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
 
       {/* Tab switcher — Row 1: main sections */}
       <div style={{display:"flex",gap:"0.3rem",marginBottom:"0.3rem",background:T.surfaceAlt,padding:"0.25rem",borderRadius:"0.6rem"}}>
-        {[["overview","📊 Overview"],["products","🏪 Products"],["content","✏️ Content"],["reports","🚩 Reports"]].map(([id,lbl])=>(
+        {[["overview","📊 Overview"],["products","🏪 Products"],["content","✏️ Content"]].map(([id,lbl])=>(
           <button key={id} onClick={()=>setActiveTab(id)}
-            style={{flex:1,padding:"0.5rem 0.25rem",background:activeTab===id?T.accent:"transparent",color:activeTab===id?"#FFFFFF":T.textMid,border:"none",borderRadius:"0.4rem",fontSize:"0.62rem",fontWeight:activeTab===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.15s"}}>
+            style={{flex:1,padding:"0.5rem 0.25rem",background:activeTab===id?T.accent:"transparent",color:activeTab===id?"#FFFFFF":T.textMid,border:"none",borderRadius:"0.4rem",fontSize:"0.68rem",fontWeight:activeTab===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.15s"}}>
             {lbl}
           </button>
         ))}
@@ -11482,8 +10991,6 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
       {activeTab==="picks"&&<AdminFounderPicks/>}
       {/* Requests — own tab */}
       {activeTab==="requests"&&<AdminRequestsTab/>}
-      {/* Reports */}
-      {activeTab==="reports"&&<AdminReportsTab/>}
 
       {activeTab==="overview"&&(
         <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
@@ -12475,7 +11982,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange }) {
   if (openConvo) {
     return (
       <>
-        <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, zIndex:60, background:T.bg, display:"flex", flexDirection:"column", paddingBottom:"env(safe-area-inset-bottom)"}}>
+        <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, zIndex:60, background:T.bg, display:"flex", flexDirection:"column"}}>
           <ChatView user={user} profile={profile} other={openConvo} onBack={() => setOpenConvo(null)} onUserTap={onUserTap} onProductTap={openChatProduct}/>
         </div>
         {chatProduct && <ProductModal product={chatProduct} user={user} profile={profile} onUpdateProfile={()=>{}} onClose={() => setChatProduct(null)}/>}
@@ -12490,9 +11997,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange }) {
   const activeList = searchQ.trim() ? searchRes : null;
 
   return (
-    <div style={{ maxWidth: "480px", margin: "0 auto", paddingBottom: "calc(5rem + env(safe-area-inset-bottom))", minHeight: "100%" }}>
-      <PageHero pageTitle="Messages" pageIcon={RalliIcons.chat(T.textLight, 16)} fixed="Your conversations" />
-
+    <div style={{ maxWidth: "480px", margin: "0 auto", paddingBottom: "6rem" }}>
       <div style={{ padding: "0 1rem 0.75rem" }}>
         {/* Search bar with + button */}
         <div style={{ position: "relative", marginBottom: "1rem", display:"flex", gap:"0.5rem", alignItems:"center" }}>
@@ -12749,7 +12254,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
                   <div style={{ display:"flex", gap:"0.6rem", alignItems:"center", padding:"0.65rem 0.75rem" }}>
                     {m.productImage && (
                       <div style={{ width:"44px", height:"44px", flexShrink:0, borderRadius:"0.5rem", overflow:"hidden", background:T.surface }}>
-                        <img src={m.productImage} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"3px", mixBlendMode:"multiply" }}/>
+                        <img src={m.productImage} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"3px", mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)" }}/>
                       </div>
                     )}
                     <div style={{ flex:1, minWidth:0 }}>
@@ -12817,7 +12322,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
 
 
       {/* Input bar */}
-      <div style={{ padding:"0.65rem 1rem", paddingBottom:"calc(0.65rem + env(safe-area-inset-bottom))", borderTop:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:"0.5rem", flexShrink:0 }}>
+      <div style={{ padding:"0.65rem 1rem", paddingBottom:"calc(0.65rem + env(safe-area-inset-bottom))", borderTop:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:"0.5rem", flexShrink:0, position:"sticky", bottom:0, zIndex:10 }}>
         {/* Photo button */}
         <button onClick={() => fileInputRef.current?.click()} style={{ background:"none", border:"none", cursor:"pointer", padding:"0.3rem", color:T.textLight, display:"flex", flexShrink:0 }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -12887,7 +12392,7 @@ function ProductPickerModal({ user, onSelect, onClose }) {
               <button key={p.id} onClick={() => onSelect(p)}
                 style={{ width:"100%", display:"flex", alignItems:"center", gap:"0.65rem", padding:"0.7rem 0", background:"none", border:"none", borderTop: i > 0 ? `1px solid ${T.border}40` : "none", cursor:"pointer", textAlign:"left" }}>
                 <div style={{ width:"44px", height:"44px", flexShrink:0, borderRadius:"0.6rem", overflow:"hidden", background:T.surfaceAlt }}>
-                  {p.image ? <img src={p.image} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"4px", mixBlendMode:"multiply" }}/> : null}
+                  {p.image ? <img src={p.image} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"4px", mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)" }}/> : null}
                 </div>
                 <div style={{ flex:1, minWidth:0 }}>
                   {p.brand && <div style={{ fontSize:"0.6rem", color:T.textLight, textTransform:"uppercase", letterSpacing:"0.09em" }}>{p.brand}</div>}
@@ -13035,7 +12540,7 @@ if (typeof document !== "undefined") {
 
   // Remove any existing favicons and set the Ralli R icon
   document.querySelectorAll("link[rel~='icon'], link[rel='apple-touch-icon']").forEach(el => el.remove());
-  const iconSvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23111827'/%3E%3Ctext y='80' x='50' text-anchor='middle' font-family='Arial Black,sans-serif' font-weight='900' font-size='78' fill='%23FFFFFF'%3ER%3C/text%3E%3C/svg%3E";
+  const iconSvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23111827'/%3E%3Ctext y='82' x='8' font-family='Arial Black,sans-serif' font-weight='900' font-size='80' fill='%23CFE8FF'%3ER%3C/text%3E%3C/svg%3E";
   const favLink = document.createElement('link'); favLink.rel = 'icon'; favLink.type = 'image/svg+xml'; favLink.href = iconSvg; document.head.appendChild(favLink);
   const appleLink = document.createElement('link'); appleLink.rel = 'apple-touch-icon'; appleLink.href = iconSvg; document.head.appendChild(appleLink);
 }
@@ -13061,7 +12566,9 @@ function AppInner() {
   const [user, setUser]         = useState(null);
   const [profile, setProfile]   = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [tab, setTab]           = useState("feed");
+  const [tab, setTab]           = useState(()=>{
+    try { return sessionStorage.getItem('ralli_tab')||'feed'; } catch { return 'feed'; }
+  });
   const [tabDir, setTabDir]     = useState("tab-fade");
   const prevTabRef              = React.useRef("feed");
   const TAB_ORDER               = ["feed","check","messages","shop","notifs","profile","admin","glossary"];
@@ -13076,6 +12583,7 @@ function AppInner() {
     }
     prevTabRef.current = t;
     setTab(t);
+    try { sessionStorage.setItem('ralli_tab', t); } catch {}
   }
   const [viewingUid, setViewingUid] = useState(null);
   const [feedRefresh, setFeedRefresh] = useState(0);
@@ -13280,4 +12788,4 @@ function AppInner() {
       )}
     </div></>
   );
-} 
+}
