@@ -53,7 +53,7 @@ const T = {
 };
 
 const GS = `
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@900&family=Cormorant+Garamond:wght@300;400;500;600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@900&display=swap');
   *{box-sizing:border-box;} body{margin:0;background:#F8F9FB;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;letter-spacing:0;overscroll-behavior-y:none;} html{height:-webkit-fill-available;}
   ::placeholder{color:${T.textLight};}
   .share-toast{position:fixed;bottom:calc(5rem + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:${T.text};color:#fff;padding:0.5rem 1.1rem;border-radius:999px;font-size:0.78rem;font-family:'Inter',sans-serif;font-weight:500;z-index:9999;opacity:0;animation:toastIn 2.2s ease forwards;pointer-events:none;white-space:nowrap;}
@@ -2188,14 +2188,14 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
         {shareOpen&&user&&<ShareProductModal user={user} product={product} onClose={()=>setShareOpen(false)}/>}
 
         {/* Product image */}
-        <div style={{width:"100%",height:"200px",background:T.surfaceAlt,borderRadius:"1rem",overflow:"hidden",marginBottom:"1.25rem",display:"flex",alignItems:"center",justifyContent:"center"}}>
+        <div style={{width:"100%",height:"200px",background:`linear-gradient(135deg,${T.iceBlue}40,${T.surfaceAlt})`,borderRadius:"1rem",overflow:"hidden",marginBottom:"1.25rem",display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${T.iceBlue}66`}}>
           <ProductImage src={product.image} name={product.productName} brand={product.brand} barcode={product.barcode}/>
         </div>
 
         {/* Name + brand */}
         <div style={{marginBottom:"1rem"}}>
-          {product.brand&&<div style={{fontSize:"0.62rem",color:T.slateGray,fontWeight:"500",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:"0.25rem",fontFamily:"'Inter',sans-serif"}}>{product.brand}</div>}
-          <div style={{fontSize:"1.65rem",fontWeight:"400",color:T.navy,fontFamily:"'Cormorant Garamond','Georgia',serif",lineHeight:1.15,marginBottom:"0.35rem",letterSpacing:"-0.01em"}}>{product.productName}</div>
+          {product.brand&&<div style={{display:"inline-block",fontSize:"0.6rem",color:T.navy,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:"0.4rem",fontFamily:"'Inter',sans-serif",background:T.iceBlue+"55",padding:"0.2rem 0.6rem",borderRadius:"999px",border:`1px solid ${T.iceBlue}`}}>{product.brand}</div>}
+          <div style={{fontSize:"1.5rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif",lineHeight:1.2,marginBottom:"0.35rem",letterSpacing:"-0.03em"}}>{product.productName}</div>
 
         </div>
 
@@ -2221,7 +2221,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
             )}
           </div>
           {/* Rallier Score */}
-          <div style={{flex:1,padding:"0.75rem",background:cc+"10",borderRadius:"0.75rem",textAlign:"center",border:`1px solid ${cc}22`}}>
+          <div style={{flex:1,padding:"0.75rem",background:`linear-gradient(135deg,${T.iceBlue}30,${cc}10)`,borderRadius:"0.75rem",textAlign:"center",border:`1px solid ${T.iceBlue}88`}}>
             <div style={{fontSize:"0.58rem",color:T.slateGray,fontWeight:"600",fontFamily:"'Inter',sans-serif",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.1em"}}>Rallier Score</div>
             {product.communityRating ? (
               <>
@@ -2243,7 +2243,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
 
         {/* ── Friends Also Using ── */}
         {followersWhoUse.length > 0 && (
-          <div style={{paddingTop:"1rem",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"0"}}>
+          <div style={{paddingTop:"1rem",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"0",background:T.iceBlue+"22",borderRadius:"0.75rem",padding:"0.85rem 1rem",margin:"0.75rem 0"}}>
             <div style={{fontSize:"0.6rem",color:T.textLight,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.65rem",fontFamily:"'Inter',sans-serif"}}>Friends Also Using</div>
             <div style={{display:"flex",alignItems:"center",gap:"0.75rem"}}>
               <div style={{display:"flex",flexShrink:0}}>
@@ -2942,11 +2942,31 @@ function AuthPage() {
 }
 
 // ── UserPage ──────────────────────────────────────────────────
-function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack}) {
+// ── FollowListItem — loads a user by UID and renders them tappable ──
+function FollowListItem({ uid, onTap }) {
+  const [u, setU] = React.useState(null);
+  React.useEffect(() => {
+    getDoc(doc(db, "users", uid)).then(d => d.exists() && setU({uid:d.id,...d.data()})).catch(()=>{});
+  }, [uid]);
+  if (!u) return <div style={{height:"52px",borderRadius:"0.75rem",marginBottom:"0.5rem"}} className="skeleton"/>;
+  return (
+    <button onClick={()=>onTap(uid)} style={{width:"100%",display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.6rem 0.5rem",background:"none",border:"none",cursor:"pointer",borderBottom:`1px solid ${T.border}`,textAlign:"left"}}>
+      <Avatar photoURL={u.photoURL} name={u.displayName} size={38}/>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName||"Ralli User"}</div>
+        <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>{(u.followers||[]).length} followers</div>
+      </div>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+  );
+}
+
+function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onUserTap}) {
   const [profile, setProfile]   = useState(null);
   const [posts, setPosts]       = useState([]);
   const [loading, setLoading]   = useState(true);
   const [selectedProduct, setSelectedProduct] = useState(null);
+  const [showFollowList, setShowFollowList] = useState(null);
   const isMe = uid === currentUid;
   const isFollowing = (currentProfile?.following||[]).includes(uid);
 
@@ -2986,12 +3006,12 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack}) {
         <div style={{display:"flex",alignItems:"center",gap:"1rem",marginBottom:"1.25rem"}}>
           <Avatar photoURL={profile.photoURL} name={profile.displayName} size={64}/>
           <div style={{flex:1}}>
-            <div style={{fontSize:"1.4rem",fontWeight:"400",color:T.navy,fontFamily:"'Cormorant Garamond','Georgia',serif",letterSpacing:"-0.01em"}}>{profile.displayName}</div>
+            <div style={{fontSize:"1.35rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif",letterSpacing:"-0.03em"}}>{profile.displayName}</div>
             {profile.bio&&<div style={{fontSize:"0.78rem",color:T.textMid,marginTop:"2px"}}>{profile.bio}</div>}
             <div style={{display:"flex",gap:"1rem",marginTop:"0.5rem"}}>
               <span style={{fontSize:"0.75rem",color:T.textLight}}><b style={{color:T.text}}>{posts.length}</b> posts</span>
-              <span style={{fontSize:"0.75rem",color:T.textLight}}><b style={{color:T.text}}>{(profile.followers||[]).length}</b> followers</span>
-              <span style={{fontSize:"0.75rem",color:T.textLight}}><b style={{color:T.text}}>{(profile.following||[]).length}</b> following</span>
+              <button onClick={()=>setShowFollowList("followers")} style={{fontSize:"0.75rem",color:T.textLight,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif"}}><b style={{color:T.text}}>{(profile.followers||[]).length}</b> followers</button>
+              <button onClick={()=>setShowFollowList("following")} style={{fontSize:"0.75rem",color:T.textLight,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif"}}><b style={{color:T.text}}>{(profile.following||[]).length}</b> following</button>
             </div>
           </div>
         </div>
@@ -3037,6 +3057,25 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack}) {
         profile={currentProfile}
         onUpdateProfile={onUpdateProfile}
       />
+    )}
+    {showFollowList && (
+      <div style={{position:"fixed",inset:0,zIndex:300,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}}>
+        <div onClick={()=>setShowFollowList(null)} style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.4)",backdropFilter:"blur(4px)"}}/>
+        <div style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1.25rem 2.5rem",maxHeight:"70vh",overflowY:"auto",zIndex:1}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem"}}>
+            <div style={{fontSize:"0.75rem",fontWeight:"700",color:T.text,textTransform:"uppercase",letterSpacing:"0.07em",fontFamily:"'Inter',sans-serif"}}>
+              {showFollowList === "followers" ? "Followers" : "Following"}
+            </div>
+            <button onClick={()=>setShowFollowList(null)} style={{background:"none",border:"none",cursor:"pointer",color:T.textLight,fontSize:"1.1rem"}}>✕</button>
+          </div>
+          {(showFollowList === "followers" ? (profile.followers||[]) : (profile.following||[])).map(uid => (
+            <FollowListItem key={uid} uid={uid} onTap={uid=>{setShowFollowList(null); onUserTap?.(uid);}}/>
+          ))}
+          {(showFollowList === "followers" ? (profile.followers||[]) : (profile.following||[])).length === 0 && (
+            <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.82rem"}}>No {showFollowList} yet</div>
+          )}
+        </div>
+      </div>
     )}
     </>
   );
@@ -4037,11 +4076,10 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
       const FEED_TYPES = new Set(["brokeout","wantToTry","loved","commented"]);
       const realPosts = p.filter(post => FEED_TYPES.has(post.postType))
         .sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
-      // Merge seed posts — deduplicate by productName so real posts take priority
-      const realProductNames = new Set(realPosts.map(p => p.productName?.toLowerCase()));
-      const seedPosts = MOCK_POSTS.filter(m => !realProductNames.has(m.productName?.toLowerCase()));
-      const merged = [...realPosts, ...seedPosts];
-      setPosts(merged);
+      // Seeds always append — real posts take priority if same product name
+      const realNames = new Set(realPosts.map(p => p.productName?.toLowerCase()));
+      const seedPosts = MOCK_POSTS.filter(m => !realNames.has(m.productName?.toLowerCase()));
+      setPosts([...realPosts, ...seedPosts]);
       setNotifs(n);
     } catch(e) { console.error("loadFeed", e); }
     setLoading(false);
@@ -4333,7 +4371,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
                       <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"0.2rem",flexShrink:0}}>
                         <PoreScoreBadge score={res.avgScore!=null ? Math.round(res.avgScore) : null} size="sm"/>
                         {p._cached && p._approved
-                          ? <span style={{fontSize:"0.5rem",color:T.sage,background:T.sage+"15",padding:"0.05rem 0.3rem",borderRadius:"999px",border:`1px solid ${T.sage}30`,fontWeight:"700"}}>✓ In Ralli</span>
+                          ? <span style={{fontSize:"0.5rem",color:T.navy,background:T.iceBlue+"80",padding:"0.05rem 0.35rem",borderRadius:"999px",border:`1px solid ${T.iceBlue}`,fontWeight:"700"}}>✓ In Ralli</span>
                           : p._cached
                           ? <span style={{fontSize:"0.5rem",color:T.amber,background:T.amber+"15",padding:"0.05rem 0.3rem",borderRadius:"999px",border:`1px solid ${T.amber}30`,fontWeight:"600"}}>Pending</span>
                           : <span style={{fontSize:"0.45rem",color:T.textLight,background:T.surfaceAlt,padding:"0.05rem 0.25rem",borderRadius:"999px",border:`1px solid ${T.border}`}}>OBF</span>
@@ -4501,7 +4539,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
             const doFollow = async uid => { await followUser(user.uid,uid,profile?.displayName||"Someone",profile?.photoURL||""); onUpdateProfile({...profile,following:[...(profile?.following||[]),uid]}); };
 
             const FeedSectionLabel = ({label, icon=null, color=T.textLight}) => (
-              <div style={{display:"flex",alignItems:"center",gap:"0.35rem",fontSize:"0.6rem",fontWeight:"700",color,textTransform:"uppercase",letterSpacing:"0.12em",padding:"1.1rem 1rem 0.5rem",fontFamily:"'Inter',sans-serif"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"0.35rem",fontSize:"0.6rem",fontWeight:"700",color,textTransform:"uppercase",letterSpacing:"0.12em",padding:"1.1rem 1rem 0.5rem",fontFamily:"'Inter',sans-serif",borderLeft:`3px solid ${T.iceBlue}`,marginLeft:"0.5rem"}}>
                 {icon&&icon}{label}
               </div>
             );
@@ -4519,11 +4557,11 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
 
             // ── FOR YOU TAB: always shows rich community content ───
             if (tab==="forYou") {
-              const allCommunity = [...posts, ...MOCK_POSTS.filter(m=>!posts.some(p=>p.productName?.toLowerCase()===m.productName?.toLowerCase()))];
               const seen = new Set();
-              const topPosts = allCommunity
-                .filter(p=>{ const k=p.productName?.toLowerCase()||p.id; if(seen.has(k))return false; seen.add(k); return true; })
-                .sort((a,b)=>(b.likes?.length||0)-(a.likes?.length||0));
+              const realDeduped = posts.filter(p=>{ const k=p.productName?.toLowerCase()||p.id; if(seen.has(k))return false; seen.add(k); return true; });
+              const seedDeduped = MOCK_POSTS.filter(m=>{ const k=m.productName?.toLowerCase()||m.id; if(seen.has(k))return false; seen.add(k); return true; });
+              const allCommunity = [...realDeduped, ...seedDeduped];
+              const topPosts = [...allCommunity].sort((a,b)=>(b.likes?.length||0)-(a.likes?.length||0));
               const lovedPosts = topPosts.filter(p=>p.postType==="loved").slice(0,6);
               const brokeoutPosts = topPosts.filter(p=>p.postType==="brokeout").slice(0,3);
               const wantToTryPosts = topPosts.filter(p=>p.postType==="wantToTry").slice(0,3);
@@ -6562,7 +6600,7 @@ function OurStoryPopup({onClose, onUserTap}) {
         </div>
         <div style={{position:"relative",zIndex:1}}>
           <div style={{fontSize:"0.5rem",color:T.navy,letterSpacing:"0.2em",textTransform:"uppercase",fontFamily:"'Inter',sans-serif",fontWeight:"700",marginBottom:"0.5rem",opacity:0.6}}>Our Story</div>
-          <div style={{fontFamily:"'Cormorant Garamond','Georgia',serif",fontWeight:"400",fontSize:"1.5rem",color:T.navy,lineHeight:1.2,marginBottom:"0.75rem"}}>
+          <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"700",fontSize:"1.25rem",color:T.navy,lineHeight:1.2,marginBottom:"0.75rem",letterSpacing:"-0.02em"}}>
             Built out of necessity.
           </div>
           <p style={{fontSize:"0.78rem",color:T.navy,fontFamily:"'Inter',sans-serif",lineHeight:1.65,margin:"0 0 0.6rem",opacity:0.8}}>
@@ -11646,7 +11684,7 @@ function BrandOfTheWeek({onBrandTap}) {
         </div>
 
         {/* Brand name */}
-        <div style={{fontFamily:"'Cormorant Garamond','Georgia',serif",fontWeight:"300",fontSize:"1.85rem",color:"#FFFFFF",letterSpacing:"0.02em",lineHeight:1,marginBottom:"0.6rem"}}>
+        <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"800",fontSize:"1.6rem",color:"#FFFFFF",letterSpacing:"-0.03em",lineHeight:1,marginBottom:"0.6rem"}}>
           {activeBrand}
         </div>
 
@@ -12115,7 +12153,19 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen }) 
   const activeList = searchQ.trim() ? searchRes : null;
 
   return (
-    <div style={{ maxWidth: "480px", margin: "0 auto", paddingBottom: "6rem" }}>
+    <div style={{ maxWidth: "480px", margin: "0 auto", paddingBottom: "6rem", minHeight: "100dvh" }}>
+      {/* Header */}
+      <div style={{ padding: "1rem 1rem 0.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: T.bg, zIndex: 10, borderBottom: `1px solid ${T.border}`, marginBottom: "0.5rem" }}>
+        <div>
+          <div style={{ fontSize: "1.4rem", fontWeight: "400", color: T.navy, fontFamily: "'Cormorant Garamond','Georgia',serif", letterSpacing: "-0.01em", lineHeight: 1 }}>Messages</div>
+          <div style={{ fontSize: "0.6rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.1em", marginTop: "2px", fontFamily: "'Inter',sans-serif" }}>by GoodSisters</div>
+        </div>
+        {convos.length > 0 && (
+          <div style={{ fontSize: "0.65rem", color: T.textLight, fontFamily: "'Inter',sans-serif" }}>
+            {convos.length} conversation{convos.length !== 1 ? "s" : ""}
+          </div>
+        )}
+      </div>
       <div style={{ padding: "0 1rem 0.75rem" }}>
         {/* Search bar with + button */}
         <div style={{ position: "relative", marginBottom: "1rem", display:"flex", gap:"0.5rem", alignItems:"center" }}>
@@ -12590,7 +12640,7 @@ function BottomNav({tab, onChange, unreadCount=0, msgUnread=0, currentUid="", is
         return (
           <button key={item.id} onClick={()=>onChange(item.id)}
             style={{flex:1,padding:"0.7rem 0.25rem 0.55rem",display:"flex",flexDirection:"column",alignItems:"center",gap:"0.2rem",background:"none",border:"none",cursor:"pointer",transition:"all 0.2s",position:"relative"}}>
-            {active && <div style={{position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:"32px",height:"2px",background:T.navy,borderRadius:"0 0 2px 2px"}}/>}
+            {active && <div style={{position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:"32px",height:"3px",background:T.iceBlue,borderRadius:"0 0 3px 3px",boxShadow:`0 0 8px ${T.iceBlue}`}}/>}
             <div style={{position:"relative",display:"inline-flex"}}>
               {item.icon(active)}
               {item.id==="notifs" && unreadCount>0 && (
@@ -13002,7 +13052,7 @@ function AppInner() {
       {/* Pages */}
       <div key={viewingUid||tab} className={viewingUid ? "tab-fade" : tabDir} style={{minHeight:"60vh", ...(tab==="messages" && !viewingUid ? {height:"calc(100vh - 3.5rem)",display:"flex",flexDirection:"column",overflow:"hidden"} : {})}}>
       {viewingUid
-        ? <UserPage uid={viewingUid} currentUid={user.uid} currentProfile={profile} onUpdateProfile={setProfile} onBack={handleBack}/>
+        ? <UserPage uid={viewingUid} currentUid={user.uid} currentProfile={profile} onUpdateProfile={setProfile} onBack={handleBack} onUserTap={handleUserTap}/>
         : tab==="feed"
           ? <FeedPage user={user} profile={profile} refreshKey={feedRefresh} onUserTap={handleUserTap} onUpdateProfile={setProfile}/>
           : tab==="check"
