@@ -1351,19 +1351,52 @@ async function getUserPosts(uid) {
   } catch { return []; }
 }
 
-// ── Open Beauty Facts ─────────────────────────────────────────
-
+// ── Barcode lookup — tries multiple sources ───────────────────
 async function lookupBarcode(barcode) {
-  const res  = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${barcode}.json`, {signal: AbortSignal.timeout(8000)});
-  const data = await res.json();
-  if (data.status!==1) throw new Error("Product not found in our database. Try searching by name instead.");
-  const ing = data.product?.ingredients_text_en||data.product?.ingredients_text||"";
-  const name  = data.product?.product_name||"Unknown";
-  const brand = data.product?.brands?.split(",")?.[0]?.trim()||"";
-  const image = data.product?.image_front_url || data.product?.image_url || "";
-  if (image) setCachedImage(imgCacheKey(brand, name), image);
-  // Return even without ingredients — caller will handle missing ingredients
-  return { name, brand, ingredients: ing, image, hasIngredients: ing.trim().length > 10 };
+  // Source 1: Open Beauty Facts
+  try {
+    const res = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${barcode}.json`, {signal: AbortSignal.timeout(6000)});
+    const data = await res.json();
+    if (data.status === 1 && data.product?.product_name) {
+      const ing = data.product?.ingredients_text_en || data.product?.ingredients_text || "";
+      const name = data.product.product_name;
+      const brand = data.product?.brands?.split(",")?.[0]?.trim() || "";
+      const image = data.product?.image_front_url || data.product?.image_url || "";
+      if (image) setCachedImage(imgCacheKey(brand, name), image);
+      debugLog("ok", `OBF found: ${name}`);
+      return { name, brand, ingredients: ing, image, hasIngredients: ing.trim().length > 10, source: "obf" };
+    }
+  } catch(e) { debugLog("warn", `OBF failed: ${e.message}`); }
+
+  // Source 2: UPC Item DB (good US coverage)
+  try {
+    const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${barcode}`, {signal: AbortSignal.timeout(6000)});
+    const data = await res.json();
+    const item = data.items?.[0];
+    if (item?.title) {
+      const name = item.title;
+      const brand = item.brand || "";
+      const image = item.images?.[0] || "";
+      debugLog("ok", `UPCItemDB found: ${name}`);
+      return { name, brand, ingredients: "", image, hasIngredients: false, source: "upcitemdb" };
+    }
+  } catch(e) { debugLog("warn", `UPCItemDB failed: ${e.message}`); }
+
+  // Source 3: Buycott / Go-UPC (free tier)
+  try {
+    const res = await fetch(`https://go-upc.com/api/v1/code/${barcode}?key=free`, {signal: AbortSignal.timeout(5000)});
+    const data = await res.json();
+    if (data.product?.name) {
+      const name = data.product.name;
+      const brand = data.product.brand || "";
+      const image = data.product.imageUrl || "";
+      debugLog("ok", `Go-UPC found: ${name}`);
+      return { name, brand, ingredients: "", image, hasIngredients: false, source: "goupc" };
+    }
+  } catch(e) { debugLog("warn", `Go-UPC failed: ${e.message}`); }
+
+  // All sources failed
+  throw new Error("Product not found. Try photographing the ingredient list on the back of the packaging, or search by product name.");
 }
 
 async function extractFromPhoto(b64, mime) {
@@ -2872,7 +2905,7 @@ function AuthPage() {
           <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"300",fontSize:"0.72rem",color:T.textLight,letterSpacing:"0.22em",textTransform:"uppercase",marginTop:"0.4rem"}}>by GoodSisters</div>
         </div>
         <div style={{width:"32px",height:"1px",background:T.border,margin:"0.75rem auto"}}/>
-        <div style={{fontSize:"0.58rem",color:T.textLight,letterSpacing:"0.08em",textTransform:"uppercase",fontFamily:"'Inter',sans-serif",fontWeight:"400",whiteSpace:"nowrap"}}>
+        <div style={{fontSize:"0.58rem",color:T.textLight,letterSpacing:"0.04em",textTransform:"uppercase",fontFamily:"'Inter',sans-serif",fontWeight:"400"}}>
           Real people. Real skin. Real insights.
         </div>
       </div>
@@ -2945,6 +2978,8 @@ function FollowListItem({ uid, onTap }) {
     getDoc(doc(db, "users", uid)).then(d => d.exists() && setU({uid:d.id,...d.data()})).catch(()=>{});
   }, [uid]);
   if (!u) return <div style={{height:"52px",borderRadius:"0.75rem",marginBottom:"0.5rem"}} className="skeleton"/>;
+  const GENERIC = ["skincare lover","anonymous","user","undefined","null",""];
+  if (GENERIC.includes((u.displayName||"").toLowerCase().trim())) return null;
   return (
     <button onClick={()=>onTap(uid)} style={{width:"100%",display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.6rem 0.5rem",background:"none",border:"none",cursor:"pointer",borderBottom:`1px solid ${T.border}`,textAlign:"left"}}>
       <Avatar photoURL={u.photoURL} name={u.displayName} size={38}/>
@@ -3057,19 +3092,24 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
     {showFollowList && (
       <div style={{position:"fixed",inset:0,zIndex:300,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}}>
         <div onClick={()=>setShowFollowList(null)} style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.4)",backdropFilter:"blur(4px)"}}/>
-        <div style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1.25rem 2.5rem",maxHeight:"70vh",overflowY:"auto",zIndex:1}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem"}}>
-            <div style={{fontSize:"0.75rem",fontWeight:"700",color:T.text,textTransform:"uppercase",letterSpacing:"0.07em",fontFamily:"'Inter',sans-serif"}}>
+        <div style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1.25rem 0",maxHeight:"80vh",display:"flex",flexDirection:"column",zIndex:1}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexShrink:0}}>
+            <div style={{fontSize:"1rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>
               {showFollowList === "followers" ? "Followers" : "Following"}
+              <span style={{fontSize:"0.72rem",fontWeight:"400",color:T.textLight,marginLeft:"0.5rem"}}>
+                {(showFollowList === "followers" ? (profile.followers||[]) : (profile.following||[])).length}
+              </span>
             </div>
-            <button onClick={()=>setShowFollowList(null)} style={{background:"none",border:"none",cursor:"pointer",color:T.textLight,fontSize:"1.1rem"}}>✕</button>
+            <button onClick={()=>setShowFollowList(null)} style={{background:T.surfaceAlt,border:"none",cursor:"pointer",color:T.textMid,width:"28px",height:"28px",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1rem"}}>✕</button>
           </div>
-          {(showFollowList === "followers" ? (profile.followers||[]) : (profile.following||[])).map(uid => (
-            <FollowListItem key={uid} uid={uid} onTap={uid=>{setShowFollowList(null); onUserTap?.(uid);}}/>
-          ))}
-          {(showFollowList === "followers" ? (profile.followers||[]) : (profile.following||[])).length === 0 && (
-            <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.82rem"}}>No {showFollowList} yet</div>
-          )}
+          <div style={{overflowY:"auto",flex:1,paddingBottom:"calc(1.5rem + env(safe-area-inset-bottom))"}}>
+            {(showFollowList === "followers" ? (profile.followers||[]) : (profile.following||[])).map(uid => (
+              <FollowListItem key={uid} uid={uid} onTap={uid=>{setShowFollowList(null); onUserTap?.(uid);}}/>
+            ))}
+            {(showFollowList === "followers" ? (profile.followers||[]) : (profile.following||[])).length === 0 && (
+              <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.82rem"}}>No {showFollowList} yet</div>
+            )}
+          </div>
         </div>
       </div>
     )}
@@ -3347,10 +3387,28 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
         setInputMode("type");
         setCameraMode("choose");
       } else {
-        setIngredients("");
-        setInputMode("type");
-        setCameraMode("choose");
-        setCameraErr(`Found "${p.name}" but no ingredient list yet — photograph the ingredients label on the back to analyse it, or paste it below.`);
+        // Try OBF name search as a last attempt to find ingredients
+        let ingFromSearch = "";
+        try {
+          const q = `${p.brand} ${p.name}`.trim();
+          const r = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=3&fields=product_name,brands,ingredients_text,ingredients_text_en`, {signal: AbortSignal.timeout(5000)});
+          const d = await r.json();
+          ingFromSearch = d.products?.[0]?.ingredients_text_en || d.products?.[0]?.ingredients_text || "";
+          if (ingFromSearch) debugLog("ok", `OBF name search found ingredients for ${p.name}`);
+        } catch {}
+
+        if (ingFromSearch.trim().length > 10) {
+          setIngredients(ingFromSearch);
+          const res = analyzeIngredients(ingFromSearch);
+          setResults(res);
+          setInputMode("type");
+          setCameraMode("choose");
+        } else {
+          setIngredients("");
+          setInputMode("type");
+          setCameraMode("choose");
+          setCameraErr(`Found "${p.name}" but no ingredient list on file — photograph the ingredients label on the back to analyse it, or paste it below.`);
+        }
       }
       upsertProduct(code, {
         productName: p.name, brand: p.brand,
@@ -3857,13 +3915,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
   const [notifs, setNotifs]         = useState([]);
   const [feedFriendScans, setFeedFriendScans] = useState({});
   const [productImageMap, setProductImageMap] = useState({}); // name→image lookup
-  // Find Friends tab
-  const [ffSearch, setFfSearch]         = useState("");
-  const [ffResults, setFfResults]       = useState([]);
-  const [ffSuggested, setFfSuggested]   = useState([]);
-  const [ffSkinMatches, setFfSkinMatches] = useState([]);
-  const [ffFollowed, setFfFollowed]     = useState(new Set());
-  const [ffLoading, setFfLoading]       = useState(false);
+  // (Find Friends moved to Profile > People tab)
   const scrollRef   = React.useRef(null);
   const touchStartY = React.useRef(0);
 
@@ -3932,70 +3984,6 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
     }
     loadFriendRoutines();
   },[refreshKey,user?.uid]);
-
-  // ── Load Find Friends suggestions ──────────────────────────────
-  useEffect(() => {
-    if (!user?.uid || !profile) return;
-    async function loadFindFriends() {
-      try {
-        const snap = await getDocs(collection(db, "users"));
-        const already = new Set([...(profile?.following||[]), user.uid]);
-        const mySkinTypes = Array.isArray(profile?.skinType) ? profile.skinType : profile?.skinType ? [profile.skinType] : [];
-        const myFollowing = profile?.following || [];
-        const all = snap.docs
-          .map(d => ({ uid: d.id, ...d.data() }))
-          .filter(u => u.uid && !already.has(u.uid) && u.displayName);
-
-        // Mutuals: people followed by someone you follow
-        const mutualMap = {};
-        all.forEach(u => {
-          const shared = (u.followers||[]).filter(fid => myFollowing.includes(fid)).length;
-          if (shared > 0) mutualMap[u.uid] = { ...u, mutualCount: shared };
-        });
-        const suggested = Object.values(mutualMap)
-          .sort((a,b) => b.mutualCount - a.mutualCount)
-          .slice(0, 10);
-
-        // Skin type matches
-        const skinMatches = mySkinTypes.length > 0
-          ? all.filter(u => {
-              const theirTypes = Array.isArray(u.skinType) ? u.skinType : u.skinType ? [u.skinType] : [];
-              return theirTypes.some(t => mySkinTypes.includes(t)) && !mutualMap[u.uid];
-            })
-            .sort((a,b) => (b.followers||[]).length - (a.followers||[]).length)
-            .slice(0, 8)
-          : [];
-
-        // Fallback: top users by follower count if no mutuals/skin matches
-        const fallback = suggested.length + skinMatches.length < 5
-          ? all.filter(u => !mutualMap[u.uid] && !skinMatches.find(s=>s.uid===u.uid))
-              .sort((a,b)=>(b.followers||[]).length-(a.followers||[]).length)
-              .slice(0, 8)
-          : [];
-
-        setFfSuggested([...suggested, ...fallback].slice(0,10));
-        setFfSkinMatches(skinMatches);
-      } catch(e) {}
-    }
-    loadFindFriends();
-  }, [user?.uid, profile?.following?.length]);
-
-  // ── Find Friends search ─────────────────────────────────────────
-  useEffect(() => {
-    if (!ffSearch.trim()) { setFfResults([]); return; }
-    const q2 = ffSearch.toLowerCase();
-    setFfLoading(true);
-    getDocs(collection(db,"users")).then(snap => {
-      const already = new Set([...(profile?.following||[]), user.uid]);
-      const res = snap.docs
-        .map(d=>({uid:d.id,...d.data()}))
-        .filter(u => u.displayName && !already.has(u.uid) &&
-          (u.displayName.toLowerCase().includes(q2) || (u.username||"").toLowerCase().includes(q2)))
-        .slice(0, 12);
-      setFfResults(res);
-      setFfLoading(false);
-    }).catch(()=>setFfLoading(false));
-  }, [ffSearch]);
 
   // ── Mock community posts — show a lively feed out of the box ──
   const MOCK_POSTS = [
@@ -4386,12 +4374,12 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
 
       {/* ── Feed Tab Bar ─────────────────────────────────────── */}
       {(()=>{
-        const FEED_TABS=[{id:"forYou",label:"For You"},{id:"following",label:"Following"},{id:"friends",label:"Find Friends"}];
+        const FEED_TABS=[{id:"forYou",label:"For You"},{id:"following",label:"Following"}];
         const tabIdx=FEED_TABS.findIndex(t=>t.id===tab);
         return (
           <div style={{position:"relative",display:"flex",marginBottom:"1rem",background:T.surfaceAlt,borderRadius:"0.85rem",padding:"0.25rem"}}>
             {/* Sliding pill */}
-            <div style={{position:"absolute",top:"0.25rem",left:`calc(${tabIdx}/3*100% + 0.25rem)`,width:`calc(100%/3 - 0.17rem)`,height:"calc(100% - 0.5rem)",background:T.surface,borderRadius:"0.65rem",boxShadow:"0 1px 4px rgba(0,0,0,0.08)",transition:"left 0.22s cubic-bezier(0.34,1.3,0.64,1)",pointerEvents:"none"}}/>
+            <div style={{position:"absolute",top:"0.25rem",left:`calc(${tabIdx}/2*100% + 0.25rem)`,width:`calc(100%/2 - 0.17rem)`,height:"calc(100% - 0.5rem)",background:T.surface,borderRadius:"0.65rem",boxShadow:"0 1px 4px rgba(0,0,0,0.08)",transition:"left 0.22s cubic-bezier(0.34,1.3,0.64,1)",pointerEvents:"none"}}/>
             {FEED_TABS.map(t=>(
               <button key={t.id} onClick={()=>setTab(t.id)} className="tap-scale"
                 style={{flex:1,padding:"0.5rem 0",background:"transparent",border:"none",borderRadius:"0.65rem",fontSize:"0.75rem",fontWeight:tab===t.id?"700":"500",color:tab===t.id?T.text:T.textLight,cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"color 0.2s",position:"relative",zIndex:1}}>
@@ -4404,128 +4392,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
 
       <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdateProfile}/>
 
-      {/* ── Find Friends Tab ──────────────────────────────────── */}
-      {tab==="friends"&&(
-        <div>
-          {/* Search bar */}
-          <div style={{position:"relative",marginBottom:"1.25rem"}}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" style={{position:"absolute",left:"0.85rem",top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input
-              value={ffSearch}
-              onChange={e=>setFfSearch(e.target.value)}
-              placeholder="Search by name or username…"
-              style={{width:"100%",padding:"0.65rem 1rem 0.65rem 2.25rem",borderRadius:"0.65rem",border:`1px solid ${T.border}`,fontSize:"0.85rem",color:T.text,background:T.surface,outline:"none",fontFamily:"'Inter',sans-serif",boxSizing:"border-box"}}
-              onFocus={e=>e.target.style.borderColor=T.accent}
-              onBlur={e=>e.target.style.borderColor=T.border}
-            />
-            {ffSearch&&<button onClick={()=>setFfSearch("")} style={{position:"absolute",right:"0.75rem",top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:T.textLight,display:"flex",alignItems:"center",padding:"2px"}}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>}
-          </div>
-
-          {/* Search results */}
-          {ffSearch.trim()&&(
-            <div style={{marginBottom:"1.5rem"}}>
-              {ffLoading&&<div style={{textAlign:"center",padding:"1rem",color:T.textLight,fontSize:"0.8rem"}}>Searching…</div>}
-              {!ffLoading&&ffResults.length===0&&<div style={{textAlign:"center",padding:"1rem",color:T.textLight,fontSize:"0.8rem"}}>No users found for "{ffSearch}"</div>}
-              {!ffLoading&&ffResults.map(u=>{
-                const isFF = ffFollowed.has(u.uid);
-                const doFF = async()=>{ if(isFF) return; await followUser(user.uid,u.uid,profile?.displayName||"Someone",profile?.photoURL||""); setFfFollowed(prev=>new Set([...prev,u.uid])); onUpdateProfile({...profile,following:[...(profile?.following||[]),u.uid]}); };
-                const theirTypes = Array.isArray(u.skinType)?u.skinType:u.skinType?[u.skinType]:[];
-                const mySkinTypes = Array.isArray(profile?.skinType)?profile.skinType:profile?.skinType?[profile.skinType]:[];
-                const shared = (u.followers||[]).filter(fid=>(profile?.following||[]).includes(fid)).length;
-                return (
-                  <div key={u.uid} style={{background:T.surface,borderRadius:"0.85rem",border:`1px solid ${isFF?T.sage:T.border}`,padding:"0.75rem",display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.5rem",transition:"border-color 0.2s"}}>
-                    <button onClick={()=>onUserTap(u.uid)} style={{background:"none",border:"none",padding:0,cursor:"pointer",flexShrink:0}}><Avatar photoURL={u.photoURL} name={u.displayName} size={42}/></button>
-                    <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>onUserTap(u.uid)}>
-                      <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName}</div>
-                      <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"2px",display:"flex",alignItems:"center",gap:"0.4rem",flexWrap:"wrap"}}>
-                        {shared>0&&<span style={{color:T.accent,fontWeight:"600"}}>{shared} mutual</span>}
-                        {theirTypes.some(t=>mySkinTypes.includes(t))&&<span style={{background:T.sage+"18",color:T.sage,padding:"0.1rem 0.4rem",borderRadius:"999px",fontWeight:"600",fontSize:"0.6rem"}}>Same skin type</span>}
-                        {!shared&&<span>{(u.followers||[]).length} followers</span>}
-                      </div>
-                    </div>
-                    <button onClick={doFF} style={{padding:"0.35rem 0.85rem",background:isFF?T.sage+"22":"transparent",color:isFF?T.sage:T.navy,border:`1.5px solid ${isFF?T.sage:T.navy}`,borderRadius:"999px",fontSize:"0.72rem",fontWeight:"700",cursor:isFF?"default":"pointer",fontFamily:"'Inter',sans-serif",flexShrink:0,transition:"all 0.2s"}}>
-                      {isFF?"✓":"Follow"}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* People with mutual connections */}
-          {!ffSearch.trim()&&ffSuggested.length>0&&(
-            <div style={{marginBottom:"1.5rem"}}>
-              <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.75rem",fontFamily:"'Inter',sans-serif"}}>
-                {(profile?.following||[]).length>0?"People you might know":"Top members"}
-              </div>
-              {ffSuggested.map(u=>{
-                const isFF = ffFollowed.has(u.uid);
-                const doFF = async()=>{ if(isFF) return; await followUser(user.uid,u.uid,profile?.displayName||"Someone",profile?.photoURL||""); setFfFollowed(prev=>new Set([...prev,u.uid])); onUpdateProfile({...profile,following:[...(profile?.following||[]),u.uid]}); };
-                const shared = (u.followers||[]).filter(fid=>(profile?.following||[]).includes(fid)).length;
-                const theirTypes = Array.isArray(u.skinType)?u.skinType:u.skinType?[u.skinType]:[];
-                const mySkinTypes = Array.isArray(profile?.skinType)?profile.skinType:profile?.skinType?[profile.skinType]:[];
-                const skinMatch = theirTypes.some(t=>mySkinTypes.includes(t));
-                return (
-                  <div key={u.uid} style={{background:T.surface,borderRadius:"0.85rem",border:`1px solid ${isFF?T.sage:T.border}`,padding:"0.75rem",display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.5rem",transition:"border-color 0.2s"}}>
-                    <button onClick={()=>onUserTap(u.uid)} style={{background:"none",border:"none",padding:0,cursor:"pointer",flexShrink:0}}><Avatar photoURL={u.photoURL} name={u.displayName} size={42}/></button>
-                    <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>onUserTap(u.uid)}>
-                      <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName}</div>
-                      <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"2px",display:"flex",alignItems:"center",gap:"0.4rem",flexWrap:"wrap"}}>
-                        {shared>0&&<span style={{color:T.accent,fontWeight:"600"}}>{shared} mutual{shared>1?"s":""}</span>}
-                        {skinMatch&&<span style={{background:T.sage+"18",color:T.sage,padding:"0.1rem 0.4rem",borderRadius:"999px",fontWeight:"600",fontSize:"0.6rem"}}>Same skin type</span>}
-                        {!shared&&<span>{(u.followers||[]).length} followers</span>}
-                      </div>
-                    </div>
-                    <button onClick={doFF} style={{padding:"0.35rem 0.85rem",background:isFF?T.sage+"22":"transparent",color:isFF?T.sage:T.navy,border:`1.5px solid ${isFF?T.sage:T.navy}`,borderRadius:"999px",fontSize:"0.72rem",fontWeight:"700",cursor:isFF?"default":"pointer",fontFamily:"'Inter',sans-serif",flexShrink:0,transition:"all 0.2s"}}>
-                      {isFF?"✓":"Follow"}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Same skin type */}
-          {!ffSearch.trim()&&ffSkinMatches.length>0&&(
-            <div style={{marginBottom:"1.5rem"}}>
-              <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.75rem",fontFamily:"'Inter',sans-serif"}}>Same skin type as you</div>
-              <div style={{display:"flex",gap:"0.65rem",overflowX:"auto",paddingBottom:"0.5rem",scrollbarWidth:"none"}}>
-                {ffSkinMatches.map(u=>{
-                  const isFF = ffFollowed.has(u.uid);
-                  const doFF = async(e)=>{ e.stopPropagation(); if(isFF) return; await followUser(user.uid,u.uid,profile?.displayName||"Someone",profile?.photoURL||""); setFfFollowed(prev=>new Set([...prev,u.uid])); onUpdateProfile({...profile,following:[...(profile?.following||[]),u.uid]}); };
-                  return (
-                    <div key={u.uid} onClick={()=>onUserTap(u.uid)} style={{flexShrink:0,width:"130px",background:T.surface,borderRadius:"1rem",border:`1px solid ${isFF?T.sage:T.border}`,padding:"0.85rem 0.5rem 0.65rem",display:"flex",flexDirection:"column",alignItems:"center",gap:"0.4rem",cursor:"pointer",transition:"border-color 0.15s"}}>
-                      <Avatar photoURL={u.photoURL} name={u.displayName} size={44}/>
-                      <div style={{fontSize:"0.75rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",textAlign:"center",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",width:"100%",padding:"0 0.25rem"}}>{u.displayName}</div>
-                      <div style={{fontSize:"0.6rem",color:T.textLight,textAlign:"center"}}>
-                        {Array.isArray(u.skinType)?u.skinType.join(", "):u.skinType||"Skincare lover"}
-                      </div>
-                      <button onClick={doFF} style={{marginTop:"0.15rem",padding:"0.3rem 0.75rem",background:isFF?T.sage+"22":T.accent,color:isFF?T.sage:"#fff",border:`1.5px solid ${isFF?T.sage:T.accent}`,borderRadius:"999px",fontSize:"0.68rem",fontWeight:"700",cursor:isFF?"default":"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.2s"}}>
-                        {isFF?"✓":"Follow"}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Invite friends CTA */}
-          {!ffSearch.trim()&&(
-            <div style={{background:`linear-gradient(135deg, ${T.accent}12, ${T.sage}10)`,borderRadius:"1rem",border:`1px solid ${T.accent}22`,padding:"1.1rem",textAlign:"center",marginBottom:"1rem"}}>
-              <div style={{fontSize:"1.4rem",marginBottom:"0.35rem"}}>💌</div>
-              <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>Invite your friends to Ralli</div>
-              <div style={{fontSize:"0.72rem",color:T.textLight,marginBottom:"0.75rem",lineHeight:1.4}}>Skincare is better with friends. Share your pore-clogging scores together.</div>
-              <button onClick={()=>{ if(navigator.share){ navigator.share({title:"Join me on Ralli!",text:"I use Ralli to check if my skincare products clog pores. Check it out!",url:window.location.href}); } else { navigator.clipboard?.writeText(window.location.href); alert("Link copied! Share it with your friends."); } }}
-                style={{padding:"0.6rem 1.5rem",background:T.accent,color:"#fff",border:"none",borderRadius:"999px",fontSize:"0.8rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                Invite Friends
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab!=="friends"&&loading
+      {loading
         ? <FeedSkeleton/>
         : (()=>{
             const friendCount = (profile?.following||[]).length;
@@ -4551,124 +4418,114 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
             // ── Recs card ── (rendered above the tip, not here)
             const RecsCard = () => null;
 
-            // ── FOR YOU TAB: always shows rich community content ───
+            // ── FOR YOU TAB ────────────────────────────────────────
             if (tab==="forYou") {
               const seen = new Set();
               const realDeduped = posts.filter(p=>{ const k=p.productName?.toLowerCase()||p.id; if(seen.has(k))return false; seen.add(k); return true; });
               const seedDeduped = MOCK_POSTS.filter(m=>{ const k=m.productName?.toLowerCase()||m.id; if(seen.has(k))return false; seen.add(k); return true; });
-              const allCommunity = [...realDeduped, ...seedDeduped];
-              const topPosts = [...allCommunity].sort((a,b)=>(b.likes?.length||0)-(a.likes?.length||0));
-              const lovedPosts = topPosts.filter(p=>p.postType==="loved").slice(0,6);
-              const brokeoutPosts = topPosts.filter(p=>p.postType==="brokeout").slice(0,3);
-              const wantToTryPosts = topPosts.filter(p=>p.postType==="wantToTry").slice(0,3);
+              const allPosts = [...realDeduped, ...seedDeduped]
+                .filter(p=>["loved","brokeout","wantToTry"].includes(p.postType))
+                .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+
+              // Separate into community love and warnings
+              const lovedPosts = allPosts.filter(p=>p.postType==="loved");
+              const warningPosts = allPosts.filter(p=>p.postType==="brokeout");
+              const watchingPosts = allPosts.filter(p=>p.postType==="wantToTry");
+
+              // Interleaved feed: loved first, warning cards sprinkled in
+              const mainFeed = [];
+              let wi = 0, wai = 0;
+              lovedPosts.forEach((p, i) => {
+                mainFeed.push(p);
+                if (i % 3 === 2 && wi < warningPosts.length) mainFeed.push(warningPosts[wi++]);
+              });
+              while (wi < warningPosts.length) mainFeed.push(warningPosts[wi++]);
+              while (wai < watchingPosts.length) mainFeed.push(watchingPosts[wai++]);
+
               return (
-                <div>
-                  {friendCount < 5 && <AboutRalliCard onFounderTap={name=>{getDocs(query(collection(db,"users"),where("displayName",">=",name),where("displayName","<=",name+"\uf8ff"),limit(1))).then(snap=>{if(!snap.empty)onUserTap(snap.docs[0].id);});}}/>}
-                  {recPosts.length>0&&<ExploreRecsCarousel products={recPosts} profile={profile} friendScans={feedFriendScans} onTap={openProductFromPost} productImageMap={productImageMap}/>}
-                  <FriendsUsingSection friendScans={feedFriendScans} products={recPosts} onTap={openProductFromPost} profile={profile}/>
-                  {lovedPosts.length>0&&(<><FeedSectionLabel label="Loved by the community" color={T.rose} icon={<svg width="10" height="10" viewBox="0 0 24 24" fill={T.rose}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>}/>{lovedPosts.map(p=><PostCard key={p.id} post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>)}</>)}
-                  {brokeoutPosts.length>0&&(<><FeedSectionLabel label="⚠️  Broke people out"/>{brokeoutPosts.map(p=><PostCard key={p.id} post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>)}</>)}
-                  {wantToTryPosts.length>0&&(<><FeedSectionLabel label="👀  People are curious about"/>{wantToTryPosts.map(p=><PostCard key={p.id} post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>)}</>)}
-                  <DiscoverCard label="People you might like"/>
+                <div style={{paddingBottom:"1rem"}}>
+                  {/* Only show discover nudge if fewer than 3 real following */}
+                  {friendCount < 3 && (
+                    <div style={{margin:"0 1rem 1.25rem",padding:"0.85rem 1rem",background:`linear-gradient(135deg,${T.accent}10,${T.sage}08)`,borderRadius:"0.85rem",border:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:"0.75rem"}}>
+                      <div style={{fontSize:"1.4rem",flexShrink:0}}>👋</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:"0.8rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"2px"}}>Follow people to personalise your feed</div>
+                        <div style={{fontSize:"0.7rem",color:T.textLight,lineHeight:1.4}}>See what your circle is actually using</div>
+                      </div>
+                      <button onClick={()=>onUpdateProfile({_navigateTo:"profile_people"})} style={{padding:"0.4rem 0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"999px",fontSize:"0.72rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",flexShrink:0}}>Find People →</button>
+                    </div>
+                  )}
+
+                  {/* Clean product feed */}
+                  <div style={{display:"flex",flexDirection:"column",gap:"0.75rem",padding:"0 0.75rem"}}>
+                    {mainFeed.map((p,i)=>(
+                      <CardReveal key={p.id} delay={i*30}>
+                        <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>
+                      </CardReveal>
+                    ))}
+                  </div>
+
+                  {/* Discover more at bottom */}
+                  {mainFeed.length > 0 && (
+                    <div style={{margin:"1.5rem 1rem 0",padding:"1rem",background:T.surfaceAlt,borderRadius:"0.85rem",textAlign:"center"}}>
+                      <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>Find more Ralliers like you</div>
+                      <div style={{fontSize:"0.68rem",color:T.textLight,marginBottom:"0.75rem"}}>Follow people to see their real skincare routines</div>
+                      <button onClick={()=>onUpdateProfile({_navigateTo:"profile_people"})} style={{padding:"0.45rem 1.25rem",background:T.navy,color:"#fff",border:"none",borderRadius:"999px",fontSize:"0.75rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Find People</button>
+                    </div>
+                  )}
                 </div>
               );
             }
 
-            // ── FOLLOWING TAB: Empty state ─────────────────────────
+            // ── FOLLOWING TAB ──────────────────────────────────────
             if (!hasFriendPosts) return (
-              <div>
-                <div style={{textAlign:"center",padding:"2rem 1rem 1rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
-                  <div style={{fontSize:"2rem",marginBottom:"0.5rem"}}>👋</div>
-                  <div style={{fontSize:"0.9rem",fontWeight:"600",color:T.text,marginBottom:"0.35rem"}}>Your following feed is empty</div>
-                  <div style={{fontSize:"0.78rem",lineHeight:1.5,marginBottom:"1rem"}}>Follow some people to see their skincare scans here.</div>
-                  <button onClick={()=>setTab("friends")} style={{padding:"0.6rem 1.5rem",background:T.accent,color:"#fff",border:"none",borderRadius:"999px",fontSize:"0.8rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Find Friends →</button>
+              <div style={{paddingBottom:"1rem"}}>
+                <div style={{textAlign:"center",padding:"2rem 1rem 1.25rem"}}>
+                  <div style={{fontSize:"1.8rem",marginBottom:"0.5rem"}}>✨</div>
+                  <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"0.35rem"}}>Your following feed is empty</div>
+                  <div style={{fontSize:"0.75rem",color:T.textLight,lineHeight:1.5,marginBottom:"1rem"}}>Follow people to see what they're actually using on their skin.</div>
+                  <button onClick={()=>onUpdateProfile({_navigateTo:"profile_people"})} style={{padding:"0.6rem 1.5rem",background:T.navy,color:"#fff",border:"none",borderRadius:"999px",fontSize:"0.8rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Find People →</button>
                 </div>
-                <FeedSectionLabel label="What the community is using"/>
-                {MOCK_POSTS.slice(0,8).map((p,i)=><CardReveal key={p.id} delay={i*40}><PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/></CardReveal>)}
-                <DiscoverCard label="Suggested for you"/>
+                <div style={{padding:"0 1rem 0.5rem",fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"'Inter',sans-serif"}}>What the community is using</div>
+                <div style={{display:"flex",flexDirection:"column",gap:"0.75rem",padding:"0 0.75rem"}}>
+                  {MOCK_POSTS.slice(0,6).map((p,i)=>(
+                    <CardReveal key={p.id} delay={i*40}>
+                      <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>
+                    </CardReveal>
+                  ))}
+                </div>
               </div>
             );
 
-            // ── Has friend posts: interweave activity + discover ───
-            const followingSet = new Set([...(profile?.following||[]), user.uid]);
-
-            // ── Network group cards: products used by 2+ people you follow ──
-            const networkMap = {};
-            realPosts.forEach(p => {
-              if (!p.productName) return;
-              const key = p.productName.toLowerCase().trim();
-              if (!networkMap[key]) networkMap[key] = {post: p, users: []};
-              if (!networkMap[key].users.find(u => u.uid === p.uid)) {
-                networkMap[key].users.push({uid: p.uid, displayName: p.displayName, photoURL: p.photoURL});
-              }
-            });
-            const networkGroups = Object.values(networkMap)
-              .filter(g => g.users.length >= 2)
-              .sort((a,b) => b.users.length - a.users.length)
-              .slice(0, 3);
-
-            const groupedProductKeys = new Set(networkGroups.map(g => g.post.productName.toLowerCase().trim()));
-            const soloPost = realPosts.filter(p => !groupedProductKeys.has((p.productName||"").toLowerCase().trim()));
-
-            // ── Trending global (non-follows) ──
-            const trendingGlobal = globalPostsRef.current
-              .filter(p => !followingSet.has(p.uid) && p.productName && ["routine","brokeout","wantToTry","loved","commented"].includes(p.postType))
-              .sort((a,b) => (b.likes?.length||0) - (a.likes?.length||0))
-              .slice(0, 6);
+            // ── Has real friend posts ──────────────────────────────
+            const allFollowingPosts = realPosts.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+            const seedPad = allFollowingPosts.length < 4
+              ? MOCK_POSTS.filter(m=>!allFollowingPosts.some(p=>p.productName?.toLowerCase()===m.productName?.toLowerCase())).slice(0, 5-allFollowingPosts.length)
+              : [];
 
             return (
-              <div>
-                {/* 1. Actual posts from people you follow — shown first */}
-                {soloPost.length>0&&(
-                  <>
-                    <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.12em",padding:"0.5rem 1rem 0.75rem",fontFamily:"'Inter',sans-serif"}}>
-                      Latest from people you follow
-                    </div>
-                    {soloPost.slice(0,5).map((p,i)=><CardReveal key={p.id} delay={i*40}><PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/></CardReveal>)}
-                  </>
-                )}
-
-                {/* 2. What friends are using together (network grouped cards) */}
-                {networkGroups.length>0&&(
-                  <>
-                    <FeedSectionLabel label="What your followers are using"/>
-                    {networkGroups.map(g=>(
-                      <NetworkGroupCard
-                        key={g.post.productName}
-                        productName={g.post.productName}
-                        brand={g.post.brand}
-                        productImage={g.post.productImage}
-                        poreScore={g.post.poreScore??displayScore}
-                        users={g.users}
-                        onUserTap={onUserTap}
-                        onProductTap={()=>openProductFromPost(g.post)}
-                        currentUid={user.uid}
-                      />
+              <div style={{paddingBottom:"1rem"}}>
+                <div style={{display:"flex",flexDirection:"column",gap:"0.75rem",padding:"0 0.75rem"}}>
+                  {allFollowingPosts.map((p,i)=>(
+                    <CardReveal key={p.id} delay={i*40}>
+                      <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>
+                    </CardReveal>
+                  ))}
+                  {seedPad.length > 0 && <>
+                    <div style={{padding:"0.5rem 0 0.25rem",fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"'Inter',sans-serif"}}>Also in the community</div>
+                    {seedPad.map((p,i)=>(
+                      <CardReveal key={p.id} delay={i*40}>
+                        <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>
+                      </CardReveal>
                     ))}
-                  </>
+                  </>}
+                </div>
+                {friendCount < 8 && (
+                  <div style={{margin:"1.25rem 0.75rem 0",padding:"0.85rem 1rem",background:T.surfaceAlt,borderRadius:"0.85rem",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"0.75rem"}}>
+                    <div style={{fontSize:"0.75rem",color:T.textMid,fontFamily:"'Inter',sans-serif",lineHeight:1.4}}>Follow more people to grow your feed</div>
+                    <button onClick={()=>onUpdateProfile({_navigateTo:"profile_people"})} style={{padding:"0.4rem 0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"999px",fontSize:"0.72rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",flexShrink:0}}>Find People →</button>
+                  </div>
                 )}
-
-                {/* 3. What your friends are using (carousel) — only real data */}
-                {Object.keys(feedFriendScans||{}).length >= 2 && (
-                  <FriendsUsingSection friendScans={feedFriendScans} products={recPosts} onTap={openProductFromPost} profile={profile}/>
-                )}
-
-                {/* 4. Rest of solo posts */}
-                {soloPost.length>5&&(
-                  <>
-                    <FeedSectionLabel label="More from your follows"/>
-                    {soloPost.slice(5).map((p,i)=><CardReveal key={p.id} delay={i*40}><PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/></CardReveal>)}
-                  </>
-                )}
-
-                {/* 5. From the founders — shown at the bottom if few friends */}
-                {friendCount < 8 && <AboutRalliCard onFounderTap={name=>{
-                  getDocs(query(collection(db,"users"), where("displayName",">=",name), where("displayName","<=",name+"\uf8ff"), limit(1)))
-                    .then(snap=>{ if(!snap.empty) onUserTap(snap.docs[0].id); });
-                }}/>}
-
-                {/* 6. Users to follow */}
-                {friendCount < 8 && <DiscoverCard label="People you might like"/>}
               </div>
             );
           })()
@@ -5377,6 +5234,162 @@ function DeleteAccountModal({ user, onClose, onDeleted }) {
   );
 }
 
+// ── PeopleFinder — Find Friends tab in Profile ───────────────
+function PeopleFinder({ user, profile, onUpdate, onUserTap }) {
+  const [search, setSearch]       = useState("");
+  const [results, setResults]     = useState([]);
+  const [suggested, setSuggested] = useState([]);
+  const [skinMatches, setSkinMatches] = useState([]);
+  const [followed, setFollowed]   = useState(new Set());
+  const [loading, setLoading]     = useState(false);
+  const [following, setFollowing] = useState(profile?.following || []);
+
+  // Load suggestions on mount
+  useEffect(() => {
+    if (!user?.uid) return;
+    (async () => {
+      try {
+        const allSnap = await getDocs(query(collection(db,"users"), limit(40)));
+        const allUsers = allSnap.docs.map(d=>({uid:d.id,...d.data()})).filter(u=>u.uid!==user.uid);
+        const followingSet = new Set(profile?.following||[]);
+        const mySkinTypes = Array.isArray(profile?.skinType)?profile.skinType:profile?.skinType?[profile.skinType]:[];
+        const notFollowing = allUsers.filter(u=>!followingSet.has(u.uid));
+        const sug = notFollowing.filter(u=>(u.followers||[]).some(f=>followingSet.has(f))).slice(0,10);
+        const fallback = notFollowing.filter(u=>!sug.find(s=>s.uid===u.uid)).sort((a,b)=>(b.followers||[]).length-(a.followers||[]).length).slice(0,10-sug.length);
+        setSuggested([...sug,...fallback].slice(0,10));
+        setSkinMatches(notFollowing.filter(u=>{ const t=Array.isArray(u.skinType)?u.skinType:u.skinType?[u.skinType]:[]; return t.some(s=>mySkinTypes.includes(s)); }).slice(0,8));
+      } catch {}
+    })();
+  }, [user?.uid]);
+
+  // Search
+  useEffect(() => {
+    if (!search.trim()) { setResults([]); return; }
+    setLoading(true);
+    const q = search.toLowerCase();
+    getDocs(query(collection(db,"users"), limit(50)))
+      .then(snap => {
+        const res = snap.docs.map(d=>({uid:d.id,...d.data()}))
+          .filter(u => u.uid!==user.uid && (
+            (u.displayName||"").toLowerCase().includes(q) ||
+            (u.email||"").toLowerCase().includes(q)
+          )).slice(0,15);
+        setResults(res);
+        setLoading(false);
+      }).catch(()=>setLoading(false));
+  }, [search]);
+
+  const doFollow = async (uid, displayName, photoURL) => {
+    await followUser(user.uid, uid, profile?.displayName||"Someone", profile?.photoURL||"");
+    setFollowed(prev => new Set([...prev, uid]));
+    const newFollowing = [...(profile?.following||[]), uid];
+    onUpdate(p => ({...p, following: newFollowing}));
+    setFollowing(newFollowing);
+  };
+
+  const UserRow = ({ u }) => {
+    const isFollowed = followed.has(u.uid) || (profile?.following||[]).includes(u.uid);
+    const shared = (u.followers||[]).filter(f=>(profile?.following||[]).includes(f)).length;
+    const mySkinTypes = Array.isArray(profile?.skinType)?profile.skinType:profile?.skinType?[profile.skinType]:[];
+    const theirTypes = Array.isArray(u.skinType)?u.skinType:u.skinType?[u.skinType]:[];
+    const skinMatch = theirTypes.some(t=>mySkinTypes.includes(t));
+    return (
+      <div style={{background:T.surface,borderRadius:"0.85rem",border:`1px solid ${isFollowed?T.sage:T.border}`,padding:"0.75rem",display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.5rem",transition:"border-color 0.2s"}}>
+        <button onClick={()=>onUserTap(u.uid)} style={{background:"none",border:"none",padding:0,cursor:"pointer",flexShrink:0}}><Avatar photoURL={u.photoURL} name={u.displayName} size={42}/></button>
+        <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>onUserTap(u.uid)}>
+          <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName}</div>
+          <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"2px",display:"flex",alignItems:"center",gap:"0.4rem",flexWrap:"wrap"}}>
+            {shared>0&&<span style={{color:T.accent,fontWeight:"600"}}>{shared} mutual</span>}
+            {skinMatch&&<span style={{background:T.sage+"18",color:T.sage,padding:"0.1rem 0.4rem",borderRadius:"999px",fontWeight:"600",fontSize:"0.6rem"}}>Same skin type</span>}
+            <span>{(u.followers||[]).length} followers</span>
+          </div>
+        </div>
+        <button onClick={()=>!isFollowed&&doFollow(u.uid,u.displayName,u.photoURL)}
+          style={{padding:"0.35rem 0.85rem",background:isFollowed?T.sage+"22":"transparent",color:isFollowed?T.sage:T.navy,border:`1.5px solid ${isFollowed?T.sage:T.navy}`,borderRadius:"999px",fontSize:"0.72rem",fontWeight:"700",cursor:isFollowed?"default":"pointer",fontFamily:"'Inter',sans-serif",flexShrink:0,transition:"all 0.2s"}}>
+          {isFollowed?"✓ Following":"Follow"}
+        </button>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{paddingTop:"0.5rem"}}>
+      {/* Search */}
+      <div style={{position:"relative",marginBottom:"1.25rem"}}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" style={{position:"absolute",left:"0.85rem",top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by name…"
+          style={{width:"100%",padding:"0.65rem 1rem 0.65rem 2.25rem",borderRadius:"0.65rem",border:`1px solid ${T.border}`,fontSize:"0.85rem",color:T.text,background:T.surface,outline:"none",fontFamily:"'Inter',sans-serif",boxSizing:"border-box"}}
+          onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border}/>
+        {search&&<button onClick={()=>setSearch("")} style={{position:"absolute",right:"0.75rem",top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:T.textLight,padding:"2px"}}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>}
+      </div>
+
+      {/* Search results */}
+      {search.trim()&&(
+        <div style={{marginBottom:"1.5rem"}}>
+          {loading&&<div style={{textAlign:"center",padding:"1rem",color:T.textLight,fontSize:"0.8rem"}}>Searching…</div>}
+          {!loading&&results.length===0&&<div style={{textAlign:"center",padding:"1rem",color:T.textLight,fontSize:"0.8rem"}}>No users found for "{search}"</div>}
+          {!loading&&results.map(u=><UserRow key={u.uid} u={u}/>)}
+        </div>
+      )}
+
+      {/* Following list */}
+      {!search.trim()&&(profile?.following||[]).length>0&&(
+        <div style={{marginBottom:"1.5rem"}}>
+          <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.75rem",fontFamily:"'Inter',sans-serif"}}>
+            Following · {(profile?.following||[]).length}
+          </div>
+          <FollowingList uids={profile?.following||[]} currentUid={user.uid} onUserTap={onUserTap}
+            onUnfollow={async uid=>{ await unfollowUser(user.uid,uid); onUpdate(p=>({...p,following:(p.following||[]).filter(f=>f!==uid)})); }}/>
+        </div>
+      )}
+
+      {/* Suggestions */}
+      {!search.trim()&&suggested.length>0&&(
+        <div style={{marginBottom:"1.5rem"}}>
+          <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.75rem",fontFamily:"'Inter',sans-serif"}}>
+            {(profile?.following||[]).length>0?"People you might know":"Top members"}
+          </div>
+          {suggested.map(u=><UserRow key={u.uid} u={u}/>)}
+        </div>
+      )}
+
+      {/* Same skin type */}
+      {!search.trim()&&skinMatches.length>0&&(
+        <div style={{marginBottom:"1.5rem"}}>
+          <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.75rem",fontFamily:"'Inter',sans-serif"}}>Same skin type as you</div>
+          <div style={{display:"flex",gap:"0.65rem",overflowX:"auto",paddingBottom:"0.5rem",scrollbarWidth:"none"}}>
+            {skinMatches.map(u=>{
+              const isFollowed = followed.has(u.uid)||(profile?.following||[]).includes(u.uid);
+              return (
+                <div key={u.uid} onClick={()=>onUserTap(u.uid)} style={{flexShrink:0,width:"130px",background:T.surface,borderRadius:"1rem",border:`1px solid ${isFollowed?T.sage:T.border}`,padding:"0.85rem 0.5rem 0.65rem",display:"flex",flexDirection:"column",alignItems:"center",gap:"0.4rem",cursor:"pointer"}}>
+                  <Avatar photoURL={u.photoURL} name={u.displayName} size={44}/>
+                  <div style={{fontSize:"0.75rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",textAlign:"center",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",width:"100%",padding:"0 0.25rem"}}>{u.displayName}</div>
+                  <div style={{fontSize:"0.6rem",color:T.textLight,textAlign:"center"}}>{Array.isArray(u.skinType)?u.skinType.join(", "):u.skinType||"Skincare lover"}</div>
+                  <button onClick={e=>{e.stopPropagation();!isFollowed&&doFollow(u.uid,u.displayName,u.photoURL);}}
+                    style={{marginTop:"0.15rem",padding:"0.3rem 0.75rem",background:isFollowed?T.sage+"22":T.accent,color:isFollowed?T.sage:"#fff",border:`1.5px solid ${isFollowed?T.sage:T.accent}`,borderRadius:"999px",fontSize:"0.68rem",fontWeight:"700",cursor:isFollowed?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
+                    {isFollowed?"✓":"Follow"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Invite CTA */}
+      <div style={{background:`linear-gradient(135deg,${T.accent}12,${T.sage}10)`,borderRadius:"1rem",border:`1px solid ${T.accent}22`,padding:"1.1rem",textAlign:"center",marginBottom:"1rem"}}>
+        <div style={{fontSize:"1.4rem",marginBottom:"0.35rem"}}>💌</div>
+        <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>Invite your friends to Ralli</div>
+        <div style={{fontSize:"0.72rem",color:T.textLight,marginBottom:"0.75rem",lineHeight:1.4}}>Skincare is better with friends. Share your pore-clogging scores together.</div>
+        <button onClick={()=>{ if(navigator.share){navigator.share({title:"Join me on Ralli!",text:"I use Ralli to check if my skincare products clog pores. Check it out!",url:window.location.href});}else{navigator.clipboard?.writeText(window.location.href);alert("Link copied! Share it with your friends.");}}}
+          style={{padding:"0.6rem 1.5rem",background:T.accent,color:"#fff",border:"none",borderRadius:"999px",fontSize:"0.8rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+          Invite Friends
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) {
   const [showDeleteModal, setShowDeleteModal] = React.useState(false);
   const [posts, setPosts]               = useState([]);
@@ -5547,7 +5560,14 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
     {id:"lists",   label:"My Lists"},
     {id:"scans",   label:"Scans"},
     {id:"ratings", label:"Ratings"},
+    {id:"people",  label:"People"},
   ];
+
+  useEffect(() => {
+    const handler = (e) => setActiveTab(e.detail || "people");
+    window.addEventListener("ralli_profile_tab", handler);
+    return () => window.removeEventListener("ralli_profile_tab", handler);
+  }, []);
 
   return (
     <div style={{maxWidth:"480px",margin:"0 auto",paddingBottom:"6rem"}}>
@@ -5556,31 +5576,39 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       {/* Followers/Following modal */}
       {userListModal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(28,28,26,0.45)",zIndex:200,display:"flex",alignItems:"flex-end"}} onClick={()=>setUserListModal(null)}>
-          <div style={{width:"100%",maxWidth:"480px",margin:"0 auto",background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",padding:"1.25rem 1rem",maxHeight:"60vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem"}}>
-              <span style={{fontSize:"0.95rem",fontWeight:"700",fontFamily:"'Inter',sans-serif",color:T.text,textTransform:"capitalize"}}>{userListModal}</span>
-              <button onClick={()=>setUserListModal(null)} style={{background:"none",border:"none",cursor:"pointer",color:T.textLight,padding:"0.25rem"}}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <div style={{width:"100%",maxWidth:"480px",margin:"0 auto",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1rem 0",maxHeight:"82vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexShrink:0}}>
+              <span style={{fontSize:"1rem",fontWeight:"700",fontFamily:"'Inter',sans-serif",color:T.text,textTransform:"capitalize"}}>
+                {userListModal}
+                <span style={{fontSize:"0.72rem",fontWeight:"400",color:T.textLight,marginLeft:"0.5rem"}}>{userListData.length}</span>
+              </span>
+              <button onClick={()=>setUserListModal(null)} style={{background:T.surfaceAlt,border:"none",cursor:"pointer",color:T.textMid,width:"28px",height:"28px",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
-            <div style={{overflowY:"auto",flex:1}}>
+            <div style={{overflowY:"auto",flex:1,paddingBottom:"calc(1.5rem + env(safe-area-inset-bottom))"}}>
               {userListLoading
                 ? <div style={{textAlign:"center",padding:"2rem",color:T.textLight}}>Loading…</div>
                 : userListData.length===0
                   ? <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.85rem"}}>Nobody here yet</div>
-                  : userListData.map(u=>(
-                    <div key={u.uid} onClick={()=>{setUserListModal(null);onUserTap(u.uid);}}
-                      style={{display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.65rem 0.25rem",cursor:"pointer",borderBottom:`1px solid ${T.border}`}}
-                      onMouseEnter={e=>e.currentTarget.style.background=T.surfaceAlt}
-                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                      <Avatar photoURL={u.photoURL} name={u.displayName} size={40}/>
-                      <div style={{flex:1}}>
-                        <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{u.displayName}</div>
-                        <div style={{fontSize:"0.72rem",color:T.textLight}}>{(u.followers||[]).length} followers</div>
-                      </div>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-                    </div>
-                  ))
+                  : userListData
+                      .filter(u => {
+                        const GENERIC = ["skincare lover","anonymous","user","undefined","null",""];
+                        return !GENERIC.includes((u.displayName||"").toLowerCase().trim());
+                      })
+                      .map(u=>(
+                        <div key={u.uid} onClick={()=>{setUserListModal(null);onUserTap(u.uid);}}
+                          style={{display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.65rem 0.25rem",cursor:"pointer",borderBottom:`1px solid ${T.border}`}}
+                          onMouseEnter={e=>e.currentTarget.style.background=T.surfaceAlt}
+                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                          <Avatar photoURL={u.photoURL} name={u.displayName} size={40}/>
+                          <div style={{flex:1}}>
+                            <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{u.displayName}</div>
+                            <div style={{fontSize:"0.72rem",color:T.textLight}}>{(u.followers||[]).length} followers</div>
+                          </div>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+                        </div>
+                      ))
               }
             </div>
           </div>
@@ -5854,40 +5882,9 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
 
 
 
-      {/* Friends tab */}
-      {activeTab==="friends"&&(
-        <div style={{paddingTop:"0.5rem"}}>
-          <ContactSuggestions
-            currentUid={user.uid}
-            currentProfile={profile}
-            onFollow={async uid=>{
-              await followUser(user.uid, uid, profile?.displayName||"Someone", profile?.photoURL||"");
-              onUpdate(p=>({...p, following:[...(p.following||[]),uid]}));
-            }}
-            onUserTap={onUserTap}
-          />
-          {(profile.following||[]).length > 0 && (
-            <div style={{marginBottom:"1.25rem"}}>
-              <div style={{fontSize:"0.65rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.6rem",fontFamily:"'Inter',sans-serif"}}>
-                Following · {(profile.following||[]).length}
-              </div>
-              <FollowingList
-                uids={profile.following||[]}
-                currentUid={user.uid}
-                onUserTap={onUserTap}
-                onUnfollow={async uid=>{
-                  await unfollowUser(user.uid, uid);
-                  onUpdate(p=>({...p, following:(p.following||[]).filter(f=>f!==uid)}));
-                }}
-              />
-            </div>
-          )}
-          {(profile.following||[]).length === 0 && (
-            <div style={{textAlign:"center",padding:"2rem 1rem",color:T.textLight,fontSize:"0.82rem"}}>
-              You're not following anyone yet.
-            </div>
-          )}
-        </div>
+      {/* People tab — Find Friends */}
+      {activeTab==="people"&&(
+        <PeopleFinder user={user} profile={profile} onUpdate={onUpdate} onUserTap={onUserTap}/>
       )}
 
       {/* Legal links */}
@@ -11992,10 +11989,10 @@ function PageHero({pageTitle, pageIcon, fixed, rightAction}) {
 
   return (
     <div style={{padding:"0.6rem 0 0.25rem", display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-      <div style={{fontSize:"0.52rem", color:T.textLight, letterSpacing:"0.08em", textTransform:"uppercase", fontFamily:"'Inter',sans-serif", fontWeight:"500", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+      <div style={{fontSize:"0.52rem", color:T.textLight, letterSpacing:"0.06em", textTransform:"uppercase", fontFamily:"'Inter',sans-serif", fontWeight:"500", flex:1, minWidth:0}}>
         {msg}
       </div>
-      {rightAction && <div style={{flexShrink:0}}>{rightAction}</div>}
+      {rightAction && <div style={{flexShrink:0, marginLeft:"0.5rem"}}>{rightAction}</div>}
     </div>
   );
 }
@@ -13050,7 +13047,10 @@ function AppInner() {
       {viewingUid
         ? <UserPage uid={viewingUid} currentUid={user.uid} currentProfile={profile} onUpdateProfile={setProfile} onBack={handleBack} onUserTap={handleUserTap}/>
         : tab==="feed"
-          ? <FeedPage user={user} profile={profile} refreshKey={feedRefresh} onUserTap={handleUserTap} onUpdateProfile={setProfile}/>
+          ? <FeedPage user={user} profile={profile} refreshKey={feedRefresh} onUserTap={handleUserTap} onUpdateProfile={(updates)=>{
+              if (updates?._navigateTo === "profile_people") { switchTab("profile"); setTimeout(()=>window.dispatchEvent(new CustomEvent("ralli_profile_tab", {detail:"people"})), 100); return; }
+              setProfile(updates);
+            }}/>
           : tab==="check"
             ? <ScanPage user={user} profile={profile} onPosted={()=>{setFeedRefresh(r=>r+1);switchTab("feed");}} onUpdateProfile={setProfile}/>
             : tab==="messages"
