@@ -54,7 +54,7 @@ const T = {
 
 const GS = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@900&display=swap');
-  *{box-sizing:border-box;} body{margin:0;background:#F8F9FB;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;letter-spacing:0;}
+  *{box-sizing:border-box;} body{margin:0;background:#F8F9FB;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;letter-spacing:0;overscroll-behavior-y:none;}
   ::placeholder{color:${T.textLight};}
   .share-toast{position:fixed;bottom:calc(5rem + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:${T.text};color:#fff;padding:0.5rem 1.1rem;border-radius:999px;font-size:0.78rem;font-family:'Inter',sans-serif;font-weight:500;z-index:9999;opacity:0;animation:toastIn 2.2s ease forwards;pointer-events:none;white-space:nowrap;}
   @keyframes toastIn{0%{opacity:0;transform:translateX(-50%) translateY(8px)}12%{opacity:1;transform:translateX(-50%) translateY(0)}80%{opacity:1}100%{opacity:0;transform:translateX(-50%) translateY(-4px)}}
@@ -92,6 +92,7 @@ const GS = `
   .tap-scale:active{transform:scale(0.97);transition:transform 0.08s ease;}
   .save-toast{position:fixed;bottom:calc(5.5rem + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:${T.sage};color:#fff;padding:0.45rem 1rem;border-radius:999px;font-size:0.76rem;font-family:'Inter',sans-serif;font-weight:600;z-index:9999;pointer-events:none;white-space:nowrap;animation:toastIn 2s ease forwards;}
   input,button,textarea{font-family:'Inter',sans-serif;}
+  input[type="text"],input[type="email"],input[type="password"],input[type="search"],textarea{font-size:16px !important;}
   /* Brand hero header used on every page */
   .ralli-page-hero{background:#111827;padding:1.1rem 1rem 1rem;margin-bottom:0;}
   .ralli-wordmark{font-family:'Poppins',sans-serif;font-weight:900;font-size:2.2rem;color:#FFFFFF;letter-spacing:-0.04em;line-height:1;}
@@ -751,10 +752,13 @@ const _imgValidCache = {};
 function hasValidImage(p) {
   const url = ((p.adminImage || p.image) || "").trim();
   if (!url || !url.startsWith("http")) return false;
-  // Reject known non-image patterns
+  // Reject known unstable or non-product image sources
   if (url.includes("media-amazon.com")) return false;
+  if (url.includes("encrypted-tbn0.gstatic.com")) return false;
+  if (url.includes("gstatic.com")) return false;
+  if (url.startsWith("data:")) return false;
   if (!/\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(url)) return false;
-  return true; // URL looks like a real image — display it and let onError handle failures
+  return true;
 }
 // For admin display, use actual image load test
 function AdminImageStatus({ p }) {
@@ -1064,11 +1068,15 @@ async function searchProducts(searchTerm) {
 
   return results
     .sort((a, b) => {
-      // Rank: 1) approved DB products with image, 2) approved DB products, 3) DB products, 4) OBF/external
-      const scoreA = a._cached && a._approved ? (a.image ? 0 : 1) : a._cached ? 2 : 3;
-      const scoreB = b._cached && b._approved ? (b.image ? 0 : 1) : b._cached ? 2 : 3;
+      const hasImg = p => {
+        const img = (p.image||"").trim();
+        return img && img.startsWith("http") && !img.startsWith("data:");
+      };
+      // Rank: 0) approved + valid image, 1) approved no image, 2) in DB not approved, 3) OBF/external
+      const scoreA = a._cached && a._approved && hasImg(a) ? 0 : a._cached && a._approved ? 1 : a._cached ? 2 : 3;
+      const scoreB = b._cached && b._approved && hasImg(b) ? 0 : b._cached && b._approved ? 1 : b._cached ? 2 : 3;
       if (scoreA !== scoreB) return scoreA - scoreB;
-      // Within same tier: sort by name match quality (exact first)
+      // Within same tier: exact name match first
       const q = searchTerm.toLowerCase().trim();
       const aExact = (a.name||"").toLowerCase().startsWith(q) ? 0 : 1;
       const bExact = (b.name||"").toLowerCase().startsWith(q) ? 0 : 1;
@@ -1383,29 +1391,54 @@ function BarcodeScanner({onDetected, onError}) {
   const [status, setStatus] = useState("loading");
   useEffect(()=>{
     let reader=null,stopped=false;
+
+    // First check camera permission
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      onError("Camera not supported on this browser. Try Chrome or Safari.");
+      return;
+    }
+
     const s=document.createElement("script");
     s.src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js";
     s.onload=async()=>{
       if(stopped) return;
       try {
+        // Request camera permission explicitly first
+        await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+
         reader=new window.ZXing.BrowserMultiFormatReader();
         const devices=await reader.listVideoInputDevices();
-        if(!devices.length) throw new Error("No camera found");
-        const cam=devices.find(d=>/back|rear/i.test(d.label))||devices[devices.length-1];
+        if(!devices.length) throw new Error("No camera found — please allow camera access and try again.");
+
+        // Prefer back camera on mobile
+        const cam = devices.find(d=>/back|rear|environment/i.test(d.label))
+          || devices.find(d=>!/front|user|face/i.test(d.label))
+          || devices[devices.length-1];
+
         setStatus("scanning");
-        await reader.decodeFromVideoDevice(cam.deviceId,videoRef.current,(result)=>{
+        await reader.decodeFromVideoDevice(cam.deviceId, videoRef.current, (result)=>{
           if(stopped||!result) return;
           stopped=true; reader.reset(); onDetected(result.getText());
         });
-      } catch(e){if(!stopped){setStatus("error");onError(e.message);}}
+      } catch(e){
+        if(!stopped){
+          setStatus("error");
+          const msg = e.name === "NotAllowedError"
+            ? "Camera access denied — please allow camera access in your browser settings and try again."
+            : e.name === "NotFoundError"
+            ? "No camera found on this device."
+            : e.message || "Camera error";
+          onError(msg);
+        }
+      }
     };
-    s.onerror=()=>onError("Failed to load scanner");
+    s.onerror=()=>onError("Failed to load scanner — check your connection and try again.");
     document.head.appendChild(s);
-    return()=>{stopped=true;if(reader)reader.reset();if(s.parentNode)s.parentNode.removeChild(s);};
+    return()=>{stopped=true;if(reader)try{reader.reset();}catch{}if(s.parentNode)s.parentNode.removeChild(s);};
   },[]);
   return (
     <div style={{position:"relative",borderRadius:"1rem",overflow:"hidden",background:"#000"}}>
-      <video ref={videoRef} style={{width:"100%",display:"block",maxHeight:"260px",objectFit:"cover"}}/>
+      <video ref={videoRef} style={{width:"100%",display:"block",maxHeight:"260px",objectFit:"cover"}} playsInline muted autoPlay/>
       {status==="scanning"&&(
         <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:"0.75rem"}}>
           <div style={{width:"200px",height:"100px",position:"relative"}}>
@@ -1417,7 +1450,7 @@ function BarcodeScanner({onDetected, onError}) {
           <span style={{color:"white",fontSize:"0.8rem",background:"rgba(0,0,0,0.5)",padding:"4px 12px",borderRadius:"999px"}}>Point at barcode</span>
         </div>
       )}
-      {status==="loading"&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",color:"white"}}>Starting camera…</div>}
+      {status==="loading"&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontSize:"0.85rem"}}>Starting camera…</div>}
     </div>
   );
 }
@@ -1491,7 +1524,7 @@ function ProductImage({src, name, brand, barcode, size="full"}) {
 
   const dim = size==="full" ? {width:"100%",height:"100%"} : {width:size,height:size};
   if (!imgSrc || failed) return <div style={{...dim,borderRadius:"inherit",overflow:"hidden",flexShrink:0}}><PlaceholderCard name={name} brand={brand}/></div>;
-  return <img src={imgSrc} alt={name||""} style={{...dim,objectFit:"contain",padding:"8px",background:"#ffffff",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={handleError}/>;
+  return <img src={imgSrc} alt={name||""} style={{...dim,objectFit:"contain",padding:"8px",background:"#ffffff",mixBlendMode:"multiply"}} onError={handleError}/>;
 }
 
 // ── Avatar ────────────────────────────────────────────────────
@@ -1856,7 +1889,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
             style={{display:"flex",gap:"0.75rem",alignItems:"center",padding:"0.75rem 0.85rem",cursor:onProductTap?"pointer":"default",background:T.surface}}>
             <div style={{width:"54px",height:"54px",flexShrink:0,borderRadius:"0.6rem",overflow:"hidden",background:T.surfaceAlt,display:"flex",alignItems:"center",justifyContent:"center"}}>
               {liveImage
-                ? <img src={liveImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"5px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
+                ? <img src={liveImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"5px",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/>
                 : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.border} strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
               }
             </div>
@@ -2861,13 +2894,13 @@ function AuthPage() {
   return (
     <div style={{minHeight:"100vh",background:T.bg,display:"flex",flexDirection:"column"}}>
       {/* Auth header — clean minimal */}
-      <div style={{padding:"2.5rem 2rem 1.5rem",textAlign:"center",borderBottom:`1px solid ${T.border}`}}>
+      <div style={{padding:"2.5rem 2rem 1.5rem",textAlign:"center",borderBottom:`1px solid ${T.border}`,background:T.bg}}>
         <div style={{lineHeight:1}}>
           <div style={{fontFamily:"'Poppins',sans-serif",fontWeight:"900",fontSize:"3rem",color:T.navy,letterSpacing:"-0.04em",lineHeight:1}}>Ralli</div>
-          <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"300",fontSize:"0.72rem",color:T.textLight,letterSpacing:"0.22em",textTransform:"uppercase",marginTop:"0.4rem"}}>by GoodSisters</div>
+          <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"300",fontSize:"0.72rem",color:"#9AACBC",letterSpacing:"0.22em",textTransform:"uppercase",marginTop:"0.4rem"}}>by GoodSisters</div>
         </div>
-        <div style={{width:"32px",height:"1px",background:T.border,margin:"0.75rem auto"}}/>
-        <div style={{fontSize:"0.58rem",color:T.textLight,letterSpacing:"0.22em",textTransform:"uppercase",fontFamily:"'Inter',sans-serif",fontWeight:"400"}}>
+        <div style={{width:"32px",height:"1px",background:"#BBC5CE",margin:"0.75rem auto"}}/>
+        <div style={{fontSize:"0.58rem",color:"#BBC5CE",letterSpacing:"0.22em",textTransform:"uppercase",fontFamily:"'Inter',sans-serif",fontWeight:"400"}}>
           Real people. Real skin. Real insights.
         </div>
       </div>
@@ -3713,7 +3746,7 @@ function NetworkGroupCard({productName, brand, productImage, poreScore, users, o
       <div onClick={onProductTap} style={{display:"flex",gap:"0.75rem",alignItems:"center",background:T.surfaceAlt,borderRadius:"0.85rem",padding:"0.7rem 0.75rem",cursor:onProductTap?"pointer":"default"}}>
         <div style={{width:"52px",height:"52px",flexShrink:0,borderRadius:"0.5rem",overflow:"hidden",background:T.surface}}>
           {productImage
-            ? <img src={productImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
+            ? <img src={productImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/>
             : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",color:T.border}}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
           }
         </div>
@@ -4612,7 +4645,7 @@ function ListItemImage({name, color}) {
   return (
     <div style={{width:"100%",height:"100%",position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
       {!img&&<PlaceholderCard name={name} brand=""  />}
-      {img&&<img src={img} alt={name} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",padding:"6px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={()=>setImg(null)}/>}
+      {img&&<img src={img} alt={name} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",padding:"6px",mixBlendMode:"multiply"}} onError={()=>setImg(null)}/>}
     </div>
   );
 }
@@ -4745,7 +4778,7 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
                 {/* Image area */}
                 <div style={{width:"100%",height:"90px",background:hasImg?"#fff":color+"10",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",borderBottom:`1px solid ${T.border}`}}>
                   {hasImg
-                    ? <img src={imgSrc} style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>{e.target.style.display="none";}}/>
+                    ? <img src={imgSrc} style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply"}} onError={e=>{e.target.style.display="none";}}/>
                     : <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"4px",padding:"0.5rem"}}>
                         <div style={{width:"28px",height:"28px",borderRadius:"50%",background:color+"25",display:"flex",alignItems:"center",justifyContent:"center"}}>
                           <div style={{width:"10px",height:"10px",borderRadius:"50%",background:color}}/>
@@ -5677,7 +5710,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
                       onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
                       {(p.productImage||(p.adminImage||p.image))&&(
                         <div style={{width:"40px",height:"40px",flexShrink:0,borderRadius:"0.5rem",overflow:"hidden",background:"#ffffff",border:`1px solid ${T.border}`}}>
-                          <img src={p.productImage||p.adminImage||p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"3px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
+                          <img src={p.productImage||p.adminImage||p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"3px",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/>
                         </div>
                       )}
                       <div style={{flex:1,minWidth:0}}>
@@ -6555,7 +6588,7 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
               onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.transform="translateY(-2px)";}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.transform="";}}>
               <div style={{width:"100%",height:"100px",background:"#ffffff",overflow:"hidden",position:"relative",borderBottom:`1px solid ${T.border}`}}>
-                {img ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/> : null}
+                {img ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/> : null}
                 <div style={{position:"absolute",top:"5px",right:"5px",background:ps.color,borderRadius:"0.35rem",padding:"2px 5px"}}>
                   {liveRecScore != null
                     ? <span style={{fontSize:"0.6rem",fontWeight:"800",color:"#fff"}}>{liveRecScore}/5</span>
@@ -6765,7 +6798,7 @@ function FounderPicksSection({onTap, friendScans={}}) {
               {/* Product image */}
               <div style={{width:"100%",aspectRatio:"4/3",background:"#ffffff",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
                 {img
-                  ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.display="none"}/>
+                  ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply"}} onError={e=>e.target.style.display="none"}/>
                   : <PlaceholderCard name={pick.productName} brand={pick.brand||""}/>
                 }
                 {/* Pore clog score chip — only if we have real ingredient data */}
@@ -7186,7 +7219,8 @@ function ShopPage({user, profile, onUpdateProfile}) {
   ).slice(0, 100);
 
   const filteredProducts = brandFilter
-    ? rankedProducts.filter(p => (p.brand||"").toLowerCase() === brandFilter.toLowerCase())
+    ? completeProducts.filter(p => (p.brand||"").toLowerCase() === brandFilter.toLowerCase())
+        .sort((a,b) => (a.poreScore??99)-(b.poreScore??99) || (b.communityRating||0)-(a.communityRating||0) || (b.scanCount||0)-(a.scanCount||0))
     : rankedProducts;
   const grouped = {};
   filteredProducts.forEach(p=>{
@@ -7210,7 +7244,14 @@ function ShopPage({user, profile, onUpdateProfile}) {
     });
 
   const searchFiltered = searchQuery.trim().length > 1
-    ? completeProducts.filter(p=>(p.productName+" "+p.brand).toLowerCase().includes(searchQuery.toLowerCase()))
+    ? completeProducts
+        .filter(p=>(p.productName+" "+p.brand).toLowerCase().includes(searchQuery.toLowerCase()))
+        .sort((a,b) => {
+          const hasImg = p => { const img=(p.adminImage||p.image||"").trim(); return img&&img.startsWith("http")&&!img.startsWith("data:"); };
+          const scoreA = a.approved && hasImg(a) ? 0 : a.approved ? 1 : hasImg(a) ? 2 : 3;
+          const scoreB = b.approved && hasImg(b) ? 0 : b.approved ? 1 : hasImg(b) ? 2 : 3;
+          return scoreA - scoreB;
+        })
     : null;
   const displayCats = searchFiltered
     ? [{id:"search",label:`Results for "${searchQuery}"`,emoji:"🔍",products:searchFiltered.slice(0,20),total:searchFiltered.length,isExpanded:true}]
@@ -7384,7 +7425,9 @@ function ShopPage({user, profile, onUpdateProfile}) {
           {/* Horizontal scroll shelf */}
           <div style={{display:"flex",gap:"0.7rem",overflowX:"auto",paddingBottom:"0.75rem",scrollbarWidth:"none",WebkitOverflowScrolling:"touch",marginLeft:"-1rem",paddingLeft:"1rem",marginRight:"-1rem",paddingRight:"1rem"}}>
             {cat.products.map((p,i)=>{
-              const liveCardScore = (p.ingredients && p.ingredients.trim().length >= 10) ? (() => { const r = analyzeIngredients(p.ingredients); return r.avgScore != null ? Math.round(r.avgScore) : null; })() : null;
+              const liveCardScore = (p.ingredients && p.ingredients.trim().length >= 10)
+                ? (() => { const r = analyzeIngredients(p.ingredients); return r.avgScore != null ? Math.round(r.avgScore) : (p.poreScore??null); })()
+                : (p.poreScore != null ? p.poreScore : null);
               const ps = poreStyle(liveCardScore??0);
               const img = (p.adminImage||p.image||"").trim();
               const friends = getFriendRoutineUsers(friendScans, p.productName, p.id);
@@ -7414,7 +7457,7 @@ function ShopPage({user, profile, onUpdateProfile}) {
                   {/* Big image area */}
                   <div style={{width:"100%",height:"148px",background:"#ffffff",position:"relative",overflow:"hidden"}}>
                     {img
-                      ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
+                      ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/>
                       : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}>
                           <div style={{width:"44px",height:"44px",borderRadius:"50%",background:T.accent+"18",display:"flex",alignItems:"center",justifyContent:"center"}}>
                             <span style={{fontSize:"1rem",fontWeight:"800",color:T.accent}}>{(p.brand||"?")[0].toUpperCase()}</span>
@@ -7428,13 +7471,13 @@ function ShopPage({user, profile, onUpdateProfile}) {
                       </div>
                     )}
                     {/* Acne-safe badge — top left when score is 0 */}
-                    {liveCardScore === 0 && i >= 3 && (
+                    {liveCardScore === 0 && (
                       <div style={{position:"absolute",top:"7px",left:"7px",background:T.sage,borderRadius:"999px",padding:"2px 7px",boxShadow:"0 1px 4px rgba(0,0,0,0.15)"}}>
                         <span style={{fontSize:"0.5rem",fontWeight:"700",color:"#fff"}}>✓ Acne-safe</span>
                       </div>
                     )}
-                    {/* Rank — top left for top 3 */}
-                    {i<3&&<div style={{position:"absolute",top:"6px",left:"6px",background:"rgba(17,24,39,0.65)",backdropFilter:"blur(4px)",borderRadius:"999px",padding:"2px 6px"}}>
+                    {/* Rank badge — only top 3, only if NOT showing acne-safe */}
+                    {i<3 && liveCardScore !== 0 &&<div style={{position:"absolute",top:"6px",left:"6px",background:"rgba(17,24,39,0.65)",backdropFilter:"blur(4px)",borderRadius:"999px",padding:"2px 6px"}}>
                       <span style={{fontSize:"0.5rem",fontWeight:"700",color:"#fff",letterSpacing:"0.03em",fontFamily:"'Inter',sans-serif"}}>{i===0?"#1":i===1?"#2":"#3"}</span>
                     </div>}
                     {/* Friend routine pill */}
@@ -7545,7 +7588,7 @@ function ShopImageCell({p}) {
     <div style={{width:"100%",height:"100%",position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
       {showImg&&(
         <img src={imgSrc} alt={p.productName}
-          style={{width:"82%",height:"82%",objectFit:"contain",display:status==="loaded"?"block":"none",position:"relative",zIndex:2,mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}}
+          style={{width:"82%",height:"82%",objectFit:"contain",display:status==="loaded"?"block":"none",position:"relative",zIndex:2,mixBlendMode:"multiply"}}
           onLoad={()=>setStatus("loaded")}
           onError={handleError}/>
       )}
@@ -8584,6 +8627,9 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
 function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog, autoOpenTriage=false}) {
   // ── Product list state ──
   const [products, setProducts] = useState([]);
+  const [localDeletedIds, setLocalDeletedIds] = useState(() => {
+    try { return new Set(JSON.parse(sessionStorage.getItem("ralli_deleted_ids")||"[]")); } catch { return new Set(); }
+  });
   const [loading, setLoading]   = useState(true);
   const [editing, setEditing]   = useState(null);
   const [editSaving, setEditSaving] = useState(false);
@@ -8646,7 +8692,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
     setLoading(true);
     try {
       const snap = await getDocs(query(collection(db,"products"), orderBy("createdAt","desc")));
-      setProducts(snap.docs.map(d=>({id:d.id,...d.data()})).filter(p=>!p.deleted));
+      setProducts(snap.docs.map(d=>({id:d.id,...d.data()})).filter(p=>!p.deleted && !localDeletedIds.has(p.id)));
     } catch(e) { console.error(e); }
     setLoading(false);
   }
@@ -8678,10 +8724,17 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
         buyUrl: editing.buyUrl||"",
         approved: true,
         lastVerified: Date.now(),
+        updatedAt: Date.now(),
       };
-      // Strip any undefined values to be safe
       Object.keys(updates).forEach(k => { if (updates[k] === undefined) delete updates[k]; });
-      await updateDoc(doc(db,"products",editing.id), updates);
+      const ref = doc(db,"products",editing.id);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        await updateDoc(ref, updates);
+      } else {
+        // Doc doesn't exist in Firestore yet — create it
+        await setDoc(ref, { ...editing, ...updates, createdAt: Date.now() });
+      }
       const postsSnap = await getDocs(query(collection(db,"posts"), where("productId","==",editing.id)));
       if (!postsSnap.empty) {
         const batch = writeBatch(db);
@@ -8719,8 +8772,13 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
       if (snap.exists()) {
         await updateDoc(ref, { deleted: true, hidden: true, approved: false, updatedAt: Date.now() });
       }
-      // Remove from local state regardless
-      setProducts(ps=>ps.filter(q=>q.id!==p.id));
+      // Track locally so it stays gone even after load()
+      setLocalDeletedIds(prev => {
+        const next = new Set([...prev, p.id]);
+        try { sessionStorage.setItem("ralli_deleted_ids", JSON.stringify([...next])); } catch {}
+        return next;
+      });
+      setProducts(ps => ps.filter(q => q.id !== p.id));
     } catch(e) { alert("Delete failed: "+e.message); }
   }
 
@@ -8853,6 +8911,11 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
         await batch.commit();
       }
       // Remove ALL from local state (including ones that never existed in Firestore)
+      setLocalDeletedIds(prev => {
+        const next = new Set([...prev, ...toDelete]);
+        try { sessionStorage.setItem("ralli_deleted_ids", JSON.stringify([...next])); } catch {}
+        return next;
+      });
       setProducts(ps => ps.filter(p => !toDelete.includes(p.id)));
       alert(`✓ Removed ${toDelete.length} duplicates.`);
     } catch(e) { alert("Delete failed: "+e.message); }
@@ -8863,7 +8926,12 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
 
     const bad = products.filter(p => {
       const url = (p.adminImage || p.image || "").trim();
-      return url && (!url.startsWith("http") || url.startsWith("data:"));
+      return url && (
+        !url.startsWith("http") ||
+        url.startsWith("data:") ||
+        url.includes("encrypted-tbn0.gstatic.com") ||
+        url.includes("gstatic.com")
+      );
     });
     if (!bad.length) { alert("✓ No bad image URLs found!"); return; }
     if (!confirm(`Found ${bad.length} products with bad image URLs (base64 or non-http).\n\nClear them so they can be properly triaged?`)) return;
@@ -9088,14 +9156,18 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
 
   // Triage queue — skipped items go to the back, done/hidden items excluded
   const triageQueue = React.useMemo(()=>{
+    const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
     const base = products
       .filter(p => {
         if (triageDone.has(p.id) || p.hidden) return false;
-        const missingImg = !hasValidImage(p);
         const missingIng = !p.ingredients || p.ingredients.trim().length < 10;
         const neverVerified = !p.lastVerified;
-        // Include if missing image, missing ingredients, or never verified
-        return missingImg || missingIng || neverVerified;
+        const recentlyVerified = p.lastVerified && (Date.now() - p.lastVerified) < THIRTY_DAYS;
+        // Skip recently verified products — don't drag them back for image URL issues
+        if (recentlyVerified && !missingIng) return false;
+        const missingImg = !hasValidImage(p);
+        // Include if: never verified, missing ingredients, or missing image AND not recently verified
+        return neverVerified || missingIng || (missingImg && !recentlyVerified);
       })
       .sort((a,b)=>{
         const aSkipped = triageSkipped.has(a.id) ? 1 : 0;
@@ -9194,7 +9266,13 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
       if (triageLink.trim()) updates.buyUrl = triageLink.trim();
       if (triageIng.trim()) updates.ingredients = triageIng.trim();
       if (triageName.trim() && triageName.trim() !== p.productName) updates.productName = triageName.trim();
-      await updateDoc(doc(db,"products",p.id), updates);
+      const ref = doc(db,"products",p.id);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        await updateDoc(ref, updates);
+      } else {
+        await setDoc(ref, { ...p, ...updates, createdAt: Date.now() });
+      }
       // Update local state immediately
       setProducts(ps=>ps.map(q=>q.id===p.id?{...q,...updates}:q));
       setTriageDone(d => new Set([...d, p.id]));
@@ -9259,9 +9337,22 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
     return matchSearch && matchCat && matchFilter;
   });
 
-  // Sort topclicks by clickCount desc
-  const sortedFiltered = filter === "topclicks"
-    ? [...filtered].sort((a,b) => (b.clickCount||0) - (a.clickCount||0))
+  // Sort: when searching, approved+image first; topclicks by click count; default order otherwise
+  const sortedFiltered = search.trim()
+    ? [...filtered].sort((a,b) => {
+        const scoreA = a.approved && hasValidImage(a) ? 0 : a.approved ? 1 : hasValidImage(a) ? 2 : 3;
+        const scoreB = b.approved && hasValidImage(b) ? 0 : b.approved ? 1 : hasValidImage(b) ? 2 : 3;
+        return scoreA - scoreB;
+      })
+    : filter === "topclicks"
+      ? [...filtered].sort((a,b) => (b.clickCount||0) - (a.clickCount||0))
+    : filter === "dupes"
+      ? [...filtered].sort((a,b) => {
+          const brandA = (a.brand||"").toLowerCase().trim();
+          const brandB = (b.brand||"").toLowerCase().trim();
+          if (brandA !== brandB) return brandA.localeCompare(brandB);
+          return (a.productName||"").toLowerCase().localeCompare((b.productName||"").toLowerCase());
+        })
     : filtered;
 
   const counts = {
@@ -9502,7 +9593,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
                 <div style={{display:"flex",alignItems:"center",gap:"0.65rem"}}>
                   <div style={{width:"48px",height:"48px",borderRadius:"0.5rem",overflow:"hidden",flexShrink:0,background:"#ffffff",border:`1px solid ${T.border}`}}>
                     {p.image
-                      ? <img src={p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.display="none"}/>
+                      ? <img src={p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply"}} onError={e=>e.target.style.display="none"}/>
                       : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1.1rem"}}>📷</div>}
                   </div>
                   <div style={{flex:1,minWidth:0}}>
@@ -12384,7 +12475,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange }) {
   if (openConvo) {
     return (
       <>
-        <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, zIndex:60, background:T.bg, display:"flex", flexDirection:"column"}}>
+        <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, zIndex:60, background:T.bg, display:"flex", flexDirection:"column", paddingBottom:"env(safe-area-inset-bottom)"}}>
           <ChatView user={user} profile={profile} other={openConvo} onBack={() => setOpenConvo(null)} onUserTap={onUserTap} onProductTap={openChatProduct}/>
         </div>
         {chatProduct && <ProductModal product={chatProduct} user={user} profile={profile} onUpdateProfile={()=>{}} onClose={() => setChatProduct(null)}/>}
@@ -12399,7 +12490,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange }) {
   const activeList = searchQ.trim() ? searchRes : null;
 
   return (
-    <div style={{ maxWidth: "480px", margin: "0 auto", paddingBottom: "6rem" }}>
+    <div style={{ maxWidth: "480px", margin: "0 auto", paddingBottom: "calc(5rem + env(safe-area-inset-bottom))", minHeight: "100%" }}>
       <PageHero pageTitle="Messages" pageIcon={RalliIcons.chat(T.textLight, 16)} fixed="Your conversations" />
 
       <div style={{ padding: "0 1rem 0.75rem" }}>
@@ -12658,7 +12749,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
                   <div style={{ display:"flex", gap:"0.6rem", alignItems:"center", padding:"0.65rem 0.75rem" }}>
                     {m.productImage && (
                       <div style={{ width:"44px", height:"44px", flexShrink:0, borderRadius:"0.5rem", overflow:"hidden", background:T.surface }}>
-                        <img src={m.productImage} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"3px", mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)" }}/>
+                        <img src={m.productImage} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"3px", mixBlendMode:"multiply" }}/>
                       </div>
                     )}
                     <div style={{ flex:1, minWidth:0 }}>
@@ -12726,7 +12817,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
 
 
       {/* Input bar */}
-      <div style={{ padding:"0.65rem 1rem", paddingBottom:"calc(0.65rem + env(safe-area-inset-bottom))", borderTop:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:"0.5rem", flexShrink:0, position:"sticky", bottom:0, zIndex:10 }}>
+      <div style={{ padding:"0.65rem 1rem", paddingBottom:"calc(0.65rem + env(safe-area-inset-bottom))", borderTop:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:"0.5rem", flexShrink:0 }}>
         {/* Photo button */}
         <button onClick={() => fileInputRef.current?.click()} style={{ background:"none", border:"none", cursor:"pointer", padding:"0.3rem", color:T.textLight, display:"flex", flexShrink:0 }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -12738,11 +12829,16 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
         </button>
         {/* Text input */}
         <input
+          type="text"
+          inputMode="text"
+          autoComplete="off"
+          autoCorrect="on"
+          autoCapitalize="sentences"
           value={text}
           onChange={e => onTextChange(e.target.value)}
           onKeyDown={e => e.key === "Enter" && !e.shiftKey && !sending && send()}
           placeholder="Message…"
-          style={{ flex:1, padding:"0.5rem 0.85rem", borderRadius:"999px", border:`1px solid ${T.border}`, fontSize:"0.85rem", fontFamily:"'Inter',sans-serif", color:T.text, background:T.surfaceAlt, outline:"none" }}
+          style={{ flex:1, padding:"0.5rem 0.85rem", borderRadius:"999px", border:`1px solid ${T.border}`, fontSize:"16px", fontFamily:"'Inter',sans-serif", color:T.text, background:T.surfaceAlt, outline:"none" }}
         />
         {/* Send */}
         <button onClick={send} disabled={!text.trim() || sending}
@@ -12791,7 +12887,7 @@ function ProductPickerModal({ user, onSelect, onClose }) {
               <button key={p.id} onClick={() => onSelect(p)}
                 style={{ width:"100%", display:"flex", alignItems:"center", gap:"0.65rem", padding:"0.7rem 0", background:"none", border:"none", borderTop: i > 0 ? `1px solid ${T.border}40` : "none", cursor:"pointer", textAlign:"left" }}>
                 <div style={{ width:"44px", height:"44px", flexShrink:0, borderRadius:"0.6rem", overflow:"hidden", background:T.surfaceAlt }}>
-                  {p.image ? <img src={p.image} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"4px", mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)" }}/> : null}
+                  {p.image ? <img src={p.image} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"4px", mixBlendMode:"multiply" }}/> : null}
                 </div>
                 <div style={{ flex:1, minWidth:0 }}>
                   {p.brand && <div style={{ fontSize:"0.6rem", color:T.textLight, textTransform:"uppercase", letterSpacing:"0.09em" }}>{p.brand}</div>}
@@ -12939,7 +13035,7 @@ if (typeof document !== "undefined") {
 
   // Remove any existing favicons and set the Ralli R icon
   document.querySelectorAll("link[rel~='icon'], link[rel='apple-touch-icon']").forEach(el => el.remove());
-  const iconSvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23111827'/%3E%3Ctext y='82' x='8' font-family='Arial Black,sans-serif' font-weight='900' font-size='80' fill='%23CFE8FF'%3ER%3C/text%3E%3C/svg%3E";
+  const iconSvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23111827'/%3E%3Ctext y='80' x='50' text-anchor='middle' font-family='Arial Black,sans-serif' font-weight='900' font-size='78' fill='%23FFFFFF'%3ER%3C/text%3E%3C/svg%3E";
   const favLink = document.createElement('link'); favLink.rel = 'icon'; favLink.type = 'image/svg+xml'; favLink.href = iconSvg; document.head.appendChild(favLink);
   const appleLink = document.createElement('link'); appleLink.rel = 'apple-touch-icon'; appleLink.href = iconSvg; document.head.appendChild(appleLink);
 }
