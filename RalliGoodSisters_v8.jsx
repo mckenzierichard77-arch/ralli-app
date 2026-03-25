@@ -11988,7 +11988,7 @@ function PageHero({pageTitle, pageIcon, fixed, rightAction}) {
   },[]);
 
   return (
-    <div style={{padding:"0.6rem 0 0.25rem", display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+    <div style={{padding:"0.6rem 1rem 0.25rem", display:"flex", alignItems:"center", justifyContent:"space-between"}}>
       <div style={{fontSize:"0.52rem", color:T.textLight, letterSpacing:"0.06em", textTransform:"uppercase", fontFamily:"'Inter',sans-serif", fontWeight:"500", flex:1, minWidth:0}}>
         {msg}
       </div>
