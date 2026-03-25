@@ -54,7 +54,7 @@ const T = {
 
 const GS = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@900&display=swap');
-  *{box-sizing:border-box;} body{margin:0;background:#F8F9FB;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;letter-spacing:0;}
+  *{box-sizing:border-box;} body{margin:0;background:#F8F9FB;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;letter-spacing:0;overscroll-behavior-y:none;} html{height:-webkit-fill-available;}
   ::placeholder{color:${T.textLight};}
   .share-toast{position:fixed;bottom:calc(5rem + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:${T.text};color:#fff;padding:0.5rem 1.1rem;border-radius:999px;font-size:0.78rem;font-family:'Inter',sans-serif;font-weight:500;z-index:9999;opacity:0;animation:toastIn 2.2s ease forwards;pointer-events:none;white-space:nowrap;}
   @keyframes toastIn{0%{opacity:0;transform:translateX(-50%) translateY(8px)}12%{opacity:1;transform:translateX(-50%) translateY(0)}80%{opacity:1}100%{opacity:0;transform:translateX(-50%) translateY(-4px)}}
@@ -714,8 +714,14 @@ function getFriendRoutineUsers(friendScans, productName, productId) {
 // Pill shown on any product card when friends have it in their routine
 function FriendRoutinePill({friends}) {
   if (!friends.length) return null;
+  const GENERIC_NAMES = new Set(["skincare lover","user","anonymous","undefined","null",""]);
+  const firstName = (n) => {
+    const first = (n||"").split(" ")[0];
+    return GENERIC_NAMES.has(first.toLowerCase()) ? null : first;
+  };
+  const realName = firstName(friends[0].displayName);
   const label = friends.length === 1
-    ? `${friends[0].displayName?.split(" ")[0]||"A friend"} has this`
+    ? realName ? `${realName} has this` : "1 friend has this"
     : `${friends.length} friends have this`;
   return (
     <div style={{position:"absolute",bottom:"6px",left:"7px",display:"flex",alignItems:"center",gap:"4px",background:"rgba(17,24,39,0.62)",backdropFilter:"blur(4px)",borderRadius:"999px",padding:"3px 7px 3px 4px",pointerEvents:"none"}}>
@@ -2028,8 +2034,9 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
       const displayName = profile?.displayName || user.displayName || "Anonymous";
       const photoURL = profile?.photoURL || user.photoURL || "";
 
-      // Write directly to ratings collection (separate from posts) so it always shows up
-      await addDoc(collection(db, "ratings"), {
+      // Upsert to ratings collection — use stable doc ID so re-rating updates in place
+      const ratingDocId = `${user.uid}_${productName.toLowerCase().replace(/[^a-z0-9]/g,'_').slice(0,60)}`;
+      await setDoc(doc(db, "ratings", ratingDocId), {
         uid: user.uid,
         displayName,
         photoURL,
@@ -2040,8 +2047,9 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
         communityRating: myCommunityRating,
         productImage: product.adminImage || product.image || product.productImage || "",
         ingredients: ingredients.slice(0, 500),
+        updatedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
-      });
+      }, { merge: true });
 
       // Also write to posts feed as before
       await postScan(
@@ -2380,32 +2388,22 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
             <div style={{fontSize:"0.68rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.5rem"}}>Your rating</div>
             {loadingExisting ? (
               <div style={{height:"36px",borderRadius:"0.75rem"}} className="skeleton"/>
-            ) : (existingRating || submitted) ? (
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.7rem 0.85rem",background:T.sage+"12",borderRadius:"0.75rem",border:`1px solid ${T.sage}30`}}>
-                <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.sage} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                  <span style={{fontSize:"0.8rem",fontWeight:"600",color:T.sage,fontFamily:"'Inter',sans-serif"}}>
-                    {submitted ? "Rating saved!" : "Already rated"}
-                  </span>
-                </div>
-                <div style={{display:"flex",alignItems:"center",gap:"0.25rem"}}>
-                  {[1,2,3,4,5,6,7,8,9,10].map(n=>(
-                    <div key={n} style={{width:"18px",height:"18px",borderRadius:"0.2rem",background:n<=(existingRating||myCommunityRating)?communityColor(existingRating||myCommunityRating)+"30":"transparent",border:`1px solid ${n<=(existingRating||myCommunityRating)?communityColor(existingRating||myCommunityRating)+"60":T.border}`}}/>
-                  ))}
-                  <span style={{marginLeft:"4px",fontSize:"0.8rem",fontWeight:"700",color:communityColor(existingRating||myCommunityRating)}}>{existingRating||myCommunityRating}/10</span>
-                </div>
-              </div>
             ) : (
               <div style={{display:"flex",flexDirection:"column",gap:"0.4rem",position:"relative",zIndex:1}}>
-                <span style={{fontSize:"0.62rem",color:T.textLight}}>How much do you love it?</span>
+                <span style={{fontSize:"0.62rem",color:T.textLight}}>
+                  {submitted ? "Rating saved! ✓" : existingRating ? `Your rating: ${existingRating}/10 — tap to update` : "How much do you love it?"}
+                </span>
                 <div style={{display:"flex",gap:"0.15rem",alignItems:"center"}}>
                   <div style={{display:"flex",gap:"0.15rem",flex:1,overflow:"hidden"}}>
-                    {[1,2,3,4,5,6,7,8,9,10].map(n=>(
-                      <button key={n} onClick={()=>setMyCommunityRating(n===myCommunityRating?0:n)}
-                        style={{flex:1,height:"28px",minWidth:0,borderRadius:"0.25rem",border:`1.5px solid ${n<=myCommunityRating?communityColor(myCommunityRating):T.border}`,background:n<=myCommunityRating?communityColor(myCommunityRating)+"22":"transparent",cursor:"pointer",fontSize:"0.6rem",fontWeight:"700",color:n<=myCommunityRating?communityColor(myCommunityRating):T.textLight,fontFamily:"'Inter',sans-serif",transition:"all 0.1s",padding:0}}>
-                        {n}
-                      </button>
-                    ))}
+                    {[1,2,3,4,5,6,7,8,9,10].map(n=>{
+                      const activeVal = myCommunityRating || existingRating || 0;
+                      return (
+                        <button key={n} onClick={()=>setMyCommunityRating(n===myCommunityRating?0:n)}
+                          style={{flex:1,height:"28px",minWidth:0,borderRadius:"0.25rem",border:`1.5px solid ${n<=activeVal?communityColor(activeVal):T.border}`,background:n<=activeVal?communityColor(activeVal)+"22":"transparent",cursor:"pointer",fontSize:"0.6rem",fontWeight:"700",color:n<=activeVal?communityColor(activeVal):T.textLight,fontFamily:"'Inter',sans-serif",transition:"all 0.1s",padding:0}}>
+                          {n}
+                        </button>
+                      );
+                    })}
                   </div>
                   <button onClick={submitRating} disabled={submitting||!myCommunityRating}
                     style={{width:"30px",height:"30px",borderRadius:"50%",background:myCommunityRating?T.accent:T.surfaceAlt,border:"none",cursor:myCommunityRating?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.15s",marginLeft:"0.25rem"}}>
@@ -2437,19 +2435,19 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
 
         {/* Add to lists — inline pills right below Shop */}
         {user&&(
-          <div style={{display:"flex",flexWrap:"wrap",gap:"0.4rem",marginBottom:"1.25rem",position:"relative",zIndex:2}}>
+          <div style={{display:"flex",gap:"0.35rem",marginBottom:"1.25rem",position:"relative",zIndex:2}}>
             {[
-              {field:"routine",   label:"My Routine",   color:T.sage,  active:inRoutine},
-              {field:"brokeout",  label:"Broke Me Out", color:T.rose,  active:inBrokeout},
-              {field:"wantToTry", label:"Want to Try",  color:T.amber, active:inWantToTry},
+              {field:"routine",   label:"Routine",    color:T.sage,  active:inRoutine},
+              {field:"brokeout",  label:"Broke Out",  color:T.rose,  active:inBrokeout},
+              {field:"wantToTry", label:"Want to Try",color:T.amber, active:inWantToTry},
             ].map(({field,label,color,active})=>(
               <button key={field} onClick={()=>toggleList(field,active)}
-                style={{display:"inline-flex",alignItems:"center",gap:"0.3rem",padding:"0.38rem 0.75rem",background:active?color:T.surfaceAlt,border:`1.5px solid ${active?color:T.border}`,borderRadius:"999px",cursor:"pointer",transition:"all 0.15s",fontFamily:"'Inter',sans-serif",boxShadow:active?`0 2px 8px ${color}44`:"none"}}>
+                style={{flex:1,display:"inline-flex",alignItems:"center",justifyContent:"center",gap:"0.25rem",padding:"0.4rem 0.25rem",background:active?color:T.surfaceAlt,border:`1.5px solid ${active?color:T.border}`,borderRadius:"0.6rem",cursor:"pointer",transition:"all 0.15s",fontFamily:"'Inter',sans-serif",boxShadow:active?`0 2px 8px ${color}44`:"none",minWidth:0}}>
                 {active
-                  ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
-                  : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  ? <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                  : <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 }
-                <span style={{fontSize:"0.75rem",fontWeight:"600",color:active?"#fff":T.textMid,letterSpacing:"-0.01em"}}>{label}</span>
+                <span style={{fontSize:"0.7rem",fontWeight:"600",color:active?"#fff":T.textMid,letterSpacing:"-0.01em",whiteSpace:"nowrap"}}>{label}</span>
               </button>
             ))}
           </div>
@@ -2461,27 +2459,27 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
             {/* Key Actives */}
             {(()=>{
               const ACTIVES = [
-                {name:"niacinamide",      label:"Niacinamide",       benefit:"Pore-minimizing, brightening"},
-                {name:"retinol",          label:"Retinol",            benefit:"Cell turnover, anti-aging"},
-                {name:"retinyl",          label:"Retinyl",            benefit:"Gentle vitamin A derivative"},
-                {name:"salicylic acid",   label:"Salicylic Acid",    benefit:"BHA — unclogs pores"},
-                {name:"glycolic acid",    label:"Glycolic Acid",     benefit:"AHA — exfoliates & brightens"},
-                {name:"lactic acid",      label:"Lactic Acid",       benefit:"AHA — gentle exfoliant"},
-                {name:"mandelic acid",    label:"Mandelic Acid",     benefit:"AHA — acne-safe exfoliant"},
-                {name:"azelaic acid",     label:"Azelaic Acid",      benefit:"Fades marks, calms redness"},
-                {name:"ascorbic acid",    label:"Vitamin C",         benefit:"Brightening, antioxidant"},
-                {name:"thd ascorbate",    label:"Vitamin C (THD)",   benefit:"Stable vitamin C derivative"},
-                {name:"hyaluronic acid",  label:"Hyaluronic Acid",   benefit:"Deep hydration"},
-                {name:"sodium hyaluronate",label:"Hyaluronic Acid",  benefit:"Surface hydration"},
-                {name:"ceramide",         label:"Ceramides",         benefit:"Barrier repair"},
-                {name:"zinc oxide",       label:"Zinc Oxide",        benefit:"Mineral SPF + calming"},
-                {name:"benzoyl peroxide", label:"Benzoyl Peroxide",  benefit:"Kills acne bacteria"},
-                {name:"peptide",          label:"Peptides",          benefit:"Firming, anti-aging"},
-                {name:"ferulic acid",     label:"Ferulic Acid",      benefit:"Antioxidant booster"},
-                {name:"snail secretion",  label:"Snail Mucin",       benefit:"Barrier repair, hydration"},
-                {name:"centella",         label:"Centella Asiatica",  benefit:"Calming, healing"},
-                {name:"squalane",         label:"Squalane",           benefit:"Lightweight moisturizer"},
-                {name:"allantoin",        label:"Allantoin",          benefit:"Soothing, healing"},
+                {name:"niacinamide",      label:"Niacinamide",       benefit:"Pore-minimizing, brightening",   detail:"A form of vitamin B3 that visibly shrinks pores, fades dark spots, and regulates oil production — all without irritating the skin.", goodFor:["Oily","Acne-prone","Combination","Hyperpigmentation"], howToUse:"Can be used morning and night. Pairs well with most actives including retinol and vitamin C."},
+                {name:"retinol",          label:"Retinol",            benefit:"Cell turnover, anti-aging",       detail:"Converts to retinoic acid on the skin, speeding up cell renewal. One of the best-studied anti-aging ingredients — also clears pores over time.", goodFor:["Mature","Acne-prone","Dull"], howToUse:"Start 1–2x per week at night. Always follow with SPF the next morning. Expect some purging in weeks 2–4."},
+                {name:"retinyl",          label:"Retinyl",            benefit:"Gentle vitamin A derivative",    detail:"Retinyl palmitate or acetate — a gentler retinoid that converts to retinol, then retinoic acid. Less potent but much better tolerated.", goodFor:["Sensitive","Beginners","Mature"], howToUse:"Can be used nightly. A good entry point before moving to stronger retinol."},
+                {name:"salicylic acid",   label:"Salicylic Acid",    benefit:"BHA — unclogs pores",             detail:"A beta-hydroxy acid (BHA) that's oil-soluble, so it can penetrate inside pores and dissolve the sebum and dead cells causing blackheads and breakouts.", goodFor:["Oily","Acne-prone","Blackheads"], howToUse:"Use 1–3x per week. Avoid combining with other strong acids on the same day."},
+                {name:"glycolic acid",    label:"Glycolic Acid",     benefit:"AHA — exfoliates & brightens",    detail:"The smallest AHA molecule — penetrates deepest and exfoliates most effectively. Resurfaces dead skin, brightens tone, and stimulates collagen.", goodFor:["Dull","Uneven tone","Rough texture"], howToUse:"Use at night, 2–3x per week. Always wear SPF next day — AHAs increase sun sensitivity."},
+                {name:"lactic acid",      label:"Lactic Acid",       benefit:"AHA — gentle exfoliant",          detail:"A larger AHA molecule that exfoliates more gently than glycolic. Also a humectant — it hydrates while it resurfaces, making it ideal for dry or sensitive skin.", goodFor:["Dry","Sensitive","Beginners"], howToUse:"Can be used 2–3x per week at night. Gentler than glycolic but still requires SPF the next day."},
+                {name:"mandelic acid",    label:"Mandelic Acid",     benefit:"AHA — acne-safe exfoliant",       detail:"The largest AHA molecule — exfoliates slowest and most gently. Also has antimicrobial properties, making it one of the safest exfoliants for acne-prone and darker skin tones.", goodFor:["Sensitive","Acne-prone","Darker skin tones"], howToUse:"Can be used 2–3x per week at night. Lower irritation risk than glycolic or lactic acid."},
+                {name:"azelaic acid",     label:"Azelaic Acid",      benefit:"Fades marks, calms redness",      detail:"Naturally found in wheat and barley. Fades post-acne marks, reduces redness, and kills acne bacteria. One of the few actives safe during pregnancy.", goodFor:["Rosacea","Post-acne marks","Sensitive"], howToUse:"Can be used morning and/or night. Works well layered under SPF. No major interactions."},
+                {name:"ascorbic acid",    label:"Vitamin C",         benefit:"Brightening, antioxidant",        detail:"L-ascorbic acid is the purest, most potent form of vitamin C. Inhibits melanin production to fade dark spots, boosts collagen, and neutralises free radical damage from UV.", goodFor:["Dull","Hyperpigmentation","Anti-aging"], howToUse:"Use in the morning under SPF — sunlight degrades vitamin C. Store in a dark, cool place."},
+                {name:"thd ascorbate",    label:"Vitamin C (THD)",   benefit:"Stable vitamin C derivative",    detail:"Tetrahexyldecyl ascorbate — an oil-soluble, highly stable vitamin C that penetrates deeper than L-ascorbic acid without the irritation or oxidation issues.", goodFor:["Sensitive","Dry","Anti-aging"], howToUse:"Can be used morning or night. More stable than L-ascorbic acid — less likely to oxidise."},
+                {name:"hyaluronic acid",  label:"Hyaluronic Acid",   benefit:"Deep hydration",                 detail:"A sugar molecule that holds up to 1000x its weight in water. Draws moisture from the air into skin and creates a plumping, smoothing effect.", goodFor:["Dry","Dehydrated","All skin types"], howToUse:"Apply to damp skin before moisturiser. Layer under a cream to seal in hydration."},
+                {name:"sodium hyaluronate",label:"Hyaluronic Acid",  benefit:"Surface hydration",              detail:"A smaller form of hyaluronic acid that penetrates the skin surface more effectively. Hydrates the epidermis and reduces the appearance of fine lines.", goodFor:["All skin types","Dehydrated"], howToUse:"Use morning and night before heavier products. Layer under moisturiser."},
+                {name:"ceramide",         label:"Ceramides",         benefit:"Barrier repair",                  detail:"Lipids naturally found in skin (40–50% of the stratum corneum). Ceramides seal the gaps between skin cells, locking in moisture and keeping irritants out.", goodFor:["Dry","Eczema","Sensitive","Damaged barrier"], howToUse:"Can be used morning and night. Essential in a barrier-repair routine — combine with cholesterol and fatty acids for best results."},
+                {name:"zinc oxide",       label:"Zinc Oxide",        benefit:"Mineral SPF + calming",           detail:"Broad-spectrum mineral UV filter that sits on the surface of skin, reflecting and scattering UV rays. Also has anti-inflammatory and mild antimicrobial properties.", goodFor:["Sensitive","Acne-prone","Rosacea"], howToUse:"Apply as the last step in your morning routine, before makeup. Reapply every 2 hours in sun."},
+                {name:"benzoyl peroxide", label:"Benzoyl Peroxide",  benefit:"Kills acne bacteria",             detail:"One of the most effective over-the-counter acne treatments. Releases oxygen into the pore, killing C. acnes bacteria that cause breakouts. Also helps unclog pores.", goodFor:["Acne-prone","Oily"], howToUse:"Start with 2.5% to minimise irritation. Use as a spot treatment or thin layer — avoid mixing with retinol on the same application."},
+                {name:"peptide",          label:"Peptides",          benefit:"Firming, anti-aging",             detail:"Short chains of amino acids that signal the skin to produce more collagen and elastin. Different peptides target different concerns — from wrinkles to sagging to discoloration.", goodFor:["Mature","Anti-aging"], howToUse:"Can be used morning and night. Layer under moisturiser. Generally well tolerated alongside most other actives."},
+                {name:"ferulic acid",     label:"Ferulic Acid",      benefit:"Antioxidant booster",             detail:"A plant-derived antioxidant that dramatically boosts the stability and effectiveness of vitamin C and E. Standard in high-performance vitamin C serums.", goodFor:["All skin types","Anti-aging"], howToUse:"Usually formulated with vitamin C — no separate application needed. Use in the morning under SPF."},
+                {name:"snail secretion",  label:"Snail Mucin",       benefit:"Barrier repair, hydration",       detail:"Snail secretion filtrate contains glycoproteins, hyaluronic acid, glycolic acid, and antimicrobial peptides. Repairs skin barrier, fades scars, and provides lightweight hydration.", goodFor:["Acne scars","Dry","Damaged barrier"], howToUse:"Can be used morning and night. Layer under heavier creams. Extremely gentle — suitable for sensitive skin."},
+                {name:"centella",         label:"Centella Asiatica",  benefit:"Calming, healing",               detail:"Also called cica or tiger grass. Contains madecassoside and asiaticoside — compounds that promote wound healing, reduce inflammation, and strengthen the skin barrier.", goodFor:["Sensitive","Rosacea","Post-procedure","Acne scars"], howToUse:"Can be used morning and night. Ideal after treatments, waxing, or during a compromised-barrier recovery period."},
+                {name:"squalane",         label:"Squalane",           benefit:"Lightweight moisturizer",         detail:"A stable, skin-identical emollient derived from sugarcane or olives. Mimics the skin's own squalene, absorbs without grease, and is completely non-comedogenic.", goodFor:["All skin types","Oily","Sensitive"], howToUse:"Apply morning or night before heavier moisturisers, or mix a drop into your existing cream. Also works as a hair serum."},
+                {name:"allantoin",        label:"Allantoin",          benefit:"Soothing, healing",               detail:"A compound found in comfrey root. Promotes cell proliferation, speeds healing, and has keratolytic properties — softening rough skin while calming irritation.", goodFor:["Sensitive","Dry","Post-active irritation"], howToUse:"Works well in any routine step. Often used to buffer the irritation caused by retinol or acids."},
               ];
               const ingLower = product.ingredients.toLowerCase();
               const found = ACTIVES.filter((a,i,arr) =>
@@ -2489,16 +2487,53 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
                 arr.findIndex(b=>b.label===a.label)===i
               );
               if (!found.length) return null;
+              const [activeDetail, setActiveDetail] = React.useState(null);
               return (
                 <div style={{marginBottom:"0.75rem"}}>
-                  <div style={{fontSize:"0.6rem",color:T.navy,textTransform:"uppercase",letterSpacing:"0.14em",fontWeight:"600",marginBottom:"0.5rem"}}>Key Actives</div>
+                  <div style={{fontSize:"0.6rem",color:T.navy,textTransform:"uppercase",letterSpacing:"0.14em",fontWeight:"600",marginBottom:"0.5rem"}}>Key Actives <span style={{fontWeight:"400",color:T.textLight,textTransform:"none",letterSpacing:0,fontSize:"0.58rem"}}>— tap to learn more</span></div>
                   <div style={{display:"flex",flexWrap:"wrap",gap:"0.35rem"}}>
-                    {found.map(a=>(
-                      <div key={a.name} style={{background:T.accent+"10",border:`1px solid ${T.accent}25`,borderRadius:"0.5rem",padding:"0.3rem 0.6rem"}}>
-                        <div style={{fontSize:"0.68rem",fontWeight:"600",color:T.accent}}>{a.label}</div>
-                        <div style={{fontSize:"0.58rem",color:T.textMid}}>{a.benefit}</div>
-                      </div>
-                    ))}
+                    {found.map(a=>{
+                      const isOpen = activeDetail===a.name;
+                      const dbEntry = INGDB_META[a.name.toLowerCase()] || {};
+                      return (
+                        <div key={a.name} style={{width:"100%"}}>
+                          <button onClick={()=>setActiveDetail(isOpen?null:a.name)}
+                            style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",background:isOpen?T.accent+"18":T.accent+"10",border:`1px solid ${isOpen?T.accent+"55":T.accent+"25"}`,borderRadius:isOpen?"0.5rem 0.5rem 0 0":"0.5rem",padding:"0.4rem 0.65rem",cursor:"pointer",textAlign:"left",transition:"all 0.15s"}}>
+                            <div>
+                              <div style={{fontSize:"0.72rem",fontWeight:"700",color:T.accent}}>{a.label}</div>
+                              <div style={{fontSize:"0.62rem",color:T.textMid}}>{a.benefit}</div>
+                            </div>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2.5" style={{flexShrink:0,transform:isOpen?"rotate(180deg)":"none",transition:"transform 0.2s"}}><polyline points="6 9 12 15 18 9"/></svg>
+                          </button>
+                          {isOpen&&(
+                            <div style={{background:T.accent+"08",border:`1px solid ${T.accent+"25"}`,borderTop:"none",borderRadius:"0 0 0.5rem 0.5rem",padding:"0.65rem 0.75rem",display:"flex",flexDirection:"column",gap:"0.5rem",animation:"fadeUp 0.15s ease"}}>
+                              {dbEntry.benefit&&<div>
+                                <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.sage,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>What it does</div>
+                                <div style={{fontSize:"0.78rem",color:T.text,lineHeight:1.5}}>{dbEntry.benefit}</div>
+                              </div>}
+                              {a.detail&&<div>
+                                <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.accent,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>How it works</div>
+                                <div style={{fontSize:"0.78rem",color:T.text,lineHeight:1.5}}>{a.detail}</div>
+                              </div>}
+                              {a.goodFor&&<div>
+                                <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textMid,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"4px"}}>Best for</div>
+                                <div style={{display:"flex",flexWrap:"wrap",gap:"0.25rem"}}>
+                                  {a.goodFor.map(s=><span key={s} style={{padding:"0.15rem 0.5rem",background:T.sage+"15",border:`1px solid ${T.sage}30`,borderRadius:"999px",fontSize:"0.65rem",color:T.sage,fontWeight:"500"}}>{s}</span>)}
+                                </div>
+                              </div>}
+                              {dbEntry.concern&&dbEntry.concern!=="None known"&&<div>
+                                <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.rose,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>Watch out</div>
+                                <div style={{fontSize:"0.75rem",color:T.textMid,lineHeight:1.45}}>{dbEntry.concern}</div>
+                              </div>}
+                              {a.howToUse&&<div style={{padding:"0.45rem 0.6rem",background:"rgba(255,255,255,0.7)",borderRadius:"0.4rem",border:`1px solid ${T.border}`}}>
+                                <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textMid,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>How to use</div>
+                                <div style={{fontSize:"0.72rem",color:T.textMid,lineHeight:1.45}}>{a.howToUse}</div>
+                              </div>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -3827,23 +3862,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
   }, [ffSearch]);
 
   // ── Mock community posts — show a lively feed out of the box ──
-  const MOCK_POSTS = [
-    {id:"mock_01",uid:"mock_u01",displayName:"Avery Chen",photoURL:"https://i.pravatar.cc/150?img=1",productName:"CeraVe Moisturizing Cream",brand:"CeraVe",poreScore:3,productImage:"",communityRating:9,postType:"loved",ingredients:"water, glycerin, cetearyl alcohol, ceramide np, ceramide ap, ceramide eop, cholesterol, sodium hyaluronate, niacinamide, panthenol, allantoin",flaggedIngredients:[],likes:["mock_u02","mock_u03","mock_u04","mock_u05"],comments:[{uid:"mock_u02",displayName:"Jordan Lee",photoURL:"https://i.pravatar.cc/150?img=2",text:"my holy grail forever 💙"},{uid:"mock_u03",displayName:"Maya Rivera",photoURL:"https://i.pravatar.cc/150?img=3",text:"I use this every morning!"}],createdAt:{seconds:Math.floor(Date.now()/1000)-3600}},
-    {id:"mock_02",uid:"mock_u02",displayName:"Jordan Lee",photoURL:"https://i.pravatar.cc/150?img=2",productName:"The Ordinary Niacinamide 10%",brand:"The Ordinary",poreScore:0,productImage:"",communityRating:8,postType:"loved",ingredients:"aqua, niacinamide, pentylene glycol, zinc pca, sodium hyaluronate, tamarindus indica seed gum",flaggedIngredients:[],likes:["mock_u01","mock_u04","mock_u06","mock_u07","mock_u08"],comments:[{uid:"mock_u04",displayName:"Priya Kapoor",photoURL:"https://i.pravatar.cc/150?img=5",text:"does this work for sensitive skin?"},{uid:"mock_u01",displayName:"Avery Chen",photoURL:"https://i.pravatar.cc/150?img=1",text:"yes!! so gentle"}],createdAt:{seconds:Math.floor(Date.now()/1000)-7200}},
-    {id:"mock_03",uid:"mock_u03",displayName:"Maya Rivera",photoURL:"https://i.pravatar.cc/150?img=3",productName:"EltaMD UV Clear SPF 46",brand:"EltaMD",poreScore:2,productImage:"",communityRating:10,postType:"loved",ingredients:"zinc oxide 9.0%, niacinamide, hyaluronic acid, lactic acid, tocopheryl acetate, glycerin",flaggedIngredients:[],likes:["mock_u01","mock_u02","mock_u05","mock_u09","mock_u10"],comments:[{uid:"mock_u05",displayName:"Sofia Reyes",photoURL:"https://i.pravatar.cc/150?img=6",text:"THE best SPF for acne-prone skin 🙌"}],createdAt:{seconds:Math.floor(Date.now()/1000)-18000}},
-    {id:"mock_04",uid:"mock_u04",displayName:"Priya Kapoor",photoURL:"https://i.pravatar.cc/150?img=5",productName:"Cosrx Snail Mucin 96%",brand:"Cosrx",poreScore:0,productImage:"",communityRating:9,postType:"loved",ingredients:"snail secretion filtrate 96.3%, betaine, sodium polyacrylate, hyaluronic acid, panthenol, allantoin",flaggedIngredients:[],likes:["mock_u03","mock_u06","mock_u11"],comments:[{uid:"mock_u06",displayName:"Emma Walsh",photoURL:"https://i.pravatar.cc/150?img=7",text:"obsessed with this 😍"},{uid:"mock_u07",displayName:"Zoe Thompson",photoURL:"https://i.pravatar.cc/150?img=9",text:"been waiting for someone to scan this!"}],createdAt:{seconds:Math.floor(Date.now()/1000)-28800}},
-    {id:"mock_05",uid:"mock_u05",displayName:"Sofia Reyes",photoURL:"https://i.pravatar.cc/150?img=6",productName:"Paula's Choice BHA Exfoliant",brand:"Paula's Choice",poreScore:0,productImage:"",communityRating:8,postType:"loved",ingredients:"water, methylpropanediol, butylene glycol, salicylic acid, polysorbate 20, camellia oleifera leaf extract, allantoin",flaggedIngredients:[],likes:["mock_u02","mock_u04","mock_u08","mock_u12"],comments:[{uid:"mock_u08",displayName:"Lily Park",photoURL:"https://i.pravatar.cc/150?img=10",text:"this cleared my skin in 2 weeks no joke"}],createdAt:{seconds:Math.floor(Date.now()/1000)-43200}},
-    {id:"mock_06",uid:"mock_u06",displayName:"Emma Walsh",photoURL:"https://i.pravatar.cc/150?img=7",productName:"Laneige Lip Sleeping Mask",brand:"Laneige",poreScore:4,productImage:"",communityRating:7,postType:"brokeout",ingredients:"polybutene, phytosteryl/octyldodecyl lauroyl glutamate, hydrogenated polyisobutene, dipentaerythrityl hexacaprylate, fragrance, tocopheryl acetate",flaggedIngredients:["fragrance","tocopheryl acetate"],likes:["mock_u01","mock_u03","mock_u09"],comments:[{uid:"mock_u09",displayName:"Nadia Okonkwo",photoURL:"https://i.pravatar.cc/150?img=12",text:"pore clog score is higher than I expected 😬"}],createdAt:{seconds:Math.floor(Date.now()/1000)-57600}},
-    {id:"mock_07",uid:"mock_u07",displayName:"Zoe Thompson",photoURL:"https://i.pravatar.cc/150?img=9",productName:"Drunk Elephant Protini Polypeptide",brand:"Drunk Elephant",poreScore:1,productImage:"",communityRating:8,postType:"wantToTry",ingredients:"water, glycerin, pentylene glycol, cetearyl alcohol, dimethicone, palmitoyl tripeptide-1, sodium hyaluronate, allantoin, panthenol",flaggedIngredients:[],likes:["mock_u02","mock_u05","mock_u10","mock_u13","mock_u14"],comments:[{uid:"mock_u10",displayName:"Chloe Martinez",photoURL:"https://i.pravatar.cc/150?img=13",text:"the texture is so luxurious ✨"},{uid:"mock_u11",displayName:"Ines Dubois",photoURL:"https://i.pravatar.cc/150?img=15",text:"worth the price honestly"}],createdAt:{seconds:Math.floor(Date.now()/1000)-72000}},
-    {id:"mock_08",uid:"mock_u08",displayName:"Lily Park",photoURL:"https://i.pravatar.cc/150?img=10",productName:"Glow Recipe Watermelon Toner",brand:"Glow Recipe",poreScore:1,productImage:"",communityRating:7,postType:"loved",ingredients:"water, citrullus lanatus fruit extract, glycerin, hyaluronic acid, niacinamide, aloe barbadensis leaf juice, sodium hyaluronate",flaggedIngredients:[],likes:["mock_u03","mock_u07","mock_u15"],comments:[{uid:"mock_u12",displayName:"Hannah Kim",photoURL:"https://i.pravatar.cc/150?img=16",text:"just ordered this because of your post!"}],createdAt:{seconds:Math.floor(Date.now()/1000)-90000}},
-    {id:"mock_09",uid:"mock_u09",displayName:"Nadia Okonkwo",photoURL:"https://i.pravatar.cc/150?img=12",productName:"Sunday Riley Good Genes",brand:"Sunday Riley",poreScore:1,productImage:"",communityRating:9,postType:"loved",ingredients:"water, lactic acid, glycerin, aloe barbadensis leaf juice, sodium hydroxide, paeonia albiflora root extract, licorice root extract",flaggedIngredients:[],likes:["mock_u01","mock_u04","mock_u06","mock_u08","mock_u11","mock_u14"],comments:[{uid:"mock_u13",displayName:"Tara Singh",photoURL:"https://i.pravatar.cc/150?img=18",text:"this faded my dark spots SO fast"},{uid:"mock_u01",displayName:"Avery Chen",photoURL:"https://i.pravatar.cc/150?img=1",text:"how long until you saw results?"}],createdAt:{seconds:Math.floor(Date.now()/1000)-108000}},
-    {id:"mock_10",uid:"mock_u10",displayName:"Chloe Martinez",photoURL:"https://i.pravatar.cc/150?img=13",productName:"La Roche-Posay Toleriane Cleanser",brand:"La Roche-Posay",poreScore:0,productImage:"",communityRating:8,postType:"loved",ingredients:"aqua, glycerin, cocamidopropyl betaine, sodium lauroyl methyl isethionate, sodium chloride, citric acid, sodium benzoate",flaggedIngredients:[],likes:["mock_u02","mock_u05","mock_u07","mock_u09"],comments:[{uid:"mock_u14",displayName:"Mia Johansson",photoURL:"https://i.pravatar.cc/150?img=20",text:"gentle enough for my rosacea 🙏"}],createdAt:{seconds:Math.floor(Date.now()/1000)-129600}},
-    {id:"mock_11",uid:"mock_u11",displayName:"Ines Dubois",photoURL:"https://i.pravatar.cc/150?img=15",productName:"Neutrogena Hydro Boost Gel",brand:"Neutrogena",poreScore:1,productImage:"",communityRating:7,postType:"wantToTry",ingredients:"water, dimethicone, glycerin, dimethicone/vinyl dimethicone crosspolymer, sodium hyaluronate, phenoxyethanol, carbomer, sodium hydroxide",flaggedIngredients:[],likes:["mock_u03","mock_u06","mock_u10","mock_u15"],comments:[{uid:"mock_u15",displayName:"Ruby Nguyen",photoURL:"https://i.pravatar.cc/150?img=22",text:"this is so good for summer heat"}],createdAt:{seconds:Math.floor(Date.now()/1000)-151200}},
-    {id:"mock_12",uid:"mock_u12",displayName:"Hannah Kim",photoURL:"https://i.pravatar.cc/150?img=16",productName:"Kiehl's Ultra Facial Cream",brand:"Kiehl's",poreScore:3,productImage:"",communityRating:6,postType:"brokeout",ingredients:"water, glycerin, squalane, petrolatum, stearyl alcohol, avocado oil, tocopheryl acetate, glacial glycoprotein",flaggedIngredients:["avocado oil","tocopheryl acetate"],likes:["mock_u04","mock_u08","mock_u11"],comments:[{uid:"mock_u05",displayName:"Sofia Reyes",photoURL:"https://i.pravatar.cc/150?img=6",text:"the avocado oil breaks me out 😔"}],createdAt:{seconds:Math.floor(Date.now()/1000)-172800}},
-    {id:"mock_13",uid:"mock_u13",displayName:"Tara Singh",photoURL:"https://i.pravatar.cc/150?img=18",productName:"Summer Fridays Jet Lag Mask",brand:"Summer Fridays",poreScore:1,productImage:"",communityRating:8,postType:"loved",ingredients:"water, glycerin, niacinamide, squalane, centella asiatica extract, hyaluronic acid, oat extract, allantoin, ceramide np",flaggedIngredients:[],likes:["mock_u01","mock_u07","mock_u09","mock_u12","mock_u14"],comments:[{uid:"mock_u02",displayName:"Jordan Lee",photoURL:"https://i.pravatar.cc/150?img=2",text:"scored surprisingly clean! 🌿"}],createdAt:{seconds:Math.floor(Date.now()/1000)-194400}},
-    {id:"mock_14",uid:"mock_u14",displayName:"Mia Johansson",photoURL:"https://i.pravatar.cc/150?img=20",productName:"First Aid Beauty KP Bump Eraser",brand:"First Aid Beauty",poreScore:1,productImage:"",communityRating:8,postType:"loved",ingredients:"water, glycolic acid, lactic acid, glycerin, urea, allantoin, aloe barbadensis leaf juice, salicylic acid",flaggedIngredients:[],likes:["mock_u03","mock_u06","mock_u10","mock_u13"],comments:[{uid:"mock_u08",displayName:"Lily Park",photoURL:"https://i.pravatar.cc/150?img=10",text:"this + CeraVe lotion after = game changer"},{uid:"mock_u09",displayName:"Nadia Okonkwo",photoURL:"https://i.pravatar.cc/150?img=12",text:"does this work on face too?"}],createdAt:{seconds:Math.floor(Date.now()/1000)-216000}},
-    {id:"mock_15",uid:"mock_u15",displayName:"Ruby Nguyen",photoURL:"https://i.pravatar.cc/150?img=22",productName:"Tatcha The Water Cream",brand:"Tatcha",poreScore:1,productImage:"",communityRating:9,postType:"loved",ingredients:"water, glycerin, dimethicone, isononyl isononanoate, niacinamide, pentylene glycol, haematococcus pluvialis extract, sodium hyaluronate",flaggedIngredients:[],likes:["mock_u01","mock_u02","mock_u04","mock_u07","mock_u11","mock_u13","mock_u15"],comments:[{uid:"mock_u04",displayName:"Priya Kapoor",photoURL:"https://i.pravatar.cc/150?img=5",text:"using this on my wedding day 💍"},{uid:"mock_u06",displayName:"Emma Walsh",photoURL:"https://i.pravatar.cc/150?img=7",text:"splurge-worthy for sure"}],createdAt:{seconds:Math.floor(Date.now()/1000)-237600}},
-  ];
+  const MOCK_POSTS = [];
 
   // Looks up full product from Firestore by name to get authoritative ingredients/score
   async function openProductFromPost(post) {
@@ -3898,11 +3917,8 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
         getFeed(profile?.following, user.uid),
         getNotifications(user.uid),
       ]);
-      // Merge real posts with mock posts, deduplicate by productName+uid, sort by time
-      const realIds = new Set(p.map(post => post.uid + post.productName));
-      const filtered = MOCK_POSTS.filter(m => !realIds.has(m.uid + m.productName));
       const FEED_TYPES = new Set(["brokeout","wantToTry","loved","commented"]);
-      const merged = [...p, ...filtered]
+      const merged = p
         .filter(post => FEED_TYPES.has(post.postType))
         .sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
       setPosts(merged);
@@ -4380,7 +4396,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
 
             // ── FOR YOU TAB: always shows rich community content ───
             if (tab==="forYou") {
-              const allCommunity = [...posts, ...MOCK_POSTS];
+              const allCommunity = [...posts];
               const seen = new Set();
               const topPosts = allCommunity
                 .filter(p=>{ const k=p.productName?.toLowerCase()||p.id; if(seen.has(k))return false; seen.add(k); return true; })
@@ -6801,56 +6817,13 @@ function WhatWereLovingSection({onTap, friendScans={}}) {
 }
 
 // ── FriendsUsingSection — "What Your Friends Are Using" on Explore ──
-const MOCK_FRIEND_PRODUCTS = [
-  {
-    productName: "CeraVe Moisturizing Cream", brand: "CeraVe", poreScore: 3,
-    ingredients: "water, glycerin, cetearyl alcohol, ceramide np, ceramide ap, ceramide eop, cholesterol, sodium hyaluronate, niacinamide, panthenol, allantoin",
-    image: "",
-    buyUrl: "https://www.amazon.com/s?k=CeraVe+Moisturizing+Cream",
-    friends: [
-      { displayName: "Avery Kim", photoURL: "" },
-      { displayName: "Jordan Lee", photoURL: "" },
-      { displayName: "Sofia R.", photoURL: "" },
-    ]
-  },
-  {
-    productName: "EltaMD UV Clear SPF 46", brand: "EltaMD", poreScore: 2,
-    ingredients: "zinc oxide 9.0%, niacinamide, hyaluronic acid, lactic acid, tocopheryl acetate, glycerin",
-    image: "",
-    buyUrl: "https://www.amazon.com/s?k=EltaMD+UV+Clear+SPF+46",
-    friends: [
-      { displayName: "Mia Chen", photoURL: "" },
-      { displayName: "Avery Kim", photoURL: "" },
-    ]
-  },
-  {
-    productName: "The Ordinary Niacinamide 10% + Zinc 1%", brand: "The Ordinary", poreScore: 0,
-    image: "",
-    buyUrl: "https://www.amazon.com/s?k=The+Ordinary+Niacinamide",
-    friends: [
-      { displayName: "Jordan Lee", photoURL: "" },
-      { displayName: "Sofia R.", photoURL: "" },
-      { displayName: "Mia Chen", photoURL: "" },
-    ]
-  },
-  {
-    productName: "Paula's Choice BHA Exfoliant", brand: "Paula's Choice", poreScore: 0,
-    ingredients: "water, methylpropanediol, butylene glycol, salicylic acid, polysorbate 20, camellia oleifera leaf extract, allantoin",
-    image: "",
-    buyUrl: "https://www.amazon.com/s?k=Paula%27s+Choice+BHA",
-    friends: [
-      { displayName: "Avery Kim", photoURL: "" },
-      { displayName: "Jordan Lee", photoURL: "" },
-    ]
-  },
-];
+const MOCK_FRIEND_PRODUCTS = [];
 
 function FriendsUsingSection({ friendScans, products, onTap, profile }) {
   // Build list from real friendScans if available, else use mock
   const friendProducts = React.useMemo(() => {
     const entries = Object.entries(friendScans || {});
-    if (entries.length >= 2) {
-      // Real data: build product cards from friendScans
+    if (entries.length >= 1) {
       const productMap = {};
       products.forEach(p => { productMap[(p.productName||"").toLowerCase().trim()] = p; });
       return entries
@@ -6860,11 +6833,13 @@ function FriendsUsingSection({ friendScans, products, onTap, profile }) {
         .map(([key, friends]) => {
           const p = productMap[key];
           if (!p) return null;
+          const img = (p.adminImage||p.image||"").trim();
+          if (!img || !img.startsWith("http")) return null;
           return { ...p, friends };
         })
         .filter(Boolean);
     }
-    return MOCK_FRIEND_PRODUCTS;
+    return [];
   }, [friendScans, products]);
 
   if (!friendProducts.length) return null;
@@ -7522,31 +7497,48 @@ function GlossaryPage() {
               </div>
               {/* Expanded detail */}
               {selected?.name===ing.name&&(
-                <div style={{marginTop:"0.75rem",paddingTop:"0.75rem",borderTop:`1px solid ${T.border}`,display:"flex",flexDirection:"column",gap:"0.5rem",animation:"fadeUp 0.18s ease"}}>
-                  {ing.benefit&&(
-                    <div style={{display:"flex",gap:"0.5rem",alignItems:"flex-start"}}>
-                      <span style={{fontSize:"0.65rem",fontWeight:"700",color:T.sage,textTransform:"uppercase",letterSpacing:"0.05em",minWidth:"56px",paddingTop:"1px"}}>Benefit</span>
-                      <span style={{fontSize:"0.78rem",color:T.text}}>{ing.benefit}</span>
+                <div style={{marginTop:"0.75rem",paddingTop:"0.75rem",borderTop:`1px solid ${T.border}`,display:"flex",flexDirection:"column",gap:"0.6rem",animation:"fadeUp 0.18s ease"}}>
+                  {/* Pore risk + irritant badges */}
+                  <div style={{display:"flex",gap:"0.4rem",flexWrap:"wrap"}}>
+                    <div style={{padding:"0.2rem 0.6rem",background:ps.color+"18",borderRadius:"999px",border:`1px solid ${ps.color}30`,display:"inline-flex",alignItems:"center",gap:"0.3rem"}}>
+                      <span style={{fontSize:"0.6rem",fontWeight:"700",color:T.textMid,textTransform:"uppercase",letterSpacing:"0.05em"}}>Pore risk</span>
+                      <span style={{fontSize:"0.72rem",fontWeight:"800",color:ps.color}}>{ps.label} · {ing.score}/5</span>
                     </div>
-                  )}
-                  {ing.concern&&ing.concern!=="None known"&&(
-                    <div style={{display:"flex",gap:"0.5rem",alignItems:"flex-start"}}>
-                      <span style={{fontSize:"0.65rem",fontWeight:"700",color:T.rose,textTransform:"uppercase",letterSpacing:"0.05em",minWidth:"56px",paddingTop:"1px"}}>Watch out</span>
-                      <span style={{fontSize:"0.78rem",color:T.text}}>{ing.concern}</span>
-                    </div>
-                  )}
-                  {(ing.aliases||[]).length>0&&(
-                    <div style={{display:"flex",gap:"0.5rem",alignItems:"flex-start"}}>
-                      <span style={{fontSize:"0.65rem",fontWeight:"700",color:T.textMid,textTransform:"uppercase",letterSpacing:"0.05em",minWidth:"56px",paddingTop:"1px"}}>Also known as</span>
-                      <span style={{fontSize:"0.78rem",color:T.textMid}}>{ing.aliases.join(", ")}</span>
-                    </div>
-                  )}
-                  <div style={{display:"flex",gap:"0.5rem",alignItems:"center"}}>
-                    <span style={{fontSize:"0.65rem",fontWeight:"700",color:T.textMid,textTransform:"uppercase",letterSpacing:"0.05em",minWidth:"56px"}}>Pore risk</span>
-                    <div style={{padding:"0.2rem 0.65rem",background:ps.color+"18",borderRadius:"999px",border:`1px solid ${ps.color}30`}}>
-                      <span style={{fontSize:"0.72rem",fontWeight:"700",color:ps.color}}>{ps.label} ({ing.score}/5)</span>
-                    </div>
+                    {ing.irritant&&<div style={{padding:"0.2rem 0.6rem",background:T.amber+"18",borderRadius:"999px",border:`1px solid ${T.amber}30`,display:"inline-flex",alignItems:"center",gap:"0.3rem"}}>
+                      <span style={{fontSize:"0.65rem",fontWeight:"700",color:T.amber}}>⚠ Potential irritant</span>
+                    </div>}
+                    {ing.score===0&&!ing.irritant&&<div style={{padding:"0.2rem 0.6rem",background:T.sage+"18",borderRadius:"999px",border:`1px solid ${T.sage}30`,display:"inline-flex",alignItems:"center",gap:"0.3rem"}}>
+                      <span style={{fontSize:"0.65rem",fontWeight:"700",color:T.sage}}>✓ Generally safe</span>
+                    </div>}
                   </div>
+                  {/* Benefit */}
+                  {ing.benefit&&(
+                    <div>
+                      <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.sage,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"3px"}}>What it does</div>
+                      <div style={{fontSize:"0.78rem",color:T.text,lineHeight:1.55}}>{ing.benefit}</div>
+                    </div>
+                  )}
+                  {/* Note / mechanism */}
+                  {ing.note&&ing.note!==ing.benefit&&(
+                    <div>
+                      <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.accent,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"3px"}}>Why it matters</div>
+                      <div style={{fontSize:"0.75rem",color:T.textMid,lineHeight:1.55}}>{ing.note}</div>
+                    </div>
+                  )}
+                  {/* Watch out */}
+                  {ing.concern&&ing.concern!=="None known"&&(
+                    <div style={{padding:"0.5rem 0.65rem",background:T.rose+"08",borderRadius:"0.5rem",border:`1px solid ${T.rose}20`}}>
+                      <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.rose,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"3px"}}>Watch out</div>
+                      <div style={{fontSize:"0.75rem",color:T.textMid,lineHeight:1.5}}>{ing.concern}</div>
+                    </div>
+                  )}
+                  {/* Aliases */}
+                  {(ing.aliases||[]).length>0&&(
+                    <div>
+                      <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textMid,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"3px"}}>Also listed as</div>
+                      <div style={{fontSize:"0.72rem",color:T.textLight,lineHeight:1.5}}>{ing.aliases.join(" · ")}</div>
+                    </div>
+                  )}
                 </div>
               )}
             </button>
@@ -11982,7 +11974,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange }) {
   if (openConvo) {
     return (
       <>
-        <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, zIndex:60, background:T.bg, display:"flex", flexDirection:"column"}}>
+        <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, zIndex:60, background:T.bg, display:"flex", flexDirection:"column", height:"100%", maxHeight:"-webkit-fill-available"}}>
           <ChatView user={user} profile={profile} other={openConvo} onBack={() => setOpenConvo(null)} onUserTap={onUserTap} onProductTap={openChatProduct}/>
         </div>
         {chatProduct && <ProductModal product={chatProduct} user={user} profile={profile} onUpdateProfile={()=>{}} onClose={() => setChatProduct(null)}/>}
@@ -12217,7 +12209,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
   }
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
+    <div style={{ display:"flex", flexDirection:"column", height:"100dvh", maxHeight:"-webkit-fill-available", overflow:"hidden" }}>
       {/* Header */}
       <div style={{ display:"flex", alignItems:"center", gap:"0.75rem", padding:"0.85rem 1rem", borderBottom:`1px solid ${T.border}`, background:T.surface, flexShrink:0 }}>
         <button onClick={onBack} style={{ background:"none", border:"none", cursor:"pointer", padding:"0.2rem", color:T.textLight, display:"flex" }}>
@@ -12322,7 +12314,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
 
 
       {/* Input bar */}
-      <div style={{ padding:"0.65rem 1rem", paddingBottom:"calc(0.65rem + env(safe-area-inset-bottom))", borderTop:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:"0.5rem", flexShrink:0, position:"sticky", bottom:0, zIndex:10 }}>
+      <div style={{ padding:"0.65rem 1rem", paddingBottom:"calc(0.65rem + env(safe-area-inset-bottom))", borderTop:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:"0.5rem", flexShrink:0 }}>
         {/* Photo button */}
         <button onClick={() => fileInputRef.current?.click()} style={{ background:"none", border:"none", cursor:"pointer", padding:"0.3rem", color:T.textLight, display:"flex", flexShrink:0 }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
