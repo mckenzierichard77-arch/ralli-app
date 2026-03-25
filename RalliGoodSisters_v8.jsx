@@ -1348,33 +1348,47 @@ async function getUserPosts(uid) {
 // ── Open Beauty Facts ─────────────────────────────────────────
 
 async function lookupBarcode(barcode) {
-  const res  = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${barcode}.json`);
+  const res  = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${barcode}.json`, {signal: AbortSignal.timeout(8000)});
   const data = await res.json();
-  if (data.status!==1) throw new Error("Product not found");
+  if (data.status!==1) throw new Error("Product not found in our database. Try searching by name instead.");
   const ing = data.product?.ingredients_text_en||data.product?.ingredients_text||"";
-  if (!ing) throw new Error("No ingredients listed");
   const name  = data.product?.product_name||"Unknown";
-  const brand = data.product?.brands||"";
+  const brand = data.product?.brands?.split(",")?.[0]?.trim()||"";
   const image = data.product?.image_front_url || data.product?.image_url || "";
-  // Cache image in Firestore so it's available for all users
   if (image) setCachedImage(imgCacheKey(brand, name), image);
-  return { name, brand, ingredients: ing, image };
+  // Return even without ingredients — caller will handle missing ingredients
+  return { name, brand, ingredients: ing, image, hasIngredients: ing.trim().length > 10 };
 }
 
 async function extractFromPhoto(b64, mime) {
+  if (!ANTHROPIC_KEY) throw new Error("No API key — photo scanning requires VITE_ANTHROPIC_KEY to be set in Vercel.");
   const res = await fetch("https://api.anthropic.com/v1/messages",{
     method:"POST", headers:{"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
     body:JSON.stringify({
-      model:"claude-sonnet-4-20250514", max_tokens:1000,
+      model:"claude-haiku-4-5-20251001", max_tokens:1200,
       messages:[{role:"user",content:[
         {type:"image",source:{type:"base64",media_type:mime,data:b64}},
-        {type:"text",text:"If you see a barcode respond ONLY: BARCODE:<number>. If you see an ingredient list respond ONLY with ingredients comma-separated. No explanation."}
+        {type:"text",text:`You are analysing a skincare product image. Look carefully and respond with ONLY one of these formats:
+
+1. If you see a barcode number clearly: BARCODE:<number>
+
+2. If you see an ingredient/ingredients list: INGREDIENTS:<comma-separated INCI ingredient names exactly as written>
+
+3. If you see both a product name/brand AND an ingredient list, respond:
+NAME:<product name>
+BRAND:<brand name>
+INGREDIENTS:<comma-separated ingredients>
+
+4. If the image is too blurry or you cannot read any ingredients or barcode: UNCLEAR
+
+No explanations. No markdown. Just the format above.`}
       ]}]
     })
   });
   const data = await res.json();
+  if (data.error) throw new Error(data.error.message || "AI could not process the image.");
   const text = data.content?.map(b=>b.text||"").join("").trim();
-  if (!text) throw new Error("Could not read image");
+  if (!text || text === "UNCLEAR") throw new Error("Image is unclear — try better lighting, move closer, or ensure the ingredient list is in focus.");
   return text;
 }
 
@@ -2854,7 +2868,7 @@ function AuthPage() {
           <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"300",fontSize:"0.72rem",color:T.textLight,letterSpacing:"0.22em",textTransform:"uppercase",marginTop:"0.4rem"}}>by GoodSisters</div>
         </div>
         <div style={{width:"32px",height:"1px",background:T.border,margin:"0.75rem auto"}}/>
-        <div style={{fontSize:"0.58rem",color:T.textLight,letterSpacing:"0.22em",textTransform:"uppercase",fontFamily:"'Inter',sans-serif",fontWeight:"400"}}>
+        <div style={{fontSize:"0.58rem",color:T.textLight,letterSpacing:"0.08em",textTransform:"uppercase",fontFamily:"'Inter',sans-serif",fontWeight:"400",whiteSpace:"nowrap"}}>
           Real people. Real skin. Real insights.
         </div>
       </div>
@@ -3205,6 +3219,7 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
   const [cameraMode, setCameraMode]     = useState("choose");
   const [cameraErr, setCameraErr]       = useState("");
   const [photoPreview, setPhotoPreview] = useState(null);
+  const [aiStatus, setAiStatus]         = useState(""); // step label shown during AI analysis
   const [searchQ, setSearchQ]           = useState("");
   const [searchRes, setSearchRes]       = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -3255,49 +3270,102 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
   async function onBarcode(code) {
     setCameraMode("processing"); setCameraErr("");
     try {
-      // 1. Check our products catalog first (instant, one read)
+      // 1. Check our Firestore catalog first (instant)
       const existing = await getProductByBarcode(code);
-      if (existing) {
-        setIngredients(existing.ingredients||""); 
-        setProductName(existing.productName); 
+      if (existing && existing.ingredients) {
+        setIngredients(existing.ingredients||"");
+        setProductName(existing.productName);
         setBrand(existing.brand||"");
         setCurrentBarcode(code);
         setPostSource("scan");
+        const res = analyzeIngredients(existing.ingredients);
+        setResults(res);
         setInputMode("type");
         setCameraMode("choose");
         return;
       }
       // 2. Fall back to Open Beauty Facts
       const p = await lookupBarcode(code);
-      setIngredients(p.ingredients); setProductName(p.name); setBrand(p.brand);
+      setProductName(p.name); setBrand(p.brand);
       setCurrentBarcode(code);
       setPostSource("scan");
-      setInputMode("type");
-      setCameraMode("choose");
-      // 3. Auto-create pending product record
-      await upsertProduct(code, {
+      if (p.hasIngredients) {
+        setIngredients(p.ingredients);
+        const res = analyzeIngredients(p.ingredients);
+        setResults(res);
+        setInputMode("type");
+        setCameraMode("choose");
+      } else {
+        // Found product but no ingredients — show product, prompt to photograph label
+        setIngredients("");
+        setInputMode("type");
+        setCameraMode("choose");
+        setCameraErr(`Found "${p.name}" but no ingredient list yet — photograph the ingredients label on the back to analyse it, or paste it below.`);
+      }
+      // Save to catalog in background
+      upsertProduct(code, {
         productName: p.name, brand: p.brand,
         ingredients: p.ingredients, image: p.image||"",
         source: "scan",
-      });
-    } catch(e) { 
-      setCameraErr(e.message); setCameraMode("choose"); 
-      setAddPrefillBarcode(code); setShowAddModal(true); 
+      }).catch(()=>{});
+    } catch(e) {
+      setCameraMode("choose");
+      if (e.message?.includes("not found") || e.message?.includes("Not found")) {
+        setCameraErr("Product not found. Photograph the ingredient list on the back of the packaging, or search by name above.");
+      } else {
+        setCameraErr(e.message || "Something went wrong. Please try again.");
+      }
     }
   }
 
   async function onPhoto(e) {
     const file=e.target.files?.[0]; if(!file) return;
     setCameraErr(""); setPhotoPreview(URL.createObjectURL(file)); setCameraMode("processing");
+    setAiStatus("Reading label…");
     try {
       const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
       const result=await extractFromPhoto(b64,file.type);
       if(result.startsWith("BARCODE:")) {
+        setAiStatus("Found barcode — looking up product…");
         const p=await lookupBarcode(result.replace("BARCODE:","").trim());
-        setIngredients(p.ingredients); setProductName(p.name); setBrand(p.brand);
-      } else { setIngredients(result); }
+        setIngredients(p.ingredients||""); setProductName(p.name); setBrand(p.brand);
+        if (p.hasIngredients) {
+          setAiStatus("Analysing ingredients…");
+          const res = analyzeIngredients(p.ingredients);
+          setResults(res);
+        } else {
+          setCameraErr(`Found "${p.name}" but no ingredient list on file — paste the ingredients below.`);
+        }
+      } else if(result.includes("INGREDIENTS:")) {
+        // Parse structured response with optional NAME/BRAND
+        const nameMatch = result.match(/^NAME:(.+)$/m);
+        const brandMatch = result.match(/^BRAND:(.+)$/m);
+        const ingMatch = result.match(/^INGREDIENTS:(.+)$/ms);
+        const ingText = ingMatch?.[1]?.trim() || "";
+        if (nameMatch?.[1]) setProductName(nameMatch[1].trim());
+        if (brandMatch?.[1]) setBrand(brandMatch[1].trim());
+        if (ingText) {
+          setIngredients(ingText);
+          setAiStatus("Scoring ingredients…");
+          const res = analyzeIngredients(ingText);
+          setResults(res);
+        }
+      } else {
+        // Plain ingredient list (legacy format)
+        setIngredients(result);
+        setAiStatus("Scoring ingredients…");
+        const res = analyzeIngredients(result);
+        setResults(res);
+      }
       setInputMode("type");
-    } catch { setCameraErr("Couldn't read image. Try better lighting."); setCameraMode("choose"); setPhotoPreview(null); }
+      setCameraMode("choose");
+      setAiStatus("");
+    } catch(e) {
+      setAiStatus("");
+      setCameraErr(e.message || "Couldn't read image. Try better lighting or move closer.");
+      setCameraMode("choose");
+      setPhotoPreview(null);
+    }
   }
 
   async function doSearch() {
@@ -3423,12 +3491,21 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
 
             {cameraMode==="processing"&&(
               <div style={{textAlign:"center",padding:"1.5rem 1rem"}}>
-                {photoPreview&&<img src={photoPreview} alt="" style={{width:"100%",maxHeight:"180px",objectFit:"cover",borderRadius:"0.75rem",marginBottom:"1rem",opacity:0.8}}/>}
-                <div style={{display:"inline-flex",alignItems:"center",gap:"0.5rem",background:T.accentSoft,padding:"0.6rem 1rem",borderRadius:"999px",marginBottom:"0.5rem"}}>
-                  <div style={{width:"8px",height:"8px",borderRadius:"50%",background:T.accent,animation:"pulse 1s ease-in-out infinite"}}/>
-                  <span style={{color:T.accent,fontWeight:"600",fontFamily:"'Inter',sans-serif",fontSize:"0.85rem"}}>Reading label with AI…</span>
+                {photoPreview&&<img src={photoPreview} alt="" style={{width:"100%",maxHeight:"200px",objectFit:"cover",borderRadius:"0.75rem",marginBottom:"1rem",opacity:0.85}}/>}
+                <div style={{display:"inline-flex",alignItems:"center",gap:"0.6rem",background:T.accentSoft,padding:"0.65rem 1.1rem",borderRadius:"999px",marginBottom:"0.5rem"}}>
+                  <div style={{width:"8px",height:"8px",borderRadius:"50%",background:T.accent,animation:"pulse 1s ease-in-out infinite",flexShrink:0}}/>
+                  <span style={{color:T.accent,fontWeight:"600",fontFamily:"'Inter',sans-serif",fontSize:"0.85rem"}}>
+                    {aiStatus || "Reading label with AI…"}
+                  </span>
                 </div>
-                <div style={{fontSize:"0.72rem",color:T.textLight}}>Identifying ingredients and checking pore safety</div>
+                <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"0.35rem"}}>
+                  {aiStatus === "Scoring ingredients…" || aiStatus === "Analysing ingredients…"
+                    ? "Almost done — calculating your pore clog score"
+                    : aiStatus === "Found barcode — looking up product…"
+                    ? "Searching our database and Open Beauty Facts"
+                    : "Identifying every ingredient on the label"
+                  }
+                </div>
               </div>
             )}
           </div>
@@ -11834,7 +11911,7 @@ function PageHero({pageTitle, pageIcon, fixed, rightAction}) {
 
   return (
     <div style={{padding:"0.6rem 0 0.25rem", display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-      <div style={{fontSize:"0.52rem", color:T.textLight, letterSpacing:"0.22em", textTransform:"uppercase", fontFamily:"'Inter',sans-serif", fontWeight:"500"}}>
+      <div style={{fontSize:"0.52rem", color:T.textLight, letterSpacing:"0.08em", textTransform:"uppercase", fontFamily:"'Inter',sans-serif", fontWeight:"500", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
         {msg}
       </div>
       {rightAction && <div style={{flexShrink:0}}>{rightAction}</div>}
@@ -11875,12 +11952,14 @@ async function sendMessage(fromUid, toUid, msg) {
 }
 
 // ── MessagesPage ──────────────────────────────────────────────
-function MessagesPage({ user, profile, onUserTap, onUnreadChange }) {
+function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen }) {
   const [convos, setConvos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [openConvo, setOpenConvo] = useState(null);
   const [chatProduct, setChatProduct] = useState(null);
   const [chatProductLoading, setChatProductLoading] = useState(false);
+
+  function openChat(other) { setOpenConvo(other); onChatOpen?.(true); }
 
   async function openChatProduct(snap) {
     setChatProductLoading(true);
@@ -11975,7 +12054,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange }) {
     return (
       <>
         <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, zIndex:60, background:T.bg, display:"flex", flexDirection:"column", height:"100%", maxHeight:"-webkit-fill-available"}}>
-          <ChatView user={user} profile={profile} other={openConvo} onBack={() => setOpenConvo(null)} onUserTap={onUserTap} onProductTap={openChatProduct}/>
+          <ChatView user={user} profile={profile} other={openConvo} onBack={() => { setOpenConvo(null); onChatOpen?.(false); }} onUserTap={onUserTap} onProductTap={openChatProduct}/>
         </div>
         {chatProduct && <ProductModal product={chatProduct} user={user} profile={profile} onUpdateProfile={()=>{}} onClose={() => setChatProduct(null)}/>}
       </>
@@ -12016,7 +12095,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange }) {
             {activeList.length === 0
               ? <div style={{ textAlign:"center", color:T.textLight, fontSize:"0.78rem", padding:"1rem" }}>No users found</div>
               : activeList.map((u, i) => (
-                  <ConnectionRow key={u.uid} u={u} i={i} onClick={() => { setSearchQ(""); setOpenConvo({ uid: u.uid, displayName: u.displayName, photoURL: u.photoURL }); }}/>
+                  <ConnectionRow key={u.uid} u={u} i={i} onClick={() => { setSearchQ(""); openChat({ uid: u.uid, displayName: u.displayName, photoURL: u.photoURL }); }}/>
                 ))
             }
           </div>
@@ -12041,7 +12120,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange }) {
                 {convos.map(c => {
                   const otherUid = c.participants?.find(p => p !== user.uid);
                   const unread = c[`unread_${user.uid}`] || 0;
-                  return <ConvoRow key={c.id} convoId={c.id} otherUid={otherUid} lastMessage={c.lastMessage} lastAt={c.lastAt} unread={unread} onOpen={setOpenConvo} currentUid={user.uid}/>;
+                  return <ConvoRow key={c.id} convoId={c.id} otherUid={otherUid} lastMessage={c.lastMessage} lastAt={c.lastAt} unread={unread} onOpen={openChat} currentUid={user.uid}/>;
                 })}
               </>
             )}
@@ -12053,7 +12132,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange }) {
                   {convos.length > 0 ? "People you can message" : "👋 Start a conversation"}
                 </div>
                 {newConnections.map((u, i) => (
-                  <ConnectionRow key={u.uid} u={u} i={i} onClick={() => setOpenConvo({ uid: u.uid, displayName: u.displayName, photoURL: u.photoURL })}/>
+                  <ConnectionRow key={u.uid} u={u} i={i} onClick={() => openChat({ uid: u.uid, displayName: u.displayName, photoURL: u.photoURL })}/>
                 ))}
               </>
             )}
@@ -12314,7 +12393,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
 
 
       {/* Input bar */}
-      <div style={{ padding:"0.65rem 1rem", paddingBottom:"calc(0.65rem + env(safe-area-inset-bottom))", borderTop:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:"0.5rem", flexShrink:0 }}>
+      <div style={{ padding:"0.65rem 1rem", paddingBottom:"calc(0.65rem + env(safe-area-inset-bottom))", borderTop:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:"0.5rem", flexShrink:0, zIndex:61, position:"relative" }}>
         {/* Photo button */}
         <button onClick={() => fileInputRef.current?.click()} style={{ background:"none", border:"none", cursor:"pointer", padding:"0.3rem", color:T.textLight, display:"flex", flexShrink:0 }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -12580,6 +12659,7 @@ function AppInner() {
   const [viewingUid, setViewingUid] = useState(null);
   const [feedRefresh, setFeedRefresh] = useState(0);
   const [msgUnread, setMsgUnread] = useState(0);
+  const [chatOpen, setChatOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showOurStory, setShowOurStory] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -12730,7 +12810,7 @@ function AppInner() {
           : tab==="check"
             ? <ScanPage user={user} profile={profile} onPosted={()=>{setFeedRefresh(r=>r+1);switchTab("feed");}} onUpdateProfile={setProfile}/>
             : tab==="messages"
-              ? <MessagesPage user={user} profile={profile} onUserTap={handleUserTap} onUnreadChange={setMsgUnread}/>
+              ? <MessagesPage user={user} profile={profile} onUserTap={handleUserTap} onUnreadChange={setMsgUnread} onChatOpen={setChatOpen}/>
             : tab==="shop"
               ? <ShopPage user={user} profile={profile} onUpdateProfile={setProfile}/>
             : tab==="admin"
@@ -12768,7 +12848,7 @@ function AppInner() {
         </div>
       )}
 
-      <BottomNav tab={tab} onChange={t=>{switchTab(t);setViewingUid(null);if(t==="notifs")setUnreadCount(0);if(t==="messages")setMsgUnread(0);}} unreadCount={unreadCount} msgUnread={msgUnread} currentUid={user?.uid||""} isAdmin={isAdmin(user)}/>
+      {!chatOpen && <BottomNav tab={tab} onChange={t=>{switchTab(t);setViewingUid(null);if(t==="notifs")setUnreadCount(0);if(t==="messages")setMsgUnread(0);}} unreadCount={unreadCount} msgUnread={msgUnread} currentUid={user?.uid||""} isAdmin={isAdmin(user)}/>}
       {showOurStory&&!showOnboarding&&(
         <OurStoryPopup onClose={()=>setShowOurStory(false)} onUserTap={handleUserTap}/>
       )}
