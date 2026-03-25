@@ -12157,7 +12157,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen }) 
       {/* Header */}
       <div style={{ padding: "1rem 1rem 0.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: T.bg, zIndex: 10, borderBottom: `1px solid ${T.border}`, marginBottom: "0.5rem" }}>
         <div>
-          <div style={{ fontSize: "1.4rem", fontWeight: "400", color: T.navy, fontFamily: "'Cormorant Garamond','Georgia',serif", letterSpacing: "-0.01em", lineHeight: 1 }}>Messages</div>
+          <div style={{ fontSize: "1.1rem", fontWeight: "700", color: T.navy, fontFamily: "'Inter',sans-serif", letterSpacing: "-0.02em", lineHeight: 1 }}>Messages</div>
           <div style={{ fontSize: "0.6rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.1em", marginTop: "2px", fontFamily: "'Inter',sans-serif" }}>by GoodSisters</div>
         </div>
         {convos.length > 0 && (
@@ -12398,7 +12398,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
       </div>
 
       {/* Messages */}
-      <div style={{ flex:1, overflowY:"auto", padding:"1rem", display:"flex", flexDirection:"column", gap:"0.6rem" }}>
+      <div style={{ flex:1, overflowY:"auto", padding:"1rem", paddingBottom:"1.5rem", display:"flex", flexDirection:"column", gap:"0.6rem" }}>
         {messages.map(m => {
           const isMe = m.fromUid === user.uid;
           return (
@@ -12490,7 +12490,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
 
 
       {/* Input bar */}
-      <div style={{ padding:"0.65rem 1rem", paddingBottom:"calc(0.65rem + env(safe-area-inset-bottom))", borderTop:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:"0.5rem", flexShrink:0, zIndex:61, position:"relative" }}>
+      <div style={{ padding:"0.65rem 1rem", paddingBottom:"calc(4.5rem + env(safe-area-inset-bottom))", borderTop:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:"0.5rem", flexShrink:0, zIndex:61, position:"relative" }}>
         {/* Photo button */}
         <button onClick={() => fileInputRef.current?.click()} style={{ background:"none", border:"none", cursor:"pointer", padding:"0.3rem", color:T.textLight, display:"flex", flexShrink:0 }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -13096,7 +13096,7 @@ function AppInner() {
         </div>
       )}
 
-      {!chatOpen && <BottomNav tab={tab} onChange={t=>{switchTab(t);setViewingUid(null);if(t==="notifs")setUnreadCount(0);if(t==="messages")setMsgUnread(0);}} unreadCount={unreadCount} msgUnread={msgUnread} currentUid={user?.uid||""} isAdmin={isAdmin(user)}/>}
+      <BottomNav tab={tab} onChange={t=>{switchTab(t);setViewingUid(null);setOpenConvo&&setOpenConvo(null);setChatOpen(false);if(t==="notifs")setUnreadCount(0);if(t==="messages")setMsgUnread(0);}} unreadCount={unreadCount} msgUnread={msgUnread} currentUid={user?.uid||""} isAdmin={isAdmin(user)}/>
       {showOurStory&&!showOnboarding&&(
         <OurStoryPopup onClose={()=>setShowOurStory(false)} onUserTap={handleUserTap}/>
       )}
