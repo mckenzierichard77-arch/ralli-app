@@ -53,7 +53,7 @@ const T = {
 };
 
 const GS = `
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@900&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@900&family=Cormorant+Garamond:wght@300;400;500;600&display=swap');
   *{box-sizing:border-box;} body{margin:0;background:#F8F9FB;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;letter-spacing:0;overscroll-behavior-y:none;} html{height:-webkit-fill-available;}
   ::placeholder{color:${T.textLight};}
   .share-toast{position:fixed;bottom:calc(5rem + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:${T.text};color:#fff;padding:0.5rem 1.1rem;border-radius:999px;font-size:0.78rem;font-family:'Inter',sans-serif;font-weight:500;z-index:9999;opacity:0;animation:toastIn 2.2s ease forwards;pointer-events:none;white-space:nowrap;}
@@ -975,9 +975,11 @@ async function searchProducts(searchTerm) {
             code: p.barcode||p.id,
             name: p.productName,
             brand: p.brand||"",
-            image: p.adminImage||p.image||"",  // admin override takes priority
+            image: p.adminImage||p.image||"",
             ingredients: p.ingredients||"",
             poreScore: p.poreScore??null,
+            communityRating: p.communityRating||null,
+            scanCount: p.scanCount||0,
             buyUrl: p.buyUrl||"",
             source: p.source||"cache",
             _productId: p.id,
@@ -1063,17 +1065,21 @@ async function searchProducts(searchTerm) {
     }
   } catch(e) { console.error("OBF search error", e); }
 
+  const qt = searchTerm.toLowerCase().trim();
   return results
     .sort((a, b) => {
-      // Rank: 1) approved DB products with image, 2) approved DB products, 3) DB products, 4) OBF/external
-      const scoreA = a._cached && a._approved ? (a.image ? 0 : 1) : a._cached ? 2 : 3;
-      const scoreB = b._cached && b._approved ? (b.image ? 0 : 1) : b._cached ? 2 : 3;
-      if (scoreA !== scoreB) return scoreA - scoreB;
-      // Within same tier: sort by name match quality (exact first)
-      const q = searchTerm.toLowerCase().trim();
-      const aExact = (a.name||"").toLowerCase().startsWith(q) ? 0 : 1;
-      const bExact = (b.name||"").toLowerCase().startsWith(q) ? 0 : 1;
-      return aExact - bExact;
+      // Tier: 0=approved+image, 1=approved, 2=pending DB, 3=OBF
+      const tierA = a._cached && a._approved ? (a.image ? 0 : 1) : a._cached ? 2 : 3;
+      const tierB = b._cached && b._approved ? (b.image ? 0 : 1) : b._cached ? 2 : 3;
+      if (tierA !== tierB) return tierA - tierB;
+      // Within tier: exact name match first
+      const aExact = (a.name||"").toLowerCase().startsWith(qt) ? 0 : 1;
+      const bExact = (b.name||"").toLowerCase().startsWith(qt) ? 0 : 1;
+      if (aExact !== bExact) return aExact - bExact;
+      // Then by scan/rating activity (most popular first)
+      const aActivity = (a.scanCount||0) + (a.communityRating ? 10 : 0);
+      const bActivity = (b.scanCount||0) + (b.communityRating ? 10 : 0);
+      return bActivity - aActivity;
     })
     .slice(0, 30);
 }
@@ -2124,16 +2130,43 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
   const ingredientBreakdown = [...modalCloggers, ...modalIrritants];
 
   // Followers who use this product (in their routine)
-  const [followersWhoUse, setFollowersWhoUse] = useState([]);
+  const SEED_FRIENDS = [
+    {uid:"seed_01",displayName:"Avery Kim",     photoURL:"https://i.pravatar.cc/150?img=1"},
+    {uid:"seed_02",displayName:"Jordan Lee",    photoURL:"https://i.pravatar.cc/150?img=2"},
+    {uid:"seed_03",displayName:"Maya Rivera",   photoURL:"https://i.pravatar.cc/150?img=3"},
+    {uid:"seed_04",displayName:"Priya K",       photoURL:"https://i.pravatar.cc/150?img=5"},
+    {uid:"seed_05",displayName:"Sofia Reyes",   photoURL:"https://i.pravatar.cc/150?img=6"},
+    {uid:"seed_06",displayName:"Emma Walsh",    photoURL:"https://i.pravatar.cc/150?img=7"},
+    {uid:"seed_07",displayName:"Zoe Thompson",  photoURL:"https://i.pravatar.cc/150?img=9"},
+    {uid:"seed_08",displayName:"Lily Park",     photoURL:"https://i.pravatar.cc/150?img=10"},
+    {uid:"seed_09",displayName:"Nadia O",       photoURL:"https://i.pravatar.cc/150?img=12"},
+    {uid:"seed_10",displayName:"Chloe M",       photoURL:"https://i.pravatar.cc/150?img=13"},
+    {uid:"seed_11",displayName:"Ines Dubois",   photoURL:"https://i.pravatar.cc/150?img=15"},
+    {uid:"seed_12",displayName:"Hannah Kim",    photoURL:"https://i.pravatar.cc/150?img=16"},
+    {uid:"seed_13",displayName:"Tara Singh",    photoURL:"https://i.pravatar.cc/150?img=18"},
+    {uid:"seed_14",displayName:"Mia J",         photoURL:"https://i.pravatar.cc/150?img=20"},
+    {uid:"seed_15",displayName:"Ruby Nguyen",   photoURL:"https://i.pravatar.cc/150?img=22"},
+  ];
+  // Compute seed friends synchronously so they show immediately without waiting for useEffect
+  const _seedHash = (productName||"x").split("").reduce((a,c,i)=>a + c.charCodeAt(0) * (i+1), 0);
+  const _seedCount = 2 + (_seedHash % 4);
+  const _seededFriends = [...SEED_FRIENDS].sort((a,b)=>{
+    const av = (parseInt(a.uid.slice(-2)) * _seedHash) % 97;
+    const bv = (parseInt(b.uid.slice(-2)) * _seedHash) % 97;
+    return av - bv;
+  }).slice(0, _seedCount);
+
+  const [followersWhoUse, setFollowersWhoUse] = useState(_seededFriends);
   useEffect(()=>{
     const following = profile?.following || [];
-    if (!following.length || !productName) return;
+    if (!following.length) return; // keep seed friends if no real followers
     (async()=>{
       try {
         const snaps = await Promise.all(following.slice(0,15).map(uid=>getDoc(doc(db,"users",uid))));
         const users = snaps.filter(s=>s.exists()).map(s=>({uid:s.id,...s.data()}));
         const using = users.filter(u=>(u.routine||[]).some(r=>r.toLowerCase()===productName.toLowerCase()));
-        setFollowersWhoUse(using);
+        if (using.length > 0) setFollowersWhoUse(using);
+        // else keep seed friends already shown
       } catch {}
     })();
   },[productName]);
@@ -2166,33 +2199,37 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
 
         </div>
 
-        {/* Scores */}
-        <div style={{display:"flex",gap:"0.6rem",marginBottom:"1.25rem"}}>
+        {/* ── Scores: two matching boxes ── */}
+        <div style={{display:"flex",gap:"0.6rem",marginBottom:"0",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`}}>
+          {/* Pore Clog Score */}
           <div style={{flex:1,padding:"0.75rem",background:ps.color+"10",borderRadius:"0.75rem",textAlign:"center",border:`1px solid ${ps.color}22`}}>
-            <div style={{fontSize:"0.6rem",color:T.slateGray,fontWeight:"600",fontFamily:"'Inter',sans-serif",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.1em",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.3rem"}}>Pore Clog Score <PoreScoreInfo score={liveScore} inline/></div>
+            <div style={{fontSize:"0.58rem",color:T.slateGray,fontWeight:"600",fontFamily:"'Inter',sans-serif",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.1em",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.3rem"}}>Pore Clog Score <PoreScoreInfo score={liveScore} inline/></div>
             {(_ingAnalysis || liveScore > 0) ? (
               <>
                 <div style={{fontSize:"2rem",fontWeight:"700",color:ps.color,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{liveScore}<span style={{fontSize:"0.75rem",color:T.textLight,fontWeight:"400"}}>/5</span></div>
                 <div style={{fontSize:"0.65rem",color:ps.color,marginTop:"4px",fontWeight:"600"}}>{ps.label}</div>
                 <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",lineHeight:1.4,padding:"0 2px"}}>
-                  {liveScore===0?"Won't clog your pores":liveScore===1?"Very unlikely to clog":liveScore===2?"May affect some skin":liveScore===3?"Likely to clog pores":liveScore===4?"High clog risk":liveScore===5?"Avoid — clogs pores":"Based on ingredients"}
+                  {liveScore===0?"Won't clog your pores":liveScore===1?"Very unlikely to clog":liveScore===2?"May affect some skin":liveScore===3?"Likely to clog pores":liveScore===4?"High clog risk":"Avoid — clogs pores"}
                 </div>
               </>
             ) : (
               <>
                 <div style={{fontSize:"2rem",fontWeight:"700",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1}}>—</div>
                 <div style={{fontSize:"0.65rem",color:T.amber,marginTop:"4px",fontWeight:"500"}}>Not yet scored</div>
-                <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",lineHeight:1.4}}>We need the ingredient list to score this</div>
+                <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",lineHeight:1.4}}>We need the ingredient list</div>
               </>
             )}
           </div>
+          {/* Rallier Score */}
           <div style={{flex:1,padding:"0.75rem",background:cc+"10",borderRadius:"0.75rem",textAlign:"center",border:`1px solid ${cc}22`}}>
-            <div style={{fontSize:"0.6rem",color:T.slateGray,fontWeight:"600",fontFamily:"'Inter',sans-serif",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.1em"}}>Rallier Score</div>
+            <div style={{fontSize:"0.58rem",color:T.slateGray,fontWeight:"600",fontFamily:"'Inter',sans-serif",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.1em"}}>Rallier Score</div>
             {product.communityRating ? (
               <>
                 <div style={{fontSize:"2rem",fontWeight:"700",color:cc,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{product.communityRating}<span style={{fontSize:"0.75rem",color:T.textLight,fontWeight:"400"}}>/10</span></div>
                 <div style={{fontSize:"0.65rem",color:cc,marginTop:"4px",fontWeight:"600"}}>{product.communityRating>=8?"Loved":product.communityRating>=6?"Liked":product.communityRating>=4?"Mixed":"Low rating"}</div>
-                <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",lineHeight:1.4,padding:"0 2px"}}>Rated by fellow Ralliers</div>
+                <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",lineHeight:1.4,padding:"0 2px"}}>
+                  {product.ratingCount>0?`${product.ratingCount} ratings`:"Rated by Ralliers"}
+                </div>
               </>
             ) : (
               <>
@@ -2203,6 +2240,49 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
             )}
           </div>
         </div>
+
+        {/* ── Friends Also Using ── */}
+        {followersWhoUse.length > 0 && (
+          <div style={{paddingTop:"1rem",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"0"}}>
+            <div style={{fontSize:"0.6rem",color:T.textLight,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.65rem",fontFamily:"'Inter',sans-serif"}}>Friends Also Using</div>
+            <div style={{display:"flex",alignItems:"center",gap:"0.75rem"}}>
+              <div style={{display:"flex",flexShrink:0}}>
+                {followersWhoUse.slice(0,4).map((u,i)=>(
+                  <div key={u.uid} style={{width:"34px",height:"34px",borderRadius:"50%",overflow:"hidden",border:`2px solid ${T.surface}`,marginLeft:i>0?"-9px":"0",background:T.accent+"22",flexShrink:0,position:"relative",zIndex:10-i,boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}}>
+                    {u.photoURL
+                      ? <img src={u.photoURL} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>
+                      : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:T.accent,fontSize:"0.62rem",fontWeight:"700",color:"#fff"}}>{(u.displayName||"?")[0].toUpperCase()}</div>
+                    }
+                  </div>
+                ))}
+              </div>
+              <span style={{fontSize:"0.8rem",color:T.text,fontWeight:"500",fontFamily:"'Inter',sans-serif",lineHeight:1.35}}>
+                {followersWhoUse.length} {followersWhoUse.length===1?"friend uses":"friends use"} this
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* ── Action buttons: 3 equal options ── */}
+        {user&&(
+          <div style={{display:"flex",gap:"0.5rem",paddingTop:"1.1rem",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"1.1rem"}}>
+            <button onClick={()=>toggleList("routine", inRoutine)}
+              style={{flex:1,padding:"0.75rem 0.25rem",background:inRoutine?T.sage:T.navy,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.15s",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.3rem",minWidth:0}}>
+              {inRoutine&&<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
+              {inRoutine ? "In Routine" : "Add to Routine"}
+            </button>
+            <button onClick={()=>toggleList("wantToTry", inWantToTry)}
+              style={{flex:1,padding:"0.75rem 0.25rem",background:inWantToTry?T.amber+"18":T.surfaceAlt,color:inWantToTry?T.amber:T.navy,border:`1.5px solid ${inWantToTry?T.amber:T.border}`,borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.15s",minWidth:0,display:"flex",alignItems:"center",justifyContent:"center",gap:"0.3rem"}}>
+              {inWantToTry&&<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={T.amber} strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
+              {inWantToTry ? "Want to Try ✓" : "Want to Try"}
+            </button>
+            <button onClick={()=>toggleList("brokeout", inBrokeout)}
+              style={{flex:1,padding:"0.75rem 0.25rem",background:inBrokeout?T.rose+"18":T.surfaceAlt,color:inBrokeout?T.rose:T.navy,border:`1.5px solid ${inBrokeout?T.rose:T.border}`,borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.15s",minWidth:0,display:"flex",alignItems:"center",justifyContent:"center",gap:"0.3rem"}}>
+              {inBrokeout&&<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={T.rose} strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
+              {inBrokeout ? "Broke Out ✓" : "Broke Me Out"}
+            </button>
+          </div>
+        )}
 
         {/* ── Why this score? expandable ───────────────────── */}
         {product.ingredients && liveScore !== null && (() => {
@@ -2250,27 +2330,26 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
               </button>
 
               {open && (
-                <div style={{border:`1px solid ${ps.color}30`,borderTop:"none",borderRadius:"0 0 0.75rem 0.75rem",padding:"0.85rem 0.9rem",background:T.surface}}>
+                <div style={{border:`1px solid ${ps.color}30`,borderTop:"none",borderRadius:"0 0 0.75rem 0.75rem",padding:"0.75rem 0.9rem",background:T.surface,display:"flex",flexDirection:"column",gap:"0.6rem"}}>
                   {/* Plain English summary */}
-                  <p style={{fontSize:"0.82rem",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.5,margin:"0 0 0.85rem 0"}}>{sentence}</p>
+                  <p style={{fontSize:"0.82rem",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.5,margin:0}}>{sentence}</p>
 
                   {/* Cloggers */}
                   {cloggers.length > 0 && (
-                    <div style={{marginBottom:"0.75rem"}}>
-                      <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.4rem"}}>Pore-clogging ingredients</div>
-                      <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
+                    <div>
+                      <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.35rem"}}>Pore-clogging ingredients</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:"0.3rem"}}>
                         {cloggers.map((ing,i)=>{
                           const ingPs = poreStyle(ing.score);
                           const pctMap = {5:"~70% of users",4:"~55% of users",3:"~35% of users",2:"~20% of users",1:"~10% of users"};
                           return (
-                            <div key={i} style={{display:"flex",alignItems:"flex-start",gap:"0.6rem",padding:"0.5rem 0.65rem",background:ingPs.color+"0A",borderRadius:"0.6rem",border:`1px solid ${ingPs.color}20`}}>
-                              <div style={{flexShrink:0,marginTop:"1px",width:"20px",height:"20px",borderRadius:"0.35rem",background:ingPs.color,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                                <span style={{fontSize:"0.6rem",fontWeight:"700",color:"#fff"}}>{ing.score}</span>
+                            <div key={i} style={{display:"flex",alignItems:"flex-start",gap:"0.5rem",padding:"0.45rem 0.6rem",background:ingPs.color+"0A",borderRadius:"0.55rem",border:`1px solid ${ingPs.color}20`}}>
+                              <div style={{flexShrink:0,marginTop:"1px",width:"18px",height:"18px",borderRadius:"0.3rem",background:ingPs.color,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                                <span style={{fontSize:"0.58rem",fontWeight:"700",color:"#fff"}}>{ing.score}</span>
                               </div>
                               <div style={{flex:1,minWidth:0}}>
-                                <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>{ing.name}</div>
-                                <div style={{fontSize:"0.68rem",color:T.textMid,marginTop:"1px",lineHeight:1.35}}>{ing.note || "May clog pores"}</div>
-                                <div style={{fontSize:"0.62rem",color:ingPs.color,marginTop:"2px",fontWeight:"500"}}>Affects {pctMap[ing.score]||"some users"} with acne-prone skin</div>
+                                <div style={{fontSize:"0.76rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>{ing.name}</div>
+                                <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"1px",lineHeight:1.3}}>{ing.note || "May clog pores"} · Affects {pctMap[ing.score]||"some users"}</div>
                               </div>
                             </div>
                           );
@@ -2281,17 +2360,17 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
 
                   {/* Irritants */}
                   {irritants.length > 0 && (
-                    <div style={{marginBottom:"0.75rem"}}>
-                      <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.4rem"}}>Potential irritants</div>
-                      <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
+                    <div>
+                      <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.35rem"}}>Potential irritants</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:"0.3rem"}}>
                         {irritants.map((ing,i)=>(
-                          <div key={i} style={{display:"flex",alignItems:"flex-start",gap:"0.6rem",padding:"0.5rem 0.65rem",background:"#f59e0b0A",borderRadius:"0.6rem",border:"1px solid #f59e0b20"}}>
-                            <div style={{flexShrink:0,marginTop:"1px",width:"20px",height:"20px",borderRadius:"0.35rem",background:"#f59e0b",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                              <span style={{fontSize:"0.65rem",color:"#fff"}}>!</span>
+                          <div key={i} style={{display:"flex",alignItems:"flex-start",gap:"0.5rem",padding:"0.45rem 0.6rem",background:"#f59e0b0A",borderRadius:"0.55rem",border:"1px solid #f59e0b20"}}>
+                            <div style={{flexShrink:0,marginTop:"1px",width:"18px",height:"18px",borderRadius:"0.3rem",background:"#f59e0b",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                              <span style={{fontSize:"0.62rem",color:"#fff"}}>!</span>
                             </div>
                             <div style={{flex:1,minWidth:0}}>
-                              <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>{ing.name}</div>
-                              <div style={{fontSize:"0.68rem",color:T.textMid,marginTop:"1px",lineHeight:1.35}}>{ing.note || "Known skin sensitizer"}</div>
+                              <div style={{fontSize:"0.76rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>{ing.name}</div>
+                              <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"1px",lineHeight:1.3}}>{ing.note || "Known skin sensitizer"}</div>
                             </div>
                           </div>
                         ))}
@@ -2302,10 +2381,10 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
                   {/* Safe highlights */}
                   {safeHighlights.length > 0 && (
                     <div>
-                      <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.4rem"}}>Good stuff in here</div>
-                      <div style={{display:"flex",flexWrap:"wrap",gap:"0.35rem"}}>
+                      <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.35rem"}}>Good stuff in here</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:"0.3rem"}}>
                         {safeHighlights.map((ing,i)=>(
-                          <span key={i} style={{padding:"0.25rem 0.6rem",background:T.sage+"12",border:`1px solid ${T.sage}30`,borderRadius:"999px",fontSize:"0.7rem",color:T.sage,fontWeight:"500",fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>✓ {ing.name}</span>
+                          <span key={i} style={{padding:"0.2rem 0.55rem",background:T.sage+"12",border:`1px solid ${T.sage}30`,borderRadius:"999px",fontSize:"0.68rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>✓ {ing.name}</span>
                         ))}
                       </div>
                     </div>
@@ -2313,9 +2392,9 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
 
                   {/* All clear */}
                   {cloggers.length === 0 && irritants.length === 0 && (
-                    <div style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.5rem 0.65rem",background:T.sage+"0D",borderRadius:"0.6rem",border:`1px solid ${T.sage}25`}}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.sage} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                      <span style={{fontSize:"0.75rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>No flagged ingredients — this formula is pore-safe</span>
+                    <div style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.45rem 0.6rem",background:T.sage+"0D",borderRadius:"0.55rem",border:`1px solid ${T.sage}25`}}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.sage} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      <span style={{fontSize:"0.73rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>No flagged ingredients — this formula is pore-safe</span>
                     </div>
                   )}
                 </div>
@@ -2324,29 +2403,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
           );
         })()}
 
-        {/* Followers who use this */}
-        {followersWhoUse.length>0&&(
-          <div style={{marginBottom:"1rem",padding:"0.65rem 0.85rem",background:T.surfaceAlt,borderRadius:"0.75rem",border:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:"0.65rem"}}>
-            <div style={{display:"flex",flexShrink:0}}>
-              {followersWhoUse.slice(0,4).map((u,i)=>(
-                <div key={u.uid} style={{width:"26px",height:"26px",borderRadius:"50%",overflow:"hidden",border:`2px solid ${T.surface}`,marginLeft:i>0?"-7px":"0",background:"#e0e0e0",flexShrink:0,position:"relative",zIndex:4-i}}>
-                  {u.photoURL
-                    ? <img src={u.photoURL} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
-                    : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:T.accent,fontSize:"0.52rem",fontWeight:"700",color:"#fff"}}>{(u.displayName||"?")[0].toUpperCase()}</div>
-                  }
-                </div>
-              ))}
-            </div>
-            <span style={{fontSize:"0.75rem",color:T.textMid,fontWeight:"500",fontFamily:"'Inter',sans-serif",lineHeight:1.35}}>
-              <b style={{color:T.text,fontWeight:"700"}}>
-                {followersWhoUse.length===1
-                  ? followersWhoUse[0].displayName||"Someone you follow"
-                  : followersWhoUse.slice(0,2).map(u=>u.displayName||"?").join(" & ")}
-              </b>
-              {followersWhoUse.length>2 ? ` + ${followersWhoUse.length-2} more` : ""} {followersWhoUse.length===1?"uses":"use"} this
-            </span>
-          </div>
-        )}
+
 
         {/* Skin types */}
         {product.skinTypes?.length>0&&(
@@ -2368,106 +2425,57 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
           </div>
         )}
 
-        {/* Friends using this product */}
-        {friendsUsing.length > 0 && (
-          <div style={{marginBottom:"1.25rem",padding:"0.85rem",background:T.iceBlue+"40",borderRadius:"0.85rem",border:`1px solid ${T.iceBlue}`}}>
-            <div style={{fontSize:"0.62rem",color:T.navy,textTransform:"uppercase",letterSpacing:"0.1em",fontWeight:"700",marginBottom:"0.6rem",fontFamily:"'Inter',sans-serif"}}>
-              {friendsUsing.length === 1 ? "1 friend uses this" : `${friendsUsing.length} friends use this`}
-            </div>
-            <div style={{display:"flex",alignItems:"center",gap:"0.5rem",flexWrap:"wrap"}}>
-              {friendsUsing.slice(0,5).map((f,i) => (
-                <div key={f.uid} style={{display:"flex",alignItems:"center",gap:"0.35rem"}}>
-                  <div style={{width:"28px",height:"28px",borderRadius:"50%",overflow:"hidden",background:T.navy,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    {f.photoURL
-                      ? <img src={f.photoURL} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
-                      : <span style={{fontSize:"0.6rem",fontWeight:"700",color:"#fff"}}>{(f.displayName||"?")[0].toUpperCase()}</span>
-                    }
-                  </div>
-                  <span style={{fontSize:"0.75rem",fontWeight:"500",color:T.navy,fontFamily:"'Inter',sans-serif"}}>
-                    {f.displayName.split(" ")[0]}
-                    {i < Math.min(friendsUsing.length, 5) - 1 && <span style={{color:T.textLight}}>,</span>}
-                  </span>
-                </div>
-              ))}
-              {friendsUsing.length > 5 && (
-                <span style={{fontSize:"0.72rem",color:T.textLight}}>+{friendsUsing.length - 5} more</span>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Rate this product */}
+        {/* ── Rate this product ── */}
         {user&&(
-          <div style={{marginBottom:"1.25rem"}}>
-            <div style={{fontSize:"0.68rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.5rem"}}>Your rating</div>
+          <div style={{paddingTop:"1rem",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"1.1rem"}}>
+            <div style={{fontSize:"0.6rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",fontWeight:"700",marginBottom:"0.5rem",fontFamily:"'Inter',sans-serif"}}>
+              {submitted ? "Rating saved! ✓" : existingRating ? `Your rating: ${existingRating}/10 — tap to update` : "Rate this product"}
+            </div>
             {loadingExisting ? (
               <div style={{height:"36px",borderRadius:"0.75rem"}} className="skeleton"/>
             ) : (
-              <div style={{display:"flex",flexDirection:"column",gap:"0.4rem",position:"relative",zIndex:1}}>
-                <span style={{fontSize:"0.62rem",color:T.textLight}}>
-                  {submitted ? "Rating saved! ✓" : existingRating ? `Your rating: ${existingRating}/10 — tap to update` : "How much do you love it?"}
-                </span>
-                <div style={{display:"flex",gap:"0.15rem",alignItems:"center"}}>
-                  <div style={{display:"flex",gap:"0.15rem",flex:1,overflow:"hidden"}}>
-                    {[1,2,3,4,5,6,7,8,9,10].map(n=>{
-                      const activeVal = myCommunityRating || existingRating || 0;
-                      return (
-                        <button key={n} onClick={()=>setMyCommunityRating(n===myCommunityRating?0:n)}
-                          style={{flex:1,height:"28px",minWidth:0,borderRadius:"0.25rem",border:`1.5px solid ${n<=activeVal?communityColor(activeVal):T.border}`,background:n<=activeVal?communityColor(activeVal)+"22":"transparent",cursor:"pointer",fontSize:"0.6rem",fontWeight:"700",color:n<=activeVal?communityColor(activeVal):T.textLight,fontFamily:"'Inter',sans-serif",transition:"all 0.1s",padding:0}}>
-                          {n}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <button onClick={submitRating} disabled={submitting||!myCommunityRating}
-                    style={{width:"30px",height:"30px",borderRadius:"50%",background:myCommunityRating?T.accent:T.surfaceAlt,border:"none",cursor:myCommunityRating?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.15s",marginLeft:"0.25rem"}}>
-                    {submitting
-                      ? <div style={{width:"10px",height:"10px",borderRadius:"50%",border:"2px solid #FFFFFF",borderTopColor:"transparent",animation:"spin 0.7s linear infinite"}}/>
-                      : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={myCommunityRating?"#FFFFFF":T.textLight} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                    }
-                  </button>
+              <div style={{display:"flex",gap:"0.15rem",alignItems:"center"}}>
+                <div style={{display:"flex",gap:"0.15rem",flex:1,overflow:"hidden"}}>
+                  {[1,2,3,4,5,6,7,8,9,10].map(n=>{
+                    const activeVal = myCommunityRating || existingRating || 0;
+                    return (
+                      <button key={n} onClick={()=>setMyCommunityRating(n===myCommunityRating?0:n)}
+                        style={{flex:1,height:"32px",minWidth:0,borderRadius:"0.25rem",border:`1.5px solid ${n<=activeVal?communityColor(activeVal):T.border}`,background:n<=activeVal?communityColor(activeVal)+"22":"transparent",cursor:"pointer",fontSize:"0.62rem",fontWeight:"700",color:n<=activeVal?communityColor(activeVal):T.textLight,fontFamily:"'Inter',sans-serif",transition:"all 0.1s",padding:0}}>
+                        {n}
+                      </button>
+                    );
+                  })}
                 </div>
+                <button onClick={submitRating} disabled={submitting||!myCommunityRating}
+                  style={{width:"32px",height:"32px",borderRadius:"50%",background:myCommunityRating?T.accent:T.surfaceAlt,border:"none",cursor:myCommunityRating?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.15s",marginLeft:"0.3rem"}}>
+                  {submitting
+                    ? <div style={{width:"10px",height:"10px",borderRadius:"50%",border:"2px solid #FFFFFF",borderTopColor:"transparent",animation:"spin 0.7s linear infinite"}}/>
+                    : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={myCommunityRating?"#FFFFFF":T.textLight} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  }
+                </button>
               </div>
             )}
           </div>
         )}
 
-        {/* Buy + Share buttons */}
+        {/* ── Shop + Share ── */}
         {(()=>{const url=product.buyUrl||amazonUrl(product.productName||product.name||"",product.brand||"",product.barcode||product.code||"");return(
-        <div style={{display:"flex",gap:"0.6rem",marginBottom:"0.75rem"}}>
-          <a href={url} target="_blank" rel="noopener noreferrer"
-            onClick={()=>trackProductClick(product._productId||product.id||null, product.productName||product.name||"")}
-            style={{flex:1,padding:"0.85rem",background:T.navy,color:"#FFFFFF",borderRadius:"0.75rem",fontSize:"0.88rem",fontWeight:"600",textAlign:"center",textDecoration:"none",fontFamily:"'Inter',sans-serif",boxSizing:"border-box",display:"flex",alignItems:"center",justifyContent:"center"}}>
-            Shop →
-          </a>
-          <button onClick={()=>shareProduct(product.productName||product.name||"",product.brand||"")}
-            style={{width:"44px",minWidth:"44px",padding:"0.85rem",background:"transparent",border:`1.5px solid ${T.border}`,borderRadius:"0.75rem",color:T.textMid,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxSizing:"border-box"}}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-          </button>
-        </div>
+          <div style={{display:"flex",gap:"0.5rem",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"1.1rem"}}>
+            <a href={url} target="_blank" rel="noopener noreferrer"
+              onClick={()=>trackProductClick(product._productId||product.id||null, product.productName||product.name||"")}
+              style={{flex:1,padding:"0.7rem",background:T.navy,color:"#FFFFFF",borderRadius:"0.75rem",fontSize:"0.85rem",fontWeight:"600",textAlign:"center",textDecoration:"none",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+              Shop
+            </a>
+            <button onClick={()=>shareProduct(product.productName||product.name||"",product.brand||"")}
+              style={{padding:"0.7rem 1rem",background:"transparent",border:`1.5px solid ${T.border}`,borderRadius:"0.75rem",color:T.textMid,cursor:"pointer",display:"flex",alignItems:"center",gap:"0.35rem",fontFamily:"'Inter',sans-serif",fontSize:"0.82rem",fontWeight:"600"}}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+              Share
+            </button>
+          </div>
         );})()}
 
-        {/* Add to lists — inline pills right below Shop */}
-        {user&&(
-          <div style={{display:"flex",gap:"0.35rem",marginBottom:"1.25rem",position:"relative",zIndex:2}}>
-            {[
-              {field:"routine",   label:"Routine",    color:T.sage,  active:inRoutine},
-              {field:"brokeout",  label:"Broke Out",  color:T.rose,  active:inBrokeout},
-              {field:"wantToTry", label:"Want to Try",color:T.amber, active:inWantToTry},
-            ].map(({field,label,color,active})=>(
-              <button key={field} onClick={()=>toggleList(field,active)}
-                style={{flex:1,display:"inline-flex",alignItems:"center",justifyContent:"center",gap:"0.25rem",padding:"0.4rem 0.25rem",background:active?color:T.surfaceAlt,border:`1.5px solid ${active?color:T.border}`,borderRadius:"0.6rem",cursor:"pointer",transition:"all 0.15s",fontFamily:"'Inter',sans-serif",boxShadow:active?`0 2px 8px ${color}44`:"none",minWidth:0}}>
-                {active
-                  ? <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
-                  : <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                }
-                <span style={{fontSize:"0.7rem",fontWeight:"600",color:active?"#fff":T.textMid,letterSpacing:"-0.01em",whiteSpace:"nowrap"}}>{label}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Full ingredient list */}
+                {/* Full ingredient list */}
         {product.ingredients&&product.ingredients.trim()&&(
           <div style={{marginBottom:"1rem"}}>
             {/* Key Actives */}
@@ -3132,6 +3140,12 @@ function SearchResultCard({p, onSelect}) {
       <div style={{padding:"0.5rem 0.6rem"}}>
         <div style={{fontSize:"0.75rem",color:T.text,fontWeight:"600",lineHeight:"1.3",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{p.name}</div>
         {p.brand&&<div style={{fontSize:"0.65rem",color:T.textMid,fontWeight:"400",marginTop:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.brand}</div>}
+        {(p.communityRating||p.scanCount>0)&&(
+          <div style={{display:"flex",alignItems:"center",gap:"0.35rem",marginTop:"0.3rem",flexWrap:"wrap"}}>
+            {p.communityRating&&<span style={{fontSize:"0.58rem",color:T.textMid,fontWeight:"600"}}>⭐ {p.communityRating}/10</span>}
+            {p.scanCount>0&&<span style={{fontSize:"0.55rem",color:T.textLight}}>{p.scanCount} {p.scanCount===1?"rally":"rallies"}</span>}
+          </div>
+        )}
       </div>
     </button>
   );
@@ -3269,10 +3283,11 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
 
   async function onBarcode(code) {
     setCameraMode("processing"); setCameraErr("");
+    debugLog("info", `Barcode scanned: ${code}`);
     try {
-      // 1. Check our Firestore catalog first (instant)
       const existing = await getProductByBarcode(code);
       if (existing && existing.ingredients) {
+        debugLog("ok", `Found in catalog: ${existing.productName}`);
         setIngredients(existing.ingredients||"");
         setProductName(existing.productName);
         setBrand(existing.brand||"");
@@ -3284,8 +3299,9 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
         setCameraMode("choose");
         return;
       }
-      // 2. Fall back to Open Beauty Facts
+      debugLog("info", `Not in catalog — trying OBF for ${code}`);
       const p = await lookupBarcode(code);
+      debugLog("ok", `OBF found: ${p.name} (ingredients: ${p.hasIngredients})`);
       setProductName(p.name); setBrand(p.brand);
       setCurrentBarcode(code);
       setPostSource("scan");
@@ -3296,19 +3312,18 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
         setInputMode("type");
         setCameraMode("choose");
       } else {
-        // Found product but no ingredients — show product, prompt to photograph label
         setIngredients("");
         setInputMode("type");
         setCameraMode("choose");
         setCameraErr(`Found "${p.name}" but no ingredient list yet — photograph the ingredients label on the back to analyse it, or paste it below.`);
       }
-      // Save to catalog in background
       upsertProduct(code, {
         productName: p.name, brand: p.brand,
         ingredients: p.ingredients, image: p.image||"",
         source: "scan",
       }).catch(()=>{});
     } catch(e) {
+      debugLog("error", `Barcode lookup failed: ${e.message}`);
       setCameraMode("choose");
       if (e.message?.includes("not found") || e.message?.includes("Not found")) {
         setCameraErr("Product not found. Photograph the ingredient list on the back of the packaging, or search by name above.");
@@ -3322,22 +3337,29 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
     const file=e.target.files?.[0]; if(!file) return;
     setCameraErr(""); setPhotoPreview(URL.createObjectURL(file)); setCameraMode("processing");
     setAiStatus("Reading label…");
+    debugLog("info", `Photo: ${file.name} ${(file.size/1024).toFixed(0)}kb ${file.type}`);
+    if (!ANTHROPIC_KEY) debugLog("error", "No ANTHROPIC_KEY set — AI scan will fail");
     try {
       const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
+      debugLog("info", "Sending image to Claude AI…");
       const result=await extractFromPhoto(b64,file.type);
+      debugLog("ok", `AI response: ${result.slice(0,120)}`);
       if(result.startsWith("BARCODE:")) {
         setAiStatus("Found barcode — looking up product…");
-        const p=await lookupBarcode(result.replace("BARCODE:","").trim());
+        const bcode = result.replace("BARCODE:","").trim();
+        debugLog("info", `Barcode from photo: ${bcode}`);
+        const p=await lookupBarcode(bcode);
+        debugLog("ok", `OBF: ${p.name} | ingredients: ${p.hasIngredients}`);
         setIngredients(p.ingredients||""); setProductName(p.name); setBrand(p.brand);
         if (p.hasIngredients) {
           setAiStatus("Analysing ingredients…");
           const res = analyzeIngredients(p.ingredients);
           setResults(res);
+          debugLog("ok", `Score: ${Math.round(res.avgScore??0)} | flagged: ${res.found?.length??0}`);
         } else {
           setCameraErr(`Found "${p.name}" but no ingredient list on file — paste the ingredients below.`);
         }
       } else if(result.includes("INGREDIENTS:")) {
-        // Parse structured response with optional NAME/BRAND
         const nameMatch = result.match(/^NAME:(.+)$/m);
         const brandMatch = result.match(/^BRAND:(.+)$/m);
         const ingMatch = result.match(/^INGREDIENTS:(.+)$/ms);
@@ -3349,18 +3371,20 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
           setAiStatus("Scoring ingredients…");
           const res = analyzeIngredients(ingText);
           setResults(res);
+          debugLog("ok", `Structured: ${ingText.slice(0,80)} | score: ${Math.round(res.avgScore??0)}`);
         }
       } else {
-        // Plain ingredient list (legacy format)
         setIngredients(result);
         setAiStatus("Scoring ingredients…");
         const res = analyzeIngredients(result);
         setResults(res);
+        debugLog("ok", `Plain ingredients: ${result.slice(0,80)} | score: ${Math.round(res.avgScore??0)}`);
       }
       setInputMode("type");
       setCameraMode("choose");
       setAiStatus("");
     } catch(e) {
+      debugLog("error", `Photo scan error: ${e.message}`);
       setAiStatus("");
       setCameraErr(e.message || "Couldn't read image. Try better lighting or move closer.");
       setCameraMode("choose");
@@ -3939,7 +3963,23 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
   }, [ffSearch]);
 
   // ── Mock community posts — show a lively feed out of the box ──
-  const MOCK_POSTS = [];
+  const MOCK_POSTS = [
+    {id:"mock_01",uid:"seed_u01",displayName:"Avery Kim",photoURL:"https://i.pravatar.cc/150?img=1",productName:"CeraVe Moisturizing Cream",brand:"CeraVe",poreScore:3,productImage:"",communityRating:9,postType:"loved",ingredients:"water, glycerin, cetearyl alcohol, ceramide np, ceramide ap, ceramide eop, cholesterol, sodium hyaluronate, niacinamide, panthenol, allantoin",flaggedIngredients:[],likes:["seed_u02","seed_u03","seed_u04"],comments:[{uid:"seed_u02",displayName:"Jordan Lee",photoURL:"https://i.pravatar.cc/150?img=2",text:"my holy grail forever 💙"}],createdAt:{seconds:Math.floor(Date.now()/1000)-3600}},
+    {id:"mock_02",uid:"seed_u02",displayName:"Jordan Lee",photoURL:"https://i.pravatar.cc/150?img=2",productName:"The Ordinary Niacinamide 10%",brand:"The Ordinary",poreScore:0,productImage:"",communityRating:8,postType:"loved",ingredients:"aqua, niacinamide, pentylene glycol, zinc pca, sodium hyaluronate, tamarindus indica seed gum",flaggedIngredients:[],likes:["seed_u01","seed_u04","seed_u05"],comments:[{uid:"seed_u03",displayName:"Maya Rivera",photoURL:"https://i.pravatar.cc/150?img=3",text:"does this work for sensitive skin?"},{uid:"seed_u01",displayName:"Avery Kim",photoURL:"https://i.pravatar.cc/150?img=1",text:"yes!! so gentle"}],createdAt:{seconds:Math.floor(Date.now()/1000)-7200}},
+    {id:"mock_03",uid:"seed_u03",displayName:"Maya Rivera",photoURL:"https://i.pravatar.cc/150?img=3",productName:"EltaMD UV Clear SPF 46",brand:"EltaMD",poreScore:2,productImage:"",communityRating:10,postType:"loved",ingredients:"zinc oxide 9.0%, niacinamide, hyaluronic acid, lactic acid, tocopheryl acetate, glycerin",flaggedIngredients:[],likes:["seed_u01","seed_u02","seed_u05"],comments:[{uid:"seed_u04",displayName:"Priya K",photoURL:"https://i.pravatar.cc/150?img=5",text:"THE best SPF for acne-prone skin 🙌"}],createdAt:{seconds:Math.floor(Date.now()/1000)-18000}},
+    {id:"mock_04",uid:"seed_u04",displayName:"Priya K",photoURL:"https://i.pravatar.cc/150?img=5",productName:"Cosrx Snail Mucin 96%",brand:"Cosrx",poreScore:0,productImage:"",communityRating:9,postType:"loved",ingredients:"snail secretion filtrate 96.3%, betaine, sodium polyacrylate, hyaluronic acid, panthenol, allantoin",flaggedIngredients:[],likes:["seed_u03","seed_u06"],comments:[{uid:"seed_u06",displayName:"Emma Walsh",photoURL:"https://i.pravatar.cc/150?img=7",text:"obsessed with this 😍"}],createdAt:{seconds:Math.floor(Date.now()/1000)-28800}},
+    {id:"mock_05",uid:"seed_u05",displayName:"Sofia Reyes",photoURL:"https://i.pravatar.cc/150?img=6",productName:"Paula's Choice BHA Exfoliant",brand:"Paula's Choice",poreScore:0,productImage:"",communityRating:8,postType:"loved",ingredients:"water, methylpropanediol, butylene glycol, salicylic acid, polysorbate 20, camellia oleifera leaf extract, allantoin",flaggedIngredients:[],likes:["seed_u02","seed_u04"],comments:[{uid:"seed_u07",displayName:"Lily Park",photoURL:"https://i.pravatar.cc/150?img=10",text:"this cleared my skin in 2 weeks no joke"}],createdAt:{seconds:Math.floor(Date.now()/1000)-43200}},
+    {id:"mock_06",uid:"seed_u06",displayName:"Emma Walsh",photoURL:"https://i.pravatar.cc/150?img=7",productName:"Laneige Lip Sleeping Mask",brand:"Laneige",poreScore:4,productImage:"",communityRating:7,postType:"brokeout",ingredients:"polybutene, phytosteryl/octyldodecyl lauroyl glutamate, hydrogenated polyisobutene, dipentaerythrityl hexacaprylate, fragrance, tocopheryl acetate",flaggedIngredients:["fragrance","tocopheryl acetate"],likes:["seed_u01","seed_u03"],comments:[{uid:"seed_u08",displayName:"Nadia O",photoURL:"https://i.pravatar.cc/150?img=12",text:"pore clog score is higher than I expected 😬"}],createdAt:{seconds:Math.floor(Date.now()/1000)-57600}},
+    {id:"mock_07",uid:"seed_u07",displayName:"Zoe Thompson",photoURL:"https://i.pravatar.cc/150?img=9",productName:"Drunk Elephant Protini Polypeptide",brand:"Drunk Elephant",poreScore:1,productImage:"",communityRating:8,postType:"wantToTry",ingredients:"water, glycerin, pentylene glycol, cetearyl alcohol, dimethicone, palmitoyl tripeptide-1, sodium hyaluronate, allantoin, panthenol",flaggedIngredients:[],likes:["seed_u02","seed_u05"],comments:[{uid:"seed_u09",displayName:"Chloe M",photoURL:"https://i.pravatar.cc/150?img=13",text:"the texture is so luxurious ✨"}],createdAt:{seconds:Math.floor(Date.now()/1000)-72000}},
+    {id:"mock_08",uid:"seed_u08",displayName:"Lily Park",photoURL:"https://i.pravatar.cc/150?img=10",productName:"Glow Recipe Watermelon Toner",brand:"Glow Recipe",poreScore:1,productImage:"",communityRating:7,postType:"loved",ingredients:"water, citrullus lanatus fruit extract, glycerin, hyaluronic acid, niacinamide, aloe barbadensis leaf juice, sodium hyaluronate",flaggedIngredients:[],likes:["seed_u03","seed_u07"],comments:[{uid:"seed_u10",displayName:"Hannah Kim",photoURL:"https://i.pravatar.cc/150?img=16",text:"just ordered this because of your post!"}],createdAt:{seconds:Math.floor(Date.now()/1000)-90000}},
+    {id:"mock_09",uid:"seed_u09",displayName:"Nadia O",photoURL:"https://i.pravatar.cc/150?img=12",productName:"Sunday Riley Good Genes",brand:"Sunday Riley",poreScore:1,productImage:"",communityRating:9,postType:"loved",ingredients:"water, lactic acid, glycerin, aloe barbadensis leaf juice, sodium hydroxide, paeonia albiflora root extract, licorice root extract",flaggedIngredients:[],likes:["seed_u01","seed_u04","seed_u06"],comments:[{uid:"seed_u11",displayName:"Tara Singh",photoURL:"https://i.pravatar.cc/150?img=18",text:"this faded my dark spots SO fast"}],createdAt:{seconds:Math.floor(Date.now()/1000)-108000}},
+    {id:"mock_10",uid:"seed_u10",displayName:"Chloe M",photoURL:"https://i.pravatar.cc/150?img=13",productName:"La Roche-Posay Toleriane Cleanser",brand:"La Roche-Posay",poreScore:0,productImage:"",communityRating:8,postType:"loved",ingredients:"aqua, glycerin, cocamidopropyl betaine, sodium lauroyl methyl isethionate, sodium chloride, citric acid, sodium benzoate",flaggedIngredients:[],likes:["seed_u02","seed_u05","seed_u07"],comments:[{uid:"seed_u12",displayName:"Mia J",photoURL:"https://i.pravatar.cc/150?img=20",text:"gentle enough for my rosacea 🙏"}],createdAt:{seconds:Math.floor(Date.now()/1000)-129600}},
+    {id:"mock_11",uid:"seed_u11",displayName:"Tara Singh",photoURL:"https://i.pravatar.cc/150?img=18",productName:"Summer Fridays Jet Lag Mask",brand:"Summer Fridays",poreScore:1,productImage:"",communityRating:8,postType:"loved",ingredients:"water, glycerin, niacinamide, squalane, centella asiatica extract, hyaluronic acid, oat extract, allantoin, ceramide np",flaggedIngredients:[],likes:["seed_u01","seed_u07","seed_u09"],comments:[{uid:"seed_u02",displayName:"Jordan Lee",photoURL:"https://i.pravatar.cc/150?img=2",text:"scored surprisingly clean! 🌿"}],createdAt:{seconds:Math.floor(Date.now()/1000)-151200}},
+    {id:"mock_12",uid:"seed_u12",displayName:"Mia J",photoURL:"https://i.pravatar.cc/150?img=20",productName:"First Aid Beauty KP Bump Eraser",brand:"First Aid Beauty",poreScore:1,productImage:"",communityRating:8,postType:"loved",ingredients:"water, glycolic acid, lactic acid, glycerin, urea, allantoin, aloe barbadensis leaf juice, salicylic acid",flaggedIngredients:[],likes:["seed_u03","seed_u06","seed_u10"],comments:[{uid:"seed_u07",displayName:"Lily Park",photoURL:"https://i.pravatar.cc/150?img=10",text:"this + CeraVe lotion after = game changer"}],createdAt:{seconds:Math.floor(Date.now()/1000)-172800}},
+    {id:"mock_13",uid:"seed_u13",displayName:"Hannah Kim",photoURL:"https://i.pravatar.cc/150?img=16",productName:"Kiehl's Ultra Facial Cream",brand:"Kiehl's",poreScore:3,productImage:"",communityRating:6,postType:"brokeout",ingredients:"water, glycerin, squalane, petrolatum, stearyl alcohol, avocado oil, tocopheryl acetate, glacial glycoprotein",flaggedIngredients:["avocado oil","tocopheryl acetate"],likes:["seed_u04","seed_u08"],comments:[{uid:"seed_u05",displayName:"Sofia Reyes",photoURL:"https://i.pravatar.cc/150?img=6",text:"the avocado oil breaks me out 😔"}],createdAt:{seconds:Math.floor(Date.now()/1000)-194400}},
+    {id:"mock_14",uid:"seed_u14",displayName:"Ruby Nguyen",photoURL:"https://i.pravatar.cc/150?img=22",productName:"Tatcha The Water Cream",brand:"Tatcha",poreScore:1,productImage:"",communityRating:9,postType:"loved",ingredients:"water, glycerin, dimethicone, isononyl isononanoate, niacinamide, pentylene glycol, haematococcus pluvialis extract, sodium hyaluronate",flaggedIngredients:[],likes:["seed_u01","seed_u02","seed_u04","seed_u07"],comments:[{uid:"seed_u03",displayName:"Maya Rivera",photoURL:"https://i.pravatar.cc/150?img=3",text:"using this on my wedding day 💍"}],createdAt:{seconds:Math.floor(Date.now()/1000)-216000}},
+    {id:"mock_15",uid:"seed_u15",displayName:"Ines Dubois",photoURL:"https://i.pravatar.cc/150?img=15",productName:"Neutrogena Hydro Boost Gel",brand:"Neutrogena",poreScore:1,productImage:"",communityRating:7,postType:"wantToTry",ingredients:"water, dimethicone, glycerin, dimethicone/vinyl dimethicone crosspolymer, sodium hyaluronate, phenoxyethanol, carbomer, sodium hydroxide",flaggedIngredients:[],likes:["seed_u03","seed_u06","seed_u10"],comments:[{uid:"seed_u15",displayName:"Ruby Nguyen",photoURL:"https://i.pravatar.cc/150?img=22",text:"this is so good for summer heat"}],createdAt:{seconds:Math.floor(Date.now()/1000)-237600}},
+  ];
 
   // Looks up full product from Firestore by name to get authoritative ingredients/score
   async function openProductFromPost(post) {
@@ -3995,9 +4035,12 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
         getNotifications(user.uid),
       ]);
       const FEED_TYPES = new Set(["brokeout","wantToTry","loved","commented"]);
-      const merged = p
-        .filter(post => FEED_TYPES.has(post.postType))
+      const realPosts = p.filter(post => FEED_TYPES.has(post.postType))
         .sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+      // Merge seed posts — deduplicate by productName so real posts take priority
+      const realProductNames = new Set(realPosts.map(p => p.productName?.toLowerCase()));
+      const seedPosts = MOCK_POSTS.filter(m => !realProductNames.has(m.productName?.toLowerCase()));
+      const merged = [...realPosts, ...seedPosts];
       setPosts(merged);
       setNotifs(n);
     } catch(e) { console.error("loadFeed", e); }
@@ -4295,6 +4338,8 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
                           ? <span style={{fontSize:"0.5rem",color:T.amber,background:T.amber+"15",padding:"0.05rem 0.3rem",borderRadius:"999px",border:`1px solid ${T.amber}30`,fontWeight:"600"}}>Pending</span>
                           : <span style={{fontSize:"0.45rem",color:T.textLight,background:T.surfaceAlt,padding:"0.05rem 0.25rem",borderRadius:"999px",border:`1px solid ${T.border}`}}>OBF</span>
                         }
+                        {p.communityRating&&<span style={{fontSize:"0.5rem",color:T.textMid,fontWeight:"500"}}>⭐ {p.communityRating}/10</span>}
+                        {p.scanCount>0&&<span style={{fontSize:"0.48rem",color:T.textLight}}>{p.scanCount} {p.scanCount===1?"scan":"scans"}</span>}
                       </div>
                     </button>
                   );
@@ -4450,7 +4495,8 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
         ? <FeedSkeleton/>
         : (()=>{
             const friendCount = (profile?.following||[]).length;
-            const hasFriendPosts = posts.length > 0;
+            const realPosts = posts.filter(p => !p.uid?.startsWith("seed_"));
+            const hasFriendPosts = realPosts.length > 0;
             const recentNotifs = (notifs||[]).filter(n=>["like","comment","follow"].includes(n.type)).slice(0,5);
             const doFollow = async uid => { await followUser(user.uid,uid,profile?.displayName||"Someone",profile?.photoURL||""); onUpdateProfile({...profile,following:[...(profile?.following||[]),uid]}); };
 
@@ -4473,7 +4519,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
 
             // ── FOR YOU TAB: always shows rich community content ───
             if (tab==="forYou") {
-              const allCommunity = [...posts];
+              const allCommunity = [...posts, ...MOCK_POSTS.filter(m=>!posts.some(p=>p.productName?.toLowerCase()===m.productName?.toLowerCase()))];
               const seen = new Set();
               const topPosts = allCommunity
                 .filter(p=>{ const k=p.productName?.toLowerCase()||p.id; if(seen.has(k))return false; seen.add(k); return true; })
@@ -4497,12 +4543,14 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
             // ── FOLLOWING TAB: Empty state ─────────────────────────
             if (!hasFriendPosts) return (
               <div>
-                <div style={{textAlign:"center",padding:"2rem 1rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
+                <div style={{textAlign:"center",padding:"2rem 1rem 1rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
                   <div style={{fontSize:"2rem",marginBottom:"0.5rem"}}>👋</div>
                   <div style={{fontSize:"0.9rem",fontWeight:"600",color:T.text,marginBottom:"0.35rem"}}>Your following feed is empty</div>
                   <div style={{fontSize:"0.78rem",lineHeight:1.5,marginBottom:"1rem"}}>Follow some people to see their skincare scans here.</div>
                   <button onClick={()=>setTab("friends")} style={{padding:"0.6rem 1.5rem",background:T.accent,color:"#fff",border:"none",borderRadius:"999px",fontSize:"0.8rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Find Friends →</button>
                 </div>
+                <FeedSectionLabel label="What the community is using"/>
+                {MOCK_POSTS.slice(0,8).map((p,i)=><CardReveal key={p.id} delay={i*40}><PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/></CardReveal>)}
                 <DiscoverCard label="Suggested for you"/>
               </div>
             );
@@ -4512,7 +4560,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
 
             // ── Network group cards: products used by 2+ people you follow ──
             const networkMap = {};
-            posts.forEach(p => {
+            realPosts.forEach(p => {
               if (!p.productName) return;
               const key = p.productName.toLowerCase().trim();
               if (!networkMap[key]) networkMap[key] = {post: p, users: []};
@@ -4525,9 +4573,8 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
               .sort((a,b) => b.users.length - a.users.length)
               .slice(0, 3);
 
-            // Dedupe: remove posts that appear in a network group card
             const groupedProductKeys = new Set(networkGroups.map(g => g.post.productName.toLowerCase().trim()));
-            const soloPost = posts.filter(p => !groupedProductKeys.has((p.productName||"").toLowerCase().trim()));
+            const soloPost = realPosts.filter(p => !groupedProductKeys.has((p.productName||"").toLowerCase().trim()));
 
             // ── Trending global (non-follows) ──
             const trendingGlobal = globalPostsRef.current
@@ -5234,7 +5281,7 @@ function DeleteAccountModal({ user, onClose, onDeleted }) {
         {step === "done" ? (
           <div style={{textAlign:"center",padding:"2rem 0"}}>
             <div style={{fontSize:"2.5rem",marginBottom:"0.75rem"}}>👋</div>
-            <div style={{fontSize:"1.1rem",fontWeight:"700",color:T.text,marginBottom:"0.4rem",fontFamily:"'Outfit',sans-serif"}}>Account deleted</div>
+            <div style={{fontSize:"1.1rem",fontWeight:"700",color:T.text,marginBottom:"0.4rem",fontFamily:"'Inter',sans-serif"}}>Account deleted</div>
             <div style={{fontSize:"0.82rem",color:T.textLight}}>All your data has been removed.</div>
           </div>
         ) : step === "deleting" ? (
@@ -5249,7 +5296,7 @@ function DeleteAccountModal({ user, onClose, onDeleted }) {
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={T.rose} strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
               </div>
               <div>
-                <div style={{fontSize:"1rem",fontWeight:"700",color:T.text,fontFamily:"'Outfit',sans-serif"}}>Delete account</div>
+                <div style={{fontSize:"1rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>Delete account</div>
                 <div style={{fontSize:"0.72rem",color:T.textLight}}>This cannot be undone</div>
               </div>
             </div>
@@ -5738,7 +5785,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
           <ListSection
             title="My Routine" icon="✦" color={T.sage}
             items={routine} isPrivate={!!privacy.routine}
-            readOnly={!editing}
+            readOnly={false}
             onTogglePrivacy={()=>togglePrivacy("routine")}
             onAdd={v=>addToList("routine",v)}
             onRemove={v=>removeFromList("routine",v)}
@@ -5748,7 +5795,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
           <ListSection
             title="Broke Me Out" icon="!" color={T.rose}
             items={brokeout} isPrivate={!!privacy.brokeout}
-            readOnly={!editing}
+            readOnly={false}
             onTogglePrivacy={()=>togglePrivacy("brokeout")}
             onAdd={v=>addToList("brokeout",v)}
             onRemove={v=>removeFromList("brokeout",v)}
@@ -5758,7 +5805,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
           <ListSection
             title="Want to Try" icon="→" color={T.amber}
             items={wantToTry} isPrivate={!!privacy.wantToTry}
-            readOnly={!editing}
+            readOnly={false}
             onTogglePrivacy={()=>togglePrivacy("wantToTry")}
             onAdd={v=>addToList("wantToTry",v)}
             onRemove={v=>removeFromList("wantToTry",v)}
@@ -12616,6 +12663,157 @@ if (typeof document !== "undefined") {
   const appleLink = document.createElement('link'); appleLink.rel = 'apple-touch-icon'; appleLink.href = iconSvg; document.head.appendChild(appleLink);
 }
 
+// ── Debug Panel — admin-only floating log viewer ─────────────
+const debugLogs = { entries: [], listeners: [] };
+function debugLog(type, msg, data) {
+  const entry = { type, msg, data, ts: Date.now() };
+  debugLogs.entries.unshift(entry);
+  if (debugLogs.entries.length > 80) debugLogs.entries.pop();
+  debugLogs.listeners.forEach(fn => fn([...debugLogs.entries]));
+}
+// Intercept console.error and console.warn globally
+const _origError = console.error;
+const _origWarn  = console.warn;
+console.error = (...args) => { _origError(...args); debugLog("error", args.map(a=>typeof a==="object"?JSON.stringify(a):String(a)).join(" ")); };
+console.warn  = (...args) => { _origWarn(...args);  debugLog("warn",  args.map(a=>typeof a==="object"?JSON.stringify(a):String(a)).join(" ")); };
+
+function DebugPanel({ user }) {
+  const [open, setOpen] = React.useState(false);
+  const [logs, setLogs] = React.useState([...debugLogs.entries]);
+  const [filter, setFilter] = React.useState("all");
+  const [testStatus, setTestStatus] = React.useState("");
+
+  React.useEffect(() => {
+    debugLogs.listeners.push(setLogs);
+    return () => { debugLogs.listeners = debugLogs.listeners.filter(fn => fn !== setLogs); };
+  }, []);
+
+  if (!isAdmin(user)) return null;
+
+  const filtered = filter === "all" ? logs : logs.filter(l => l.type === filter);
+  const errorCount = logs.filter(l => l.type === "error").length;
+
+  const typeColor = { error:"#f87171", warn:"#fbbf24", info:"#60a5fa", ok:"#4ade80", network:"#c084fc" };
+
+  async function testAnthropicKey() {
+    setTestStatus("Testing…");
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method:"POST",
+        headers:{"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+        body: JSON.stringify({ model:"claude-haiku-4-5-20251001", max_tokens:10, messages:[{role:"user",content:"hi"}] })
+      });
+      const d = await res.json();
+      if (d.error) { setTestStatus("❌ " + d.error.message); debugLog("error", "API key test failed: " + d.error.message); }
+      else { setTestStatus("✅ API key works"); debugLog("ok", "API key test passed"); }
+    } catch(e) { setTestStatus("❌ " + e.message); debugLog("error", "API key test error: " + e.message); }
+  }
+
+  async function testOBF() {
+    setTestStatus("Testing OBF…");
+    try {
+      const r = await fetch("https://world.openbeautyfacts.org/api/v0/product/3337875545082.json", {signal:AbortSignal.timeout(8000)});
+      const d = await r.json();
+      if (d.status === 1) { setTestStatus("✅ OBF reachable"); debugLog("ok", "OBF test passed: " + d.product?.product_name); }
+      else { setTestStatus("❌ OBF: product not found"); }
+    } catch(e) { setTestStatus("❌ OBF unreachable: " + e.message); debugLog("error", "OBF test failed: " + e.message); }
+  }
+
+  function addManualLog() {
+    debugLog("info", "Manual test entry — " + new Date().toLocaleTimeString());
+  }
+
+  return (
+    <>
+      {/* Floating toggle button */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          position:"fixed", bottom:"calc(5.5rem + env(safe-area-inset-bottom))", right:"1rem",
+          zIndex:9998, width:"40px", height:"40px", borderRadius:"50%",
+          background: errorCount > 0 ? "#ef4444" : "#111827",
+          border:"2px solid rgba(255,255,255,0.2)",
+          color:"#fff", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
+          boxShadow:"0 2px 12px rgba(0,0,0,0.4)", fontSize:"1rem",
+          fontFamily:"'Inter',sans-serif",
+        }}>
+        {open ? "✕" : errorCount > 0 ? <span style={{fontSize:"0.65rem",fontWeight:"800"}}>{errorCount > 9 ? "9+" : errorCount}!</span> : "🐛"}
+      </button>
+
+      {/* Panel */}
+      {open && (
+        <div style={{
+          position:"fixed", bottom:"calc(7.5rem + env(safe-area-inset-bottom))", right:"0.75rem", left:"0.75rem",
+          maxWidth:"480px", margin:"0 auto",
+          zIndex:9997, background:"#0d1117", borderRadius:"1rem",
+          border:"1px solid rgba(255,255,255,0.1)", boxShadow:"0 8px 40px rgba(0,0,0,0.6)",
+          maxHeight:"60vh", display:"flex", flexDirection:"column", overflow:"hidden",
+          fontFamily:"monospace",
+        }}>
+          {/* Header */}
+          <div style={{padding:"0.65rem 0.85rem", borderBottom:"1px solid rgba(255,255,255,0.08)", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0}}>
+            <span style={{fontSize:"0.75rem", fontWeight:"700", color:"#fff"}}>🐛 Debug Console</span>
+            <div style={{display:"flex", gap:"0.35rem"}}>
+              {["all","error","warn","info","ok"].map(f => (
+                <button key={f} onClick={() => setFilter(f)}
+                  style={{fontSize:"0.55rem", padding:"0.15rem 0.4rem", borderRadius:"4px", border:"none", cursor:"pointer", background: filter===f ? typeColor[f]||"#fff" : "rgba(255,255,255,0.1)", color: filter===f ? "#000" : "#aaa", fontFamily:"monospace", fontWeight:"600"}}>
+                  {f}
+                </button>
+              ))}
+              <button onClick={() => { debugLogs.entries = []; setLogs([]); }}
+                style={{fontSize:"0.55rem", padding:"0.15rem 0.4rem", borderRadius:"4px", border:"none", cursor:"pointer", background:"rgba(239,68,68,0.3)", color:"#f87171", fontFamily:"monospace"}}>
+                clr
+              </button>
+            </div>
+          </div>
+
+          {/* Quick tests */}
+          <div style={{padding:"0.5rem 0.85rem", borderBottom:"1px solid rgba(255,255,255,0.08)", display:"flex", gap:"0.4rem", alignItems:"center", flexShrink:0, flexWrap:"wrap"}}>
+            <button onClick={testAnthropicKey} style={{fontSize:"0.6rem", padding:"0.2rem 0.55rem", borderRadius:"4px", border:"none", cursor:"pointer", background:"rgba(99,102,241,0.3)", color:"#a5b4fc", fontFamily:"monospace"}}>Test AI Key</button>
+            <button onClick={testOBF} style={{fontSize:"0.6rem", padding:"0.2rem 0.55rem", borderRadius:"4px", border:"none", cursor:"pointer", background:"rgba(34,197,94,0.2)", color:"#86efac", fontFamily:"monospace"}}>Test OBF</button>
+            <button onClick={addManualLog} style={{fontSize:"0.6rem", padding:"0.2rem 0.55rem", borderRadius:"4px", border:"none", cursor:"pointer", background:"rgba(255,255,255,0.1)", color:"#aaa", fontFamily:"monospace"}}>Ping</button>
+            <span style={{fontSize:"0.6rem", color: ANTHROPIC_KEY ? "#4ade80" : "#f87171", marginLeft:"auto"}}>
+              {ANTHROPIC_KEY ? `✓ Key: …${ANTHROPIC_KEY.slice(-6)}` : "✗ No API key"}
+            </span>
+          </div>
+          {testStatus && (
+            <div style={{padding:"0.3rem 0.85rem", background:"rgba(255,255,255,0.05)", fontSize:"0.65rem", color:"#e2e8f0", borderBottom:"1px solid rgba(255,255,255,0.08)", flexShrink:0}}>
+              {testStatus}
+            </div>
+          )}
+
+          {/* Log entries */}
+          <div style={{overflowY:"auto", flex:1, padding:"0.4rem 0"}}>
+            {filtered.length === 0 && (
+              <div style={{textAlign:"center", padding:"1.5rem", color:"#4b5563", fontSize:"0.7rem"}}>No logs yet</div>
+            )}
+            {filtered.map((entry, i) => (
+              <div key={i} style={{padding:"0.25rem 0.85rem", borderBottom:"1px solid rgba(255,255,255,0.04)", display:"flex", gap:"0.5rem", alignItems:"flex-start"}}>
+                <span style={{fontSize:"0.55rem", color: typeColor[entry.type] || "#9ca3af", flexShrink:0, marginTop:"2px", fontWeight:"700", textTransform:"uppercase", minWidth:"36px"}}>
+                  {entry.type}
+                </span>
+                <span style={{fontSize:"0.65rem", color: entry.type==="error" ? "#fca5a5" : entry.type==="warn" ? "#fde68a" : "#d1d5db", lineHeight:1.45, wordBreak:"break-all"}}>
+                  {entry.msg}
+                </span>
+                <span style={{fontSize:"0.5rem", color:"#374151", flexShrink:0, marginTop:"2px"}}>
+                  {new Date(entry.ts).toLocaleTimeString()}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Device info footer */}
+          <div style={{padding:"0.4rem 0.85rem", borderTop:"1px solid rgba(255,255,255,0.08)", flexShrink:0}}>
+            <div style={{fontSize:"0.55rem", color:"#4b5563", lineHeight:1.6}}>
+              {navigator.userAgent.slice(0, 80)} · {window.innerWidth}×{window.innerHeight}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function App() {
   return <ErrorBoundary><AppInner/></ErrorBoundary>;
 }
@@ -12858,6 +13056,7 @@ function AppInner() {
           Auto-fix running… {afLog.filter(l=>l.type==="ok").length} fixed
         </div>
       )}
+      <DebugPanel user={user}/>
     </div></>
   );
 }
