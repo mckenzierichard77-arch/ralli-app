@@ -150,14 +150,14 @@ const INGDB = {
   "myristyl myristate":          {score:5, note:"Very likely to cause breakouts",                   aliases:[]},
   "myristyl propionate":         {score:4, note:"High pore-clogging ester",                         aliases:[]},
   "octyl palmitate":             {score:4, note:"Skin-softening compound that often clogs pores",   aliases:["ethylhexyl palmitate","2-ethylhexyl palmitate"]},
-  "flaxseed oil":                {score:4, note:"Omega-3 oil that tends to clog pores",             aliases:["linum usitatissimum seed oil","linseed oil"]},
-  "algae extract":               {score:4, note:"Can clog pores significantly",                     aliases:["seaweed extract","algae"]},
+  "flaxseed oil":                {score:3, note:"Omega-3 oil that tends to clog pores",             aliases:["linum usitatissimum seed oil","linseed oil"]},
+  "algae extract":               {score:3, note:"Can clog pores significantly",                     aliases:["seaweed extract","algae"]},
   "carrageenan":                 {score:4, note:"Thickener that blocks pores",                      aliases:["irish moss extract"]},
   "irish moss":                  {score:4, note:"Pore-clogging seaweed derivative",                 aliases:["chondrus crispus extract","chondrus crispus"]},
   "lauric acid":                 {score:4, note:"Fatty acid found in coconut oil — clogs pores",    aliases:[]},
   "acetylated lanolin":          {score:4, note:"High pore-clogging lanolin derivative",            aliases:["acetylated lanolin alcohol"]},
   "wheat germ glycerides":       {score:4, note:"Very likely to clog pores",                        aliases:[]},
-  "grape seed oil":              {score:4, note:"Can clog pores despite being light",               aliases:["vitis vinifera seed oil"]},
+  "grape seed oil":              {score:2, note:"Can clog pores despite being light",               aliases:["vitis vinifera seed oil"]},
   "decyl oleate":                {score:3, note:"Moderate pore-clogging emollient",                 aliases:[]},
   "myristoyl sarcosine":         {score:4, note:"Pore-clogging conditioning agent",                 aliases:[]},
   "peg-16 macadamia glycerides": {score:3, note:"Moderate pore-clogging emollient",                aliases:[]},
@@ -167,14 +167,14 @@ const INGDB = {
   "myristic acid":               {score:3, note:"May clog pores in some people",                    aliases:[]},
   "corn oil":                    {score:3, note:"May clog pores in some people",                    aliases:["zea mays oil","zea mays (corn) oil"]},
   "cottonseed oil":              {score:3, note:"May clog pores in some people",                    aliases:["gossypium herbaceum seed oil"]},
-  "marula oil":                  {score:3, note:"May clog pores in some people",                    aliases:["sclerocarya birrea seed oil"]},
-  "sea kelp":                    {score:3, note:"May clog pores",                                   aliases:["laminaria digitata extract","kelp extract"]},
-  "sea kelp extract":            {score:3, note:"May clog pores",                                   aliases:["laminaria extract"]},
+  "marula oil":                  {score:2, note:"May clog pores in some people",                    aliases:["sclerocarya birrea seed oil"]},
+  "sea kelp":                    {score:2, note:"May clog pores",                                   aliases:["laminaria digitata extract","kelp extract"]},
+  "sea kelp extract":            {score:2, note:"May clog pores",                                   aliases:["laminaria extract"]},
   "oleic acid":                  {score:3, note:"High-oleic oils tend to clog pores",               aliases:[]},
-  "isononyl isononanoate":       {score:3, note:"Moderate pore-clogging ester",                     aliases:[]},
-  "steareth-2":                  {score:3, note:"Moderate pore-clogging emulsifier",                aliases:[]},
+  "isononyl isononanoate":       {score:2, note:"Moderate pore-clogging ester",                     aliases:[]},
+  "steareth-2":                  {score:2, note:"Moderate pore-clogging emulsifier",                aliases:[]},
   "peg-8 stearate":              {score:3, note:"Moderate pore-clogging PEG ester",                 aliases:[]},
-  "glyceryl stearate se":        {score:3, note:"May clog pores for some",                         aliases:[]},
+  "glyceryl stearate se":        {score:2, note:"May clog pores for some",                         aliases:[]},
   "soybean oil":                 {score:3, note:"May clog pores in acne-prone skin",               aliases:["glycine soja oil","soya oil"]},
   "hazelnut oil":                {score:2, note:"Moderate risk of clogging pores",                  aliases:["corylus avellana seed oil"]},
   "sesame oil":                  {score:2, note:"Moderate chance of clogging pores",               aliases:["sesamum indicum seed oil","sesamum indicum (sesame) seed oil"]},
@@ -428,7 +428,7 @@ const INGDB = {
 
   // ── Additional high-clogging esters & oils (4-5) ─────────────
   "lauryl alcohol":              {score:4, note:"Fatty alcohol derived from coconut — clogs pores",                aliases:[]},
-  "myristyl alcohol":            {score:3, note:"Fatty alcohol — moderate to high clogging risk",                  aliases:[]},
+  "myristyl alcohol":            {score:2, note:"Fatty alcohol — moderate to high clogging risk",                  aliases:[]},
   "octyl stearate":              {score:4, note:"Heavy ester — high pore-clogging risk",                           aliases:["ethylhexyl stearate"]},
   "octyl dodecanol":             {score:3, note:"Emollient alcohol — moderate clogging risk",                      aliases:[]},
   "isostearyl alcohol":          {score:3, note:"Branched fatty alcohol — moderate clogging risk",                 aliases:[]},
@@ -436,13 +436,13 @@ const INGDB = {
   "isostearyl neopentanoate":    {score:4, note:"Heavy emollient ester — clogs pores",                             aliases:[]},
   "isocetyl alcohol":            {score:4, note:"Fatty alcohol — high pore-clogging risk",                         aliases:[]},
   "isocetyl stearate":           {score:4, note:"Pore-clogging emollient ester",                                   aliases:[]},
-  "cetyl octanoate":             {score:3, note:"Emollient ester — moderate clogging risk",                        aliases:[]},
-  "propylene glycol stearate":   {score:3, note:"Moderate pore-clogging emulsifier",                               aliases:[]},
-  "ethylhexyl isononanoate":     {score:3, note:"Lightweight but comedogenic ester",                               aliases:[]},
+  "cetyl octanoate":             {score:2, note:"Emollient ester — moderate clogging risk",                        aliases:[]},
+  "propylene glycol stearate":   {score:2, note:"Moderate pore-clogging emulsifier",                               aliases:[]},
+  "ethylhexyl isononanoate":     {score:2, note:"Lightweight but comedogenic ester",                               aliases:[]},
   "myristyl lactate":            {score:4, note:"High pore-clogging emollient",                                    aliases:[]},
   "decyl stearate":              {score:4, note:"Heavy emollient — clogs pores",                                   aliases:[]},
   "laureth-4":                   {score:5, note:"One of the most comedogenic surfactants",                         aliases:[]},
-  "sodium laureth-5 carboxylate":{score:3, note:"Moderate clogging surfactant derivative",                        aliases:[]},
+  "sodium laureth-5 carboxylate":{score:1, note:"Moderate clogging surfactant derivative",                        aliases:[]},
   "peg-8 laurate":               {score:3, note:"Moderate clogging PEG ester",                                     aliases:[]},
   "peg-75 lanolin":              {score:4, note:"High pore-clogging lanolin PEG ester",                            aliases:[]},
   "acetylated lanolin alcohol":  {score:4, note:"High pore-clogging lanolin derivative",                           aliases:[]},
@@ -450,8 +450,8 @@ const INGDB = {
   "ceteth-2":                    {score:4, note:"Pore-clogging fatty alcohol ether",                               aliases:[]},
   "oleth-3":                     {score:4, note:"High pore-clogging PEG ether",                                    aliases:[]},
   "mink oil":                    {score:3, note:"Animal-derived oil — moderate pore-clogging risk",                aliases:[]},
-  "emu oil":                     {score:3, note:"Animal-derived oil — moderate pore-clogging risk",                aliases:[]},
-  "shark liver oil":             {score:3, note:"High squalene content — moderate clogging risk",                  aliases:[]},
+  "emu oil":                     {score:2, note:"Animal-derived oil — moderate pore-clogging risk",                aliases:[]},
+  "shark liver oil":             {score:2, note:"High squalene content — moderate clogging risk",                  aliases:[]},
   "lard":                        {score:3, note:"Pork fat — moderate pore-clogging risk",                          aliases:["suet","tallow"]},
   "tallow":                      {score:3, note:"Animal fat — moderate pore-clogging",                             aliases:[]},
   "hydrogenated coconut oil":    {score:4, note:"Solidified coconut oil — clogs pores",                            aliases:[]},
@@ -459,7 +459,7 @@ const INGDB = {
   "hydrogenated palm oil":       {score:4, note:"Hydrogenated palm — high pore-clogging risk",                     aliases:[]},
   "hydrogenated castor oil":     {score:1, note:"Processed castor oil — lower clogging than raw",                  aliases:["castor wax"]},
   "castor wax":                  {score:1, note:"Hydrogenated castor oil — low clogging risk",                     aliases:[]},
-  "stearyl heptanoate":          {score:3, note:"Emollient ester — moderate pore-clogging",                        aliases:[]},
+  "stearyl heptanoate":          {score:2, note:"Emollient ester — moderate pore-clogging",                        aliases:[]},
   "hexadecyl alcohol":           {score:3, note:"Another name for cetyl alcohol — moderate pore risk",             aliases:[]},
   "undecylenoyl glycine":        {score:0, note:"Antimicrobial — non-clogging",                                    aliases:[]},
 
@@ -537,15 +537,15 @@ const INGDB = {
   "formaldehyde releasers":      {score:0, irritant:true, note:"Preservatives that slowly release formaldehyde — sensitizers",                       aliases:["dmdm hydantoin","imidazolidinyl urea","diazolidinyl urea"]},
 
   // ── Score corrections — raising previously lenient entries ───
-  "cetyl alcohol":               {score:3, note:"Common emollient — moderately pore-clogging, especially for acne-prone skin", aliases:[]},
-  "cetearyl alcohol":            {score:3, note:"Blend of cetyl/stearyl alcohol — moderately pore-clogging",                  aliases:[]},
+  "cetyl alcohol":               {score:2, note:"Common emollient — moderately pore-clogging, especially for acne-prone skin", aliases:[]},
+  "cetearyl alcohol":            {score:2, note:"Blend of cetyl/stearyl alcohol — moderately pore-clogging",                  aliases:[]},
   "stearyl alcohol":             {score:2, note:"Fatty alcohol — may clog pores for some",                                    aliases:[]},
   "beeswax":                     {score:3, note:"Natural wax — moderate to high pore-clogging risk",                          aliases:["cera alba","white wax","yellow wax"]},
   "jojoba oil":                  {score:1, note:"Technically a wax ester — generally well-tolerated but not truly non-comedogenic", aliases:["simmondsia chinensis seed oil","simmondsia chinensis (jojoba) seed oil"]},
-  "shea butter":                 {score:3, note:"Rich butter — moderate to high pore-clogging risk for acne-prone skin",      aliases:["butyrospermum parkii butter","butyrospermum parkii (shea) butter"]},
+  "shea butter":                 {score:2, note:"Rich butter — moderate to high pore-clogging risk for acne-prone skin",      aliases:["butyrospermum parkii butter","butyrospermum parkii (shea) butter"]},
   "cocoa butter":                {score:4, note:"Thick occlusive butter — high pore-clogging risk",                           aliases:["theobroma cacao seed butter","cacao butter"]},
-  "mango butter":                {score:3, note:"Rich butter — moderate pore-clogging risk",                                  aliases:["mangifera indica seed butter"]},
-  "lanolin":                     {score:3, note:"Wool-derived emollient — moderately pore-clogging",                          aliases:["wool wax","wool grease","lanolin alcohol","wool fat"]},
+  "mango butter":                {score:2, note:"Rich butter — moderate pore-clogging risk",                                  aliases:["mangifera indica seed butter"]},
+  "lanolin":                     {score:2, note:"Wool-derived emollient — moderately pore-clogging",                          aliases:["wool wax","wool grease","lanolin alcohol","wool fat"]},
   "triethanolamine":             {score:2, note:"pH adjuster — moderate clogging risk, also a potential irritant",            aliases:["TEA","trolamine"]},
 };
 
@@ -3557,14 +3557,16 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
     setSelectedProduct({
       productName: p.name,
       brand: p.brand || "",
-      image: p.image || null,
+      image: p.adminImage || p.image || null,
       barcode: p.code || "",
-      productId: p._productId || p.code || "",
+      _productId: p._productId || p.code || "",
+      id: p._productId || p.code || "",
       ingredients: ingText,
+      skinTypes: p.skinTypes || [],
+      description: p.description || "",
       flaggedIngredients: [...(analysis.poreCloggers||[]), ...(analysis.irritants||[])],
-      // Always recalculate from ingredients so score matches what the analyzer shows
       poreScore: ingText ? Math.round(analysis.avgScore ?? 0) : (p.poreScore ?? 0),
-      communityRating: null,
+      communityRating: p.communityRating || null,
       buyUrl: p.buyUrl || amazonUrl(p.name, p.brand, p.code, p.asin, p.buyUrl),
       fromCatalog,
     });
@@ -3613,69 +3615,54 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
             </div>
           </div>
         ) : (
-          <div style={{display:"flex",flexDirection:"column",gap:"0.6rem",marginBottom:"1rem"}}>
+          <div style={{marginBottom:"0.75rem"}}>
 
             {/* Hidden file inputs */}
             <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onPhoto} style={{display:"none"}}/>
             <input ref={photoRef} type="file" accept="image/*" onChange={onPhoto} style={{display:"none"}}/>
 
-            {/* Row 1: Search product */}
+            {/* Search bar — primary hero */}
             <button onClick={()=>switchTab("search")}
-              style={{width:"100%",display:"flex",alignItems:"center",gap:"0.85rem",padding:"0.85rem 1rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",transition:"border-color 0.15s"}}
+              style={{width:"100%",display:"flex",alignItems:"center",gap:"0.6rem",padding:"0.75rem 1rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",marginBottom:"1rem",transition:"border-color 0.15s"}}
               onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
               onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
-              <div style={{width:38,height:38,borderRadius:"0.6rem",background:T.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>Search for a product</div>
-                <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"1px",fontFamily:"'Inter',sans-serif"}}>Type a product or brand name</div>
-              </div>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <span style={{flex:1,fontSize:"0.9rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Search products or brands…</span>
             </button>
 
-            {/* Row 2: Search by ingredient */}
-            <button onClick={()=>switchTab("type")}
-              style={{width:"100%",display:"flex",alignItems:"center",gap:"0.85rem",padding:"0.85rem 1rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",transition:"border-color 0.15s"}}
-              onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
-              onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
-              <div style={{width:38,height:38,borderRadius:"0.6rem",background:T.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>Paste an ingredient list</div>
-                <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"1px",fontFamily:"'Inter',sans-serif"}}>Copy from the label or brand website</div>
-              </div>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-            </button>
+            {/* Camera section label */}
+            <div style={{fontSize:"0.6rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.6rem",fontFamily:"'Inter',sans-serif"}}>Or use your camera</div>
 
-            {/* Row 3: Photo of product */}
-            <button onClick={()=>{setCameraErr("");setPhotoMode("product");camRef.current?.click();}}
-              style={{width:"100%",display:"flex",alignItems:"center",gap:"0.85rem",padding:"0.85rem 1rem",background:T.navy,border:"none",borderRadius:"0.85rem",cursor:"pointer",textAlign:"left"}}>
-              <div style={{width:38,height:38,borderRadius:"0.6rem",background:"rgba(255,255,255,0.12)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:"0.88rem",fontWeight:"600",color:"#fff",fontFamily:"'Inter',sans-serif"}}>Take a photo of the product</div>
-                <div style={{fontSize:"0.68rem",color:"rgba(255,255,255,0.6)",marginTop:"1px",fontFamily:"'Inter',sans-serif"}}>AI identifies the product and finds ingredients</div>
-              </div>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-            </button>
+            {/* Camera + Paste row */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem",marginBottom:"0.5rem"}}>
 
-            {/* Row 4: Photo of ingredient label */}
-            <button onClick={()=>{setCameraErr("");setPhotoMode("ingredients");camRef.current?.click();}}
-              style={{width:"100%",display:"flex",alignItems:"center",gap:"0.85rem",padding:"0.85rem 1rem",background:T.surface,border:`1.5px solid ${T.navy}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left"}}>
-              <div style={{width:38,height:38,borderRadius:"0.6rem",background:T.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></svg>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.navy,fontFamily:"'Inter',sans-serif"}}>Photo the ingredient list</div>
-                <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"1px",fontFamily:"'Inter',sans-serif"}}>Point at the back label — AI reads it instantly</div>
-              </div>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-            </button>
+              {/* Single combined camera button — auto mode, AI figures out what it sees */}
+              <button onClick={()=>{setCameraErr("");setPhotoMode("auto");camRef.current?.click();}}
+                style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"0.5rem",padding:"1rem 0.75rem",background:T.navy,border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"center"}}>
+                <div style={{width:36,height:36,borderRadius:"0.55rem",background:"rgba(255,255,255,0.12)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                </div>
+                <div>
+                  <div style={{fontSize:"0.82rem",fontWeight:"600",color:"#fff",fontFamily:"'Inter',sans-serif",lineHeight:1.2}}>Take a photo</div>
+                  <div style={{fontSize:"0.62rem",color:"rgba(255,255,255,0.55)",marginTop:"2px",fontFamily:"'Inter',sans-serif",lineHeight:1.3}}>Product or ingredient label</div>
+                </div>
+              </button>
 
-            {cameraErr&&<div style={{padding:"0.65rem",background:"#FBF0EE",border:`1px solid ${T.rose}44`,borderRadius:"0.5rem",fontSize:"0.78rem",color:T.rose,fontFamily:"'Inter',sans-serif"}}>{cameraErr}</div>}
+              {/* Paste ingredient list */}
+              <button onClick={()=>switchTab("type")}
+                style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"0.5rem",padding:"1rem 0.75rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"center"}}>
+                <div style={{width:36,height:36,borderRadius:"0.55rem",background:T.surfaceAlt,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.textMid} strokeWidth="2" strokeLinecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                </div>
+                <div>
+                  <div style={{fontSize:"0.82rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.2}}>Paste list</div>
+                  <div style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginTop:"2px",lineHeight:1.3}}>Copy from label</div>
+                </div>
+              </button>
+
+            </div>
+
+            {cameraErr&&<div style={{padding:"0.65rem",background:"#FBF0EE",border:`1px solid ${T.rose}44`,borderRadius:"0.5rem",fontSize:"0.78rem",color:T.rose,fontFamily:"'Inter',sans-serif",marginTop:"0.25rem"}}>{cameraErr}</div>}
           </div>
         )}
 
