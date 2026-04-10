@@ -1417,28 +1417,20 @@ async function lookupBarcode(barcode) {
   throw new Error("Product not found. Try photographing the ingredient list on the back of the packaging, or search by product name.");
 }
 
-async function extractFromPhoto(b64, mime) {
+async function extractFromPhoto(b64, mime, mode="auto") {
   if (!ANTHROPIC_KEY) throw new Error("No API key — photo scanning requires VITE_ANTHROPIC_KEY to be set in Vercel.");
+  const prompts = {
+    product: "You are identifying a skincare product from a photo of its packaging (front of bottle, tube, or box).\nIdentify the brand and product name and respond in ONLY this format:\nPRODUCT:\nNAME:<exact product name>\nBRAND:<exact brand name>\n\nIf you cannot identify the product clearly, respond: UNCLEAR\nNo explanations. No markdown. Just the format above.",
+    ingredients: "You are reading a skincare ingredient list from a photo of product packaging.\nExtract every ingredient exactly as written and respond in ONLY this format:\nINGREDIENTS:<comma-separated INCI ingredient names exactly as written>\n\nIf you cannot read the ingredient list clearly, respond: UNCLEAR\nNo explanations. No markdown. Just the format above.",
+    auto: "You are analysing a skincare product image. Look carefully and respond with ONLY one of these formats:\n1. If you see an ingredient list: INGREDIENTS:<comma-separated INCI ingredient names exactly as written>\n2. If you see the front of a product: PRODUCT:\nNAME:<product name>\nBRAND:<brand name>\n3. If you see both: NAME:<product name>\nBRAND:<brand name>\nINGREDIENTS:<comma-separated ingredients>\n4. If unclear: UNCLEAR\nNo explanations. No markdown. Just the format above."
+  };
   const res = await fetch("https://api.anthropic.com/v1/messages",{
     method:"POST", headers:{"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
     body:JSON.stringify({
       model:"claude-haiku-4-5-20251001", max_tokens:1200,
       messages:[{role:"user",content:[
         {type:"image",source:{type:"base64",media_type:mime,data:b64}},
-        {type:"text",text:`You are analysing a skincare product image. Look carefully and respond with ONLY one of these formats:
-
-1. If you see a barcode number clearly: BARCODE:<number>
-
-2. If you see an ingredient/ingredients list: INGREDIENTS:<comma-separated INCI ingredient names exactly as written>
-
-3. If you see both a product name/brand AND an ingredient list, respond:
-NAME:<product name>
-BRAND:<brand name>
-INGREDIENTS:<comma-separated ingredients>
-
-4. If the image is too blurry or you cannot read any ingredients or barcode: UNCLEAR
-
-No explanations. No markdown. Just the format above.`}
+        {type:"text",text:prompts[mode]||prompts.auto}
       ]}]
     })
   });
@@ -3344,6 +3336,7 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
   const [currentBarcode, setCurrentBarcode] = useState("");
   const [postSource, setPostSource] = useState("search"); // "scan" | "search" | "type"
   const [postReaction, setPostReaction] = useState("loved"); // "loved" | "brokeout" | "wantToTry"
+  const [photoMode, setPhotoMode] = useState("auto"); // "product" | "ingredients" | "auto"
   const photoRef = useRef(null);
   const camRef   = useRef(null);
 
@@ -3458,9 +3451,47 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
     try {
       const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
       debugLog("info", "Sending image to Claude AI…");
-      const result=await extractFromPhoto(b64,file.type);
+      const result=await extractFromPhoto(b64,file.type,photoMode);
       debugLog("ok", `AI response: ${result.slice(0,120)}`);
-      if(result.startsWith("BARCODE:")) {
+      if(result.startsWith("PRODUCT:")) {
+        // Claude identified the product from its packaging — look it up
+        const nameMatch = result.match(/^NAME:(.+)$/m);
+        const brandMatch = result.match(/^BRAND:(.+)$/m);
+        const name = nameMatch?.[1]?.trim() || "";
+        const brand = brandMatch?.[1]?.trim() || "";
+        if (name) {
+          setProductName(name); setBrand(brand);
+          setAiStatus("Finding product…");
+          debugLog("info", `Product identified: ${brand} ${name}`);
+          // Search catalog first, then OBF
+          try {
+            const res = await searchProducts(`${brand} ${name}`);
+            const match = res[0];
+            if (match && match.ingredients) {
+              setIngredients(match.ingredients);
+              const r = analyzeIngredients(match.ingredients);
+              setResults(r);
+              debugLog("ok", `Found in catalog: ${match.name}`);
+            } else {
+              // Try OBF name search
+              const r2 = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(`${brand} ${name}`)}&search_simple=1&action=process&json=1&page_size=3&fields=product_name,brands,ingredients_text,ingredients_text_en`,{signal:AbortSignal.timeout(5000)});
+              const d2 = await r2.json();
+              const ing = d2.products?.[0]?.ingredients_text_en || d2.products?.[0]?.ingredients_text || "";
+              if (ing.trim().length > 10) {
+                setIngredients(ing);
+                const r = analyzeIngredients(ing);
+                setResults(r);
+                debugLog("ok", `OBF found ingredients for ${name}`);
+              } else {
+                setCameraErr(`Found "${name}" but couldn't locate its ingredient list. Try photographing the ingredient label on the back instead.`);
+              }
+            }
+          } catch { setCameraErr(`Found "${name}" but the lookup failed. Try photographing the ingredient label on the back instead.`); }
+        } else {
+          setCameraErr("Couldn't identify the product clearly. Try better lighting or photograph the ingredient list on the back.");
+        }
+        setInputMode("type"); setCameraMode("choose"); setAiStatus("");
+      } else if(result.startsWith("BARCODE:")) {
         setAiStatus("Found barcode — looking up product…");
         const bcode = result.replace("BARCODE:","").trim();
         debugLog("info", `Barcode from photo: ${bcode}`);
@@ -3565,98 +3596,88 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
 
       <div style={{background:T.surface,borderRadius:"1.25rem",border:`1px solid ${T.border}`,padding:"1.25rem",boxShadow:"0 4px 24px rgba(28,23,20,0.06),0 1px 4px rgba(28,23,20,0.04)"}}>
 
-        {/* ── Barcode scanner — primary CTA ── */}
-        {inputMode!=="type"&&inputMode!=="search"&&(
-          <div className="fu">
+        {/* ── Four check options ── */}
+        {cameraMode==="processing" ? (
+          <div style={{textAlign:"center",padding:"1.5rem 1rem"}}>
+            {photoPreview&&<img src={photoPreview} alt="" style={{width:"100%",maxHeight:"200px",objectFit:"cover",borderRadius:"0.75rem",marginBottom:"1rem",opacity:0.85}}/>}
+            <div style={{display:"inline-flex",alignItems:"center",gap:"0.6rem",background:T.accentSoft,padding:"0.65rem 1.1rem",borderRadius:"999px",marginBottom:"0.5rem"}}>
+              <div style={{width:"8px",height:"8px",borderRadius:"50%",background:T.accent,animation:"pulse 1s ease-in-out infinite",flexShrink:0}}/>
+              <span style={{color:T.accent,fontWeight:"600",fontFamily:"'Inter',sans-serif",fontSize:"0.85rem"}}>
+                {aiStatus || "Analysing with AI…"}
+              </span>
+            </div>
+            <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"0.35rem"}}>
+              {aiStatus==="Scoring ingredients…"||aiStatus==="Analysing ingredients…" ? "Almost done — calculating your pore score"
+                : aiStatus==="Finding product…" ? "Searching our database and Open Beauty Facts"
+                : "Reading your photo with AI"}
+            </div>
+          </div>
+        ) : (
+          <div style={{display:"flex",flexDirection:"column",gap:"0.6rem",marginBottom:"1rem"}}>
 
-            {/* Choose mode — barcode vs OCR */}
-            {cameraMode==="choose"&&(
-              <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+            {/* Hidden file inputs */}
+            <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onPhoto} style={{display:"none"}}/>
+            <input ref={photoRef} type="file" accept="image/*" onChange={onPhoto} style={{display:"none"}}/>
 
-                {/* Primary: Scan barcode */}
-                <button onClick={()=>{ setCameraErr(""); setCameraMode("barcode"); }}
-                  style={{width:"100%",padding:"1.1rem",background:`linear-gradient(135deg,${T.accent},${T.navy})`,color:"#fff",border:"none",borderRadius:"0.85rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"700",fontSize:"1rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.6rem",boxShadow:`0 4px 16px ${T.accent}44`}}>
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                  Scan barcode
-                </button>
-
-                {/* OCR divider */}
-                <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
-                  <div style={{flex:1,height:"1px",background:T.border}}/>
-                  <span style={{fontSize:"0.68rem",color:T.textLight,flexShrink:0,fontFamily:"'Inter',sans-serif"}}>product not scanning?</span>
-                  <div style={{flex:1,height:"1px",background:T.border}}/>
-                </div>
-
-                {/* OCR option — full width prominent */}
-                <button onClick={()=>{setCameraErr("");camRef.current?.click();}}
-                  style={{width:"100%",padding:"0.95rem",background:T.surface,color:T.text,border:`1.5px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"600",fontSize:"0.9rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.65rem",transition:"all 0.15s"}}
-                  onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.background=T.accentSoft;}}
-                  onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background=T.surface;}}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2"/>
-                    <path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/>
-                  </svg>
-                  <div style={{textAlign:"left"}}>
-                    <div>Photograph ingredient list</div>
-                    <div style={{fontSize:"0.65rem",color:T.textLight,fontWeight:"400",marginTop:"1px"}}>AI reads & analyzes the label instantly</div>
-                  </div>
-                </button>
-
-                {/* Upload from library */}
-                <button onClick={()=>{setCameraErr("");photoRef.current?.click();}}
-                  style={{width:"100%",padding:"0.7rem",background:"none",color:T.textMid,border:"none",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"500",fontSize:"0.78rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.4rem"}}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                  Or upload from photo library
-                </button>
-
-                <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onPhoto} style={{display:"none"}}/>
-                <input ref={photoRef} type="file" accept="image/*" onChange={onPhoto} style={{display:"none"}}/>
-                {cameraErr&&<div style={{padding:"0.65rem",background:"#FBF0EE",border:`1px solid ${T.rose}44`,borderRadius:"0.5rem",fontSize:"0.78rem",color:T.rose}}>{cameraErr}</div>}
+            {/* Row 1: Search product */}
+            <button onClick={()=>switchTab("search")}
+              style={{width:"100%",display:"flex",alignItems:"center",gap:"0.85rem",padding:"0.85rem 1rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",transition:"border-color 0.15s"}}
+              onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
+              onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
+              <div style={{width:38,height:38,borderRadius:"0.6rem",background:T.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               </div>
-            )}
-
-            {/* Live barcode scan view */}
-            {cameraMode==="barcode"&&(
-              <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
-                <BarcodeScanner
-                  onDetected={code=>{ setCameraMode("choose"); onBarcode(code); }}
-                  onError={err=>{ setCameraMode("choose"); setCameraErr(err); }}
-                />
-                <button onClick={()=>setCameraMode("choose")}
-                  style={{padding:"0.6rem",background:"transparent",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.8rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                  ← Cancel
-                </button>
+              <div style={{flex:1}}>
+                <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>Search for a product</div>
+                <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"1px",fontFamily:"'Inter',sans-serif"}}>Type a product or brand name</div>
               </div>
-            )}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
 
-            {cameraMode==="processing"&&(
-              <div style={{textAlign:"center",padding:"1.5rem 1rem"}}>
-                {photoPreview&&<img src={photoPreview} alt="" style={{width:"100%",maxHeight:"200px",objectFit:"cover",borderRadius:"0.75rem",marginBottom:"1rem",opacity:0.85}}/>}
-                <div style={{display:"inline-flex",alignItems:"center",gap:"0.6rem",background:T.accentSoft,padding:"0.65rem 1.1rem",borderRadius:"999px",marginBottom:"0.5rem"}}>
-                  <div style={{width:"8px",height:"8px",borderRadius:"50%",background:T.accent,animation:"pulse 1s ease-in-out infinite",flexShrink:0}}/>
-                  <span style={{color:T.accent,fontWeight:"600",fontFamily:"'Inter',sans-serif",fontSize:"0.85rem"}}>
-                    {aiStatus || "Reading label with AI…"}
-                  </span>
-                </div>
-                <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"0.35rem"}}>
-                  {aiStatus === "Scoring ingredients…" || aiStatus === "Analysing ingredients…"
-                    ? "Almost done — calculating your pore clog score"
-                    : aiStatus === "Found barcode — looking up product…"
-                    ? "Searching our database and Open Beauty Facts"
-                    : "Identifying every ingredient on the label"
-                  }
-                </div>
+            {/* Row 2: Search by ingredient */}
+            <button onClick={()=>switchTab("type")}
+              style={{width:"100%",display:"flex",alignItems:"center",gap:"0.85rem",padding:"0.85rem 1rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",transition:"border-color 0.15s"}}
+              onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
+              onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
+              <div style={{width:38,height:38,borderRadius:"0.6rem",background:T.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
               </div>
-            )}
+              <div style={{flex:1}}>
+                <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>Paste an ingredient list</div>
+                <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"1px",fontFamily:"'Inter',sans-serif"}}>Copy from the label or brand website</div>
+              </div>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+
+            {/* Row 3: Photo of product */}
+            <button onClick={()=>{setCameraErr("");setPhotoMode("product");camRef.current?.click();}}
+              style={{width:"100%",display:"flex",alignItems:"center",gap:"0.85rem",padding:"0.85rem 1rem",background:T.navy,border:"none",borderRadius:"0.85rem",cursor:"pointer",textAlign:"left"}}>
+              <div style={{width:38,height:38,borderRadius:"0.6rem",background:"rgba(255,255,255,0.12)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:"0.88rem",fontWeight:"600",color:"#fff",fontFamily:"'Inter',sans-serif"}}>Take a photo of the product</div>
+                <div style={{fontSize:"0.68rem",color:"rgba(255,255,255,0.6)",marginTop:"1px",fontFamily:"'Inter',sans-serif"}}>AI identifies the product and finds ingredients</div>
+              </div>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+
+            {/* Row 4: Photo of ingredient label */}
+            <button onClick={()=>{setCameraErr("");setPhotoMode("ingredients");camRef.current?.click();}}
+              style={{width:"100%",display:"flex",alignItems:"center",gap:"0.85rem",padding:"0.85rem 1rem",background:T.surface,border:`1.5px solid ${T.navy}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left"}}>
+              <div style={{width:38,height:38,borderRadius:"0.6rem",background:T.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></svg>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.navy,fontFamily:"'Inter',sans-serif"}}>Photo the ingredient list</div>
+                <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"1px",fontFamily:"'Inter',sans-serif"}}>Point at the back label — AI reads it instantly</div>
+              </div>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+
+            {cameraErr&&<div style={{padding:"0.65rem",background:"#FBF0EE",border:`1px solid ${T.rose}44`,borderRadius:"0.5rem",fontSize:"0.78rem",color:T.rose,fontFamily:"'Inter',sans-serif"}}>{cameraErr}</div>}
           </div>
         )}
-
-        {/* Tabs — compact row below scanner */}
-        <div style={{display:"flex",gap:"0.4rem",margin:(inputMode==="type"||inputMode==="search")?"0 0 1.25rem":"0.85rem 0 0",padding:"0.25rem",background:T.surfaceAlt,borderRadius:"0.6rem"}}>
-          <Tab m="scan" lbl="📷 Camera"/>
-          <Tab m="search" lbl="🔍 Search"/>
-          <Tab m="type" lbl="✏️ Paste"/>
-        </div>
 
         {/* Type tab */}
         {inputMode==="type"&&(
