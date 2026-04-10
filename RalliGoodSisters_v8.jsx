@@ -1,5 +1,6 @@
 // v2.4 - compact feed cards, barcode scan icon, navy rank badges
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import ReactDOM from "react-dom";
 import { initializeApp } from "firebase/app";
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
@@ -780,13 +781,24 @@ function AdminImageStatus({ p }) {
 }
 // ASINs now live in Firestore (asin field). If the product doc has a buyUrl
 // or asin already set, those take priority. Falls back to Amazon search.
+// ── Amazon affiliate tag — replace YOUR_TAG with your actual Associates tag ──
+const AMAZON_AFFILIATE_TAG = ""; // e.g. "ralliapp-20"
+
 function amazonUrl(productName, brand, barcode, asin, existingBuyUrl) {
-  if (existingBuyUrl && existingBuyUrl.startsWith("http")) return existingBuyUrl;
-  if (asin) return `https://www.amazon.com/dp/${asin}`;
+  const tag = AMAZON_AFFILIATE_TAG ? `&tag=${AMAZON_AFFILIATE_TAG}` : "";
+  if (existingBuyUrl && existingBuyUrl.startsWith("http")) {
+    // Inject affiliate tag into existing Amazon URLs
+    if (AMAZON_AFFILIATE_TAG && existingBuyUrl.includes("amazon.com")) {
+      const sep = existingBuyUrl.includes("?") ? "&" : "?";
+      return existingBuyUrl.includes("tag=") ? existingBuyUrl : `${existingBuyUrl}${sep}tag=${AMAZON_AFFILIATE_TAG}`;
+    }
+    return existingBuyUrl;
+  }
+  if (asin) return `https://www.amazon.com/dp/${asin}?tag=${AMAZON_AFFILIATE_TAG||""}`;
   const name = (productName||"").trim();
   const br = (brand||"").trim();
   const q = encodeURIComponent(br ? `${br} ${name}` : name);
-  return `https://www.amazon.com/s?k=${q}&i=beauty`;
+  return `https://www.amazon.com/s?k=${q}&i=beauty${tag}`;
 }
 
 
@@ -1273,11 +1285,17 @@ async function recordScan(uid, displayName, photoURL, productId, productName, br
     });
 
     // 3. Atomically increment scanCount and add uid to uniqueScanners
-    const productRef = doc(db,"products",productId);
-    await updateDoc(productRef, {
-      scanCount: increment(1),
-      uniqueScanners: arrayUnion(uid),
-    });
+    // Wrapped separately — permission-denied here (non-admin users can't write products)
+    // should not surface as an error since the post + scan already succeeded
+    try {
+      const productRef = doc(db,"products",productId);
+      await updateDoc(productRef, {
+        scanCount: increment(1),
+        uniqueScanners: arrayUnion(uid),
+      });
+    } catch(e) {
+      // Silently ignore — user may not have write access to products collection
+    }
 
     return postRef.id;
   } catch(e) { console.error("recordScan error:", e); }
@@ -1461,7 +1479,7 @@ function BarcodeScanner({onDetected, onError}) {
     <div style={{position:"relative",borderRadius:"1rem",overflow:"hidden",background:"#000"}}>
       <video ref={videoRef} style={{width:"100%",display:"block",maxHeight:"260px",objectFit:"cover"}}/>
       {status==="scanning"&&(
-        <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:"0.75rem"}}>
+        <div style={{position:"absolute",top:0,left:0,right:0,bottom:0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:"0.75rem"}}>
           <div style={{width:"200px",height:"100px",position:"relative"}}>
             {[{top:0,left:0,borderTop:`3px solid ${T.accent}`,borderLeft:`3px solid ${T.accent}`},{top:0,right:0,borderTop:`3px solid ${T.accent}`,borderRight:`3px solid ${T.accent}`},{bottom:0,left:0,borderBottom:`3px solid ${T.accent}`,borderLeft:`3px solid ${T.accent}`},{bottom:0,right:0,borderBottom:`3px solid ${T.accent}`,borderRight:`3px solid ${T.accent}`}].map((st,i)=>(
               <div key={i} style={{position:"absolute",width:"20px",height:"20px",...st}}/>
@@ -1471,7 +1489,7 @@ function BarcodeScanner({onDetected, onError}) {
           <span style={{color:"white",fontSize:"0.8rem",background:"rgba(0,0,0,0.5)",padding:"4px 12px",borderRadius:"999px"}}>Point at barcode</span>
         </div>
       )}
-      {status==="loading"&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",color:"white"}}>Starting camera…</div>}
+      {status==="loading"&&<div style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",color:"white"}}>Starting camera…</div>}
     </div>
   );
 }
@@ -1687,9 +1705,9 @@ function ShareProductModal({ user, product, onClose }) {
     !searchQ.trim() || u.displayName?.toLowerCase().includes(searchQ.toLowerCase())
   );
 
-  return (
-    <div style={{ position:"fixed", inset:0, zIndex:500, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"flex-end" }} onClick={onClose}>
-      <div style={{ width:"100%", maxWidth:"480px", margin:"0 auto", background:T.surface, borderRadius:"1.25rem 1.25rem 0 0", padding:"1rem 1rem calc(1rem + env(safe-area-inset-bottom))", maxHeight:"65vh", display:"flex", flexDirection:"column" }} onClick={e => e.stopPropagation()}>
+  return ReactDOM.createPortal(
+    <div style={{ position:"fixed",top:0,left:0,right:0,bottom:0, zIndex:9000, background:"rgba(0,0,0,0.45)", display:"flex", flexDirection:"column", justifyContent:"flex-end", alignItems:"center" }} onClick={onClose}>
+      <div style={{ width:"100%", maxWidth:"480px", background:T.surface, borderRadius:"1.25rem 1.25rem 0 0", padding:"1rem 1rem calc(1rem + env(safe-area-inset-bottom))", maxHeight:"65vh", display:"flex", flexDirection:"column" }} onClick={e => e.stopPropagation()}>
         {/* Handle */}
         <div style={{ width:"36px", height:"4px", borderRadius:"2px", background:T.border, margin:"0 auto 0.9rem" }}/>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"0.75rem" }}>
@@ -1739,7 +1757,7 @@ function ShareProductModal({ user, product, onClose }) {
         )}
       </div>
     </div>
-  );
+  , document.body);
 }
 
 function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", onUserTap, onProductTap, onDeleted, productImageMap={}}) {
@@ -1861,7 +1879,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
     <div style={{position:"relative"}}
       onTouchStart={onSwipeStart} onTouchMove={onSwipeMove} onTouchEnd={onSwipeEnd}>
 
-      {swipeX>10&&<div style={{position:"absolute",inset:0,background:T.rose+"08",pointerEvents:"none",zIndex:0,borderRadius:"1.1rem"}}/>}
+      {swipeX>10&&<div style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:T.rose+"08",pointerEvents:"none",zIndex:0,borderRadius:"1.1rem"}}/>}
 
       <div style={{transform:`translateX(${swipeX}px)`,transition:swipeX===0?"transform 0.2s ease":"none",position:"relative",zIndex:1,padding:"0.75rem 1rem"}}>
 
@@ -1892,7 +1910,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
                 </button>
                 {menuOpen&&(
-                  <><div onClick={()=>setMenuOpen(false)} style={{position:"fixed",inset:0,zIndex:100}}/>
+                  <><div onClick={()=>setMenuOpen(false)} style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:100}}/>
                   <div style={{position:"absolute",right:0,top:"calc(100% + 4px)",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.6rem",boxShadow:"0 4px 16px rgba(0,0,0,0.1)",zIndex:101,minWidth:"110px",overflow:"hidden"}}>
                     <button onClick={()=>{setMenuOpen(false);handleDelete();}} disabled={deleting}
                       style={{width:"100%",padding:"0.6rem 0.8rem",background:"none",border:"none",cursor:"pointer",fontSize:"0.78rem",color:T.rose,fontFamily:"'Inter',sans-serif",textAlign:"left",display:"flex",alignItems:"center",gap:"0.35rem"}}>
@@ -1905,27 +1923,31 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
             )}
           </div>
 
-          {/* Product row */}
+          {/* Product row — A1 style: thumb + info + dot score */}
           <div onClick={onProductTap?()=>onProductTap(post):undefined} className={onProductTap?"pressable":""}
-            style={{display:"flex",gap:"0.75rem",alignItems:"center",padding:"0.75rem 0.85rem",cursor:onProductTap?"pointer":"default",background:T.surface}}>
-            <div style={{width:"54px",height:"54px",flexShrink:0,borderRadius:"0.6rem",overflow:"hidden",background:T.surfaceAlt,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            style={{display:"flex",gap:"0.65rem",alignItems:"center",padding:"0.65rem 0.85rem",cursor:onProductTap?"pointer":"default",background:T.surface}}>
+            {/* Thumbnail */}
+            <div style={{width:"42px",height:"42px",flexShrink:0,borderRadius:"0.55rem",overflow:"hidden",background:T.surfaceAlt,display:"flex",alignItems:"center",justifyContent:"center"}}>
               {liveImage
-                ? <img src={liveImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"5px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
-                : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.border} strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                ? <img src={liveImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
+                : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.border} strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
               }
             </div>
+            {/* Name + brand */}
             <div style={{flex:1,minWidth:0}}>
-              {post.brand&&<div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.15rem",fontFamily:"'Inter',sans-serif"}}>{post.brand}</div>}
-              <div style={{fontWeight:"700",color:T.text,fontSize:"0.9rem",fontFamily:"'Inter',sans-serif",lineHeight:1.3}}>{post.productName}</div>
-              {post.flaggedIngredients?.length>0&&(
-                <div style={{display:"flex",gap:"0.2rem",flexWrap:"wrap",marginTop:"0.3rem"}}>
-                  {post.flaggedIngredients.slice(0,2).map(ing=>(
-                    <span key={ing} style={{fontSize:"0.58rem",padding:"1px 7px",background:T.rose+"10",color:T.rose,borderRadius:"999px",border:`1px solid ${T.rose}20`,fontFamily:"'Inter',sans-serif"}}>{ing}</span>
-                  ))}
-                </div>
-              )}
+              {post.brand&&<div style={{fontSize:"0.58rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.1rem",fontFamily:"'Inter',sans-serif"}}>{post.brand}</div>}
+              <div style={{fontWeight:"600",color:T.text,fontSize:"0.85rem",fontFamily:"'Inter',sans-serif",lineHeight:1.25,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{post.productName}</div>
+              {post.communityRating&&<div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px",fontFamily:"'Inter',sans-serif"}}>★ {(post.communityRating/2).toFixed(1)} community</div>}
             </div>
-            <PoreScoreBadge score={displayScore} size="md"/>
+            {/* Dot + score — A1 style */}
+            <div style={{flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",gap:"2px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"3px"}}>
+                <div style={{width:7,height:7,borderRadius:"50%",background:displayScore!=null?ps.color:T.border,flexShrink:0}}/>
+                <span style={{fontSize:"0.82rem",fontWeight:"600",color:displayScore!=null?ps.color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{displayScore??"—"}</span>
+                <span style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>/5</span>
+              </div>
+              <span style={{fontSize:"0.5rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",fontFamily:"'Inter',sans-serif"}}>pore</span>
+            </div>
           </div>
 
           {/* Actions row inside the card */}
@@ -1997,14 +2019,178 @@ function StarRating({max, value, onChange, label}) {
   );
 }
 
-// ── ProductModal ──────────────────────────────────────────────
-function ProductModal({product, onClose, user, profile, onUpdateProfile}) {
-  if (!product) return null;
-  return <ProductModalInner product={product} onClose={onClose} user={user} profile={profile} onUpdateProfile={onUpdateProfile}/>;
+
+// ── KeyActivesSection — extracted to fix Rules of Hooks (no useState inside IIFE) ──
+function KeyActivesSection({ ingredients }) {
+  const [activeDetail, setActiveDetail] = React.useState(null);
+  if (!ingredients) return null;
+const ACTIVES = [
+  {name:"niacinamide",      label:"Niacinamide",       benefit:"Pore-minimizing, brightening",   detail:"A form of vitamin B3 that visibly shrinks pores, fades dark spots, and regulates oil production — all without irritating the skin.", goodFor:["Oily","Acne-prone","Combination","Hyperpigmentation"], howToUse:"Can be used morning and night. Pairs well with most actives including retinol and vitamin C."},
+  {name:"retinol",          label:"Retinol",            benefit:"Cell turnover, anti-aging",       detail:"Converts to retinoic acid on the skin, speeding up cell renewal. One of the best-studied anti-aging ingredients — also clears pores over time.", goodFor:["Mature","Acne-prone","Dull"], howToUse:"Start 1–2x per week at night. Always follow with SPF the next morning. Expect some purging in weeks 2–4."},
+  {name:"retinyl",          label:"Retinyl",            benefit:"Gentle vitamin A derivative",    detail:"Retinyl palmitate or acetate — a gentler retinoid that converts to retinol, then retinoic acid. Less potent but much better tolerated.", goodFor:["Sensitive","Beginners","Mature"], howToUse:"Can be used nightly. A good entry point before moving to stronger retinol."},
+  {name:"salicylic acid",   label:"Salicylic Acid",    benefit:"BHA — unclogs pores",             detail:"A beta-hydroxy acid (BHA) that's oil-soluble, so it can penetrate inside pores and dissolve the sebum and dead cells causing blackheads and breakouts.", goodFor:["Oily","Acne-prone","Blackheads"], howToUse:"Use 1–3x per week. Avoid combining with other strong acids on the same day."},
+  {name:"glycolic acid",    label:"Glycolic Acid",     benefit:"AHA — exfoliates & brightens",    detail:"The smallest AHA molecule — penetrates deepest and exfoliates most effectively. Resurfaces dead skin, brightens tone, and stimulates collagen.", goodFor:["Dull","Uneven tone","Rough texture"], howToUse:"Use at night, 2–3x per week. Always wear SPF next day — AHAs increase sun sensitivity."},
+  {name:"lactic acid",      label:"Lactic Acid",       benefit:"AHA — gentle exfoliant",          detail:"A larger AHA molecule that exfoliates more gently than glycolic. Also a humectant — it hydrates while it resurfaces, making it ideal for dry or sensitive skin.", goodFor:["Dry","Sensitive","Beginners"], howToUse:"Can be used 2–3x per week at night. Gentler than glycolic but still requires SPF the next day."},
+  {name:"mandelic acid",    label:"Mandelic Acid",     benefit:"AHA — acne-safe exfoliant",       detail:"The largest AHA molecule — exfoliates slowest and most gently. Also has antimicrobial properties, making it one of the safest exfoliants for acne-prone and darker skin tones.", goodFor:["Sensitive","Acne-prone","Darker skin tones"], howToUse:"Can be used 2–3x per week at night. Lower irritation risk than glycolic or lactic acid."},
+  {name:"azelaic acid",     label:"Azelaic Acid",      benefit:"Fades marks, calms redness",      detail:"Naturally found in wheat and barley. Fades post-acne marks, reduces redness, and kills acne bacteria. One of the few actives safe during pregnancy.", goodFor:["Rosacea","Post-acne marks","Sensitive"], howToUse:"Can be used morning and/or night. Works well layered under SPF. No major interactions."},
+  {name:"ascorbic acid",    label:"Vitamin C",         benefit:"Brightening, antioxidant",        detail:"L-ascorbic acid is the purest, most potent form of vitamin C. Inhibits melanin production to fade dark spots, boosts collagen, and neutralises free radical damage from UV.", goodFor:["Dull","Hyperpigmentation","Anti-aging"], howToUse:"Use in the morning under SPF — sunlight degrades vitamin C. Store in a dark, cool place."},
+  {name:"thd ascorbate",    label:"Vitamin C (THD)",   benefit:"Stable vitamin C derivative",    detail:"Tetrahexyldecyl ascorbate — an oil-soluble, highly stable vitamin C that penetrates deeper than L-ascorbic acid without the irritation or oxidation issues.", goodFor:["Sensitive","Dry","Anti-aging"], howToUse:"Can be used morning or night. More stable than L-ascorbic acid — less likely to oxidise."},
+  {name:"hyaluronic acid",  label:"Hyaluronic Acid",   benefit:"Deep hydration",                 detail:"A sugar molecule that holds up to 1000x its weight in water. Draws moisture from the air into skin and creates a plumping, smoothing effect.", goodFor:["Dry","Dehydrated","All skin types"], howToUse:"Apply to damp skin before moisturiser. Layer under a cream to seal in hydration."},
+  {name:"sodium hyaluronate",label:"Hyaluronic Acid",  benefit:"Surface hydration",              detail:"A smaller form of hyaluronic acid that penetrates the skin surface more effectively. Hydrates the epidermis and reduces the appearance of fine lines.", goodFor:["All skin types","Dehydrated"], howToUse:"Use morning and night before heavier products. Layer under moisturiser."},
+  {name:"ceramide",         label:"Ceramides",         benefit:"Barrier repair",                  detail:"Lipids naturally found in skin (40–50% of the stratum corneum). Ceramides seal the gaps between skin cells, locking in moisture and keeping irritants out.", goodFor:["Dry","Eczema","Sensitive","Damaged barrier"], howToUse:"Can be used morning and night. Essential in a barrier-repair routine — combine with cholesterol and fatty acids for best results."},
+  {name:"zinc oxide",       label:"Zinc Oxide",        benefit:"Mineral SPF + calming",           detail:"Broad-spectrum mineral UV filter that sits on the surface of skin, reflecting and scattering UV rays. Also has anti-inflammatory and mild antimicrobial properties.", goodFor:["Sensitive","Acne-prone","Rosacea"], howToUse:"Apply as the last step in your morning routine, before makeup. Reapply every 2 hours in sun."},
+  {name:"benzoyl peroxide", label:"Benzoyl Peroxide",  benefit:"Kills acne bacteria",             detail:"One of the most effective over-the-counter acne treatments. Releases oxygen into the pore, killing C. acnes bacteria that cause breakouts. Also helps unclog pores.", goodFor:["Acne-prone","Oily"], howToUse:"Start with 2.5% to minimise irritation. Use as a spot treatment or thin layer — avoid mixing with retinol on the same application."},
+  {name:"peptide",          label:"Peptides",          benefit:"Firming, anti-aging",             detail:"Short chains of amino acids that signal the skin to produce more collagen and elastin. Different peptides target different concerns — from wrinkles to sagging to discoloration.", goodFor:["Mature","Anti-aging"], howToUse:"Can be used morning and night. Layer under moisturiser. Generally well tolerated alongside most other actives."},
+  {name:"ferulic acid",     label:"Ferulic Acid",      benefit:"Antioxidant booster",             detail:"A plant-derived antioxidant that dramatically boosts the stability and effectiveness of vitamin C and E. Standard in high-performance vitamin C serums.", goodFor:["All skin types","Anti-aging"], howToUse:"Usually formulated with vitamin C — no separate application needed. Use in the morning under SPF."},
+  {name:"snail secretion",  label:"Snail Mucin",       benefit:"Barrier repair, hydration",       detail:"Snail secretion filtrate contains glycoproteins, hyaluronic acid, glycolic acid, and antimicrobial peptides. Repairs skin barrier, fades scars, and provides lightweight hydration.", goodFor:["Acne scars","Dry","Damaged barrier"], howToUse:"Can be used morning and night. Layer under heavier creams. Extremely gentle — suitable for sensitive skin."},
+  {name:"centella",         label:"Centella Asiatica",  benefit:"Calming, healing",               detail:"Also called cica or tiger grass. Contains madecassoside and asiaticoside — compounds that promote wound healing, reduce inflammation, and strengthen the skin barrier.", goodFor:["Sensitive","Rosacea","Post-procedure","Acne scars"], howToUse:"Can be used morning and night. Ideal after treatments, waxing, or during a compromised-barrier recovery period."},
+  {name:"squalane",         label:"Squalane",           benefit:"Lightweight moisturizer",         detail:"A stable, skin-identical emollient derived from sugarcane or olives. Mimics the skin's own squalene, absorbs without grease, and is completely non-comedogenic.", goodFor:["All skin types","Oily","Sensitive"], howToUse:"Apply morning or night before heavier moisturisers, or mix a drop into your existing cream. Also works as a hair serum."},
+  {name:"allantoin",        label:"Allantoin",          benefit:"Soothing, healing",               detail:"A compound found in comfrey root. Promotes cell proliferation, speeds healing, and has keratolytic properties — softening rough skin while calming irritation.", goodFor:["Sensitive","Dry","Post-active irritation"], howToUse:"Works well in any routine step. Often used to buffer the irritation caused by retinol or acids."},
+];
+const ingLower = ingredients.toLowerCase();
+const found = ACTIVES.filter((a,i,arr) =>
+  ingLower.includes(a.name) &&
+  arr.findIndex(b=>b.label===a.label)===i
+);
+if (!found.length) return null;
+return (
+  <div style={{marginBottom:"0.75rem"}}>
+    <div style={{fontSize:"0.6rem",color:T.navy,textTransform:"uppercase",letterSpacing:"0.14em",fontWeight:"600",marginBottom:"0.5rem"}}>Key Actives <span style={{fontWeight:"400",color:T.textLight,textTransform:"none",letterSpacing:0,fontSize:"0.58rem"}}>— tap to learn more</span></div>
+    <div style={{display:"flex",flexWrap:"wrap",gap:"0.35rem"}}>
+      {found.map(a=>{
+        const isOpen = activeDetail===a.name;
+        const dbEntry = INGDB_META[a.name.toLowerCase()] || {};
+        return (
+          <div key={a.name} style={{width:"100%"}}>
+            <button onClick={()=>setActiveDetail(isOpen?null:a.name)}
+              style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",background:isOpen?T.accent+"18":T.accent+"10",border:`1px solid ${isOpen?T.accent+"55":T.accent+"25"}`,borderRadius:isOpen?"0.5rem 0.5rem 0 0":"0.5rem",padding:"0.4rem 0.65rem",cursor:"pointer",textAlign:"left",transition:"all 0.15s"}}>
+              <div>
+                <div style={{fontSize:"0.72rem",fontWeight:"700",color:T.accent}}>{a.label}</div>
+                <div style={{fontSize:"0.62rem",color:T.textMid}}>{a.benefit}</div>
+              </div>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2.5" style={{flexShrink:0,transform:isOpen?"rotate(180deg)":"none",transition:"transform 0.2s"}}><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            {isOpen&&(
+              <div style={{background:T.accent+"08",border:`1px solid ${T.accent+"25"}`,borderTop:"none",borderRadius:"0 0 0.5rem 0.5rem",padding:"0.65rem 0.75rem",display:"flex",flexDirection:"column",gap:"0.5rem",animation:"fadeUp 0.15s ease"}}>
+                {dbEntry.benefit&&<div>
+                  <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.sage,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>What it does</div>
+                  <div style={{fontSize:"0.78rem",color:T.text,lineHeight:1.5}}>{dbEntry.benefit}</div>
+                </div>}
+                {a.detail&&<div>
+                  <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.accent,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>How it works</div>
+                  <div style={{fontSize:"0.78rem",color:T.text,lineHeight:1.5}}>{a.detail}</div>
+                </div>}
+                {a.goodFor&&<div>
+                  <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textMid,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"4px"}}>Best for</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:"0.25rem"}}>
+                    {a.goodFor.map(s=><span key={s} style={{padding:"0.15rem 0.5rem",background:T.sage+"15",border:`1px solid ${T.sage}30`,borderRadius:"999px",fontSize:"0.65rem",color:T.sage,fontWeight:"500"}}>{s}</span>)}
+                  </div>
+                </div>}
+                {dbEntry.concern&&dbEntry.concern!=="None known"&&<div>
+                  <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.rose,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>Watch out</div>
+                  <div style={{fontSize:"0.75rem",color:T.textMid,lineHeight:1.45}}>{dbEntry.concern}</div>
+                </div>}
+                {a.howToUse&&<div style={{padding:"0.45rem 0.6rem",background:"rgba(255,255,255,0.7)",borderRadius:"0.4rem",border:`1px solid ${T.border}`}}>
+                  <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textMid,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>How to use</div>
+                  <div style={{fontSize:"0.72rem",color:T.textMid,lineHeight:1.45}}>{a.howToUse}</div>
+                </div>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  </div>
+);
 }
 
-function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
+
+// ── IngredientDetailSheet ─────────────────────────────────────
+function IngredientDetailSheet({ ing, onClose }) {
+  const ingKey = (ing.name || "").toLowerCase().replace(/\s*\(.*?\)/g, "").trim();
+  const dbEntry = INGDB[ingKey] || (() => {
+    const found = Object.entries(INGDB).find(([k, v]) => {
+      const allNames = [k, ...(v.aliases || [])];
+      return allNames.some(n => n && n.toLowerCase() === ingKey);
+    });
+    return found ? found[1] : null;
+  })();
+  const metaEntry = INGDB_META[ingKey] || (() => {
+    const found = Object.entries(INGDB_META).find(([k]) => k === ingKey);
+    return found ? found[1] : null;
+  })();
+  const rating = dbEntry?.score ?? null;
+  const isFlagged = dbEntry && (dbEntry.score >= 1 || dbEntry.irritant);
+  const ratingLabels = ["Non-comedogenic","Minimal","Low","High","High","Avoid"];
+  const category = metaEntry?.category || (dbEntry?.irritant ? "Irritant" : rating >= 1 ? "Comedogenic" : "Ingredient");
+  const benefit = metaEntry?.benefit || null;
+  const concern = (metaEntry?.concern && metaEntry.concern !== "None known") ? metaEntry.concern : (dbEntry?.note || null);
+
+  return (
+    <div onClick={e => e.stopPropagation()} style={{position:"absolute",bottom:0,left:0,right:0,background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",border:`1px solid ${T.border}`,borderBottom:"none",padding:"1rem 1.25rem 2rem",zIndex:10,boxShadow:"0 -6px 32px rgba(0,0,0,0.14)",animation:"fadeUp 0.2s ease"}}>
+      <div style={{width:36,height:3,borderRadius:2,background:T.border,margin:"0 auto 0.85rem"}}/>
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:"0.35rem"}}>
+        <div style={{fontSize:"0.95rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",textTransform:"capitalize",flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.name}</div>
+        <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",fontSize:"0.72rem",color:T.textLight,padding:"2px 0 2px 0.75rem",fontFamily:"'Inter',sans-serif",flexShrink:0}}>✕ close</button>
+      </div>
+      <span style={{display:"inline-block",fontSize:"0.62rem",padding:"0.18rem 0.65rem",borderRadius:20,marginBottom:"0.85rem",background:isFlagged?"#FAECE7":"#E1F5EE",color:isFlagged?"#712B13":"#085041",fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>{category}</span>
+      {benefit && (
+        <div style={{display:"flex",gap:"0.75rem",marginBottom:"0.6rem"}}>
+          <div style={{fontSize:"0.62rem",color:T.textLight,width:90,flexShrink:0,paddingTop:2,fontFamily:"'Inter',sans-serif"}}>Benefit</div>
+          <div style={{fontSize:"0.78rem",color:T.text,flex:1,lineHeight:1.55,fontFamily:"'Inter',sans-serif"}}>{benefit}</div>
+        </div>
+      )}
+      {rating != null && (
+        <div style={{display:"flex",gap:"0.75rem",marginBottom:"0.65rem",alignItems:"center"}}>
+          <div style={{fontSize:"0.62rem",color:T.textLight,width:90,flexShrink:0,fontFamily:"'Inter',sans-serif"}}>Comedogenic</div>
+          <div style={{display:"flex",alignItems:"center",gap:4}}>
+            {[0,1,2,3,4].map(i=><div key={i} style={{width:9,height:9,borderRadius:"50%",background:i<rating?T.rose:T.border,flexShrink:0}}/>)}
+            <span style={{fontSize:"0.62rem",color:T.textMid,marginLeft:6,fontFamily:"'Inter',sans-serif"}}>{rating}/5 — {ratingLabels[Math.min(rating,5)]}</span>
+          </div>
+        </div>
+      )}
+      {concern && isFlagged && <div style={{background:"#FAECE7",borderRadius:8,padding:"0.6rem 0.8rem"}}><div style={{fontSize:"0.72rem",color:"#712B13",lineHeight:1.55,fontFamily:"'Inter',sans-serif"}}>{concern}</div></div>}
+      {concern && !isFlagged && dbEntry?.irritant && <div style={{background:T.amber+"18",borderRadius:8,padding:"0.6rem 0.8rem"}}><div style={{fontSize:"0.72rem",color:T.amber,lineHeight:1.55,fontFamily:"'Inter',sans-serif"}}>⚠ {concern}</div></div>}
+      {!benefit && rating == null && !concern && <div style={{fontSize:"0.72rem",color:T.textLight,fontStyle:"italic",fontFamily:"'Inter',sans-serif"}}>No detailed info available for this ingredient yet.</div>}
+    </div>
+  );
+}
+
+// ── ProductModal ──────────────────────────────────────────────
+function ProductModal({product, onClose, user, profile, onUpdateProfile, onUserTap}) {
+  if (!product) return null;
+  return ReactDOM.createPortal(
+    <ProductModalInner product={product} onClose={onClose} user={user} profile={profile} onUpdateProfile={onUpdateProfile} onUserTap={onUserTap}/>,
+    document.body
+  );
+}
+
+function ProductModalInner({product, onClose, user, profile, onUpdateProfile, onUserTap}) {
   const productName = product?.productName || product?.name || "";
+  const [whyScoreOpen, setWhyScoreOpen] = React.useState(false);
+  const [selectedIngredient, setSelectedIngredient] = React.useState(null);
+  const modalRef = React.useRef(null);
+
+  // Scroll lock
+  React.useEffect(() => {
+    const scrollY = window.pageYOffset;
+    const scrollEls = Array.from(document.querySelectorAll('*')).filter(el => {
+      if (modalRef.current && modalRef.current.contains(el)) return false;
+      const s = window.getComputedStyle(el);
+      return (s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight;
+    });
+    const saved = scrollEls.map(el => ({ el, top: el.scrollTop }));
+    scrollEls.forEach(el => { el.style.overflow = 'hidden'; });
+    document.body.style.cssText += `;overflow:hidden;position:fixed;top:-${scrollY}px;width:100%;`;
+    return () => {
+      saved.forEach(({ el, top }) => { el.style.overflow = ''; el.scrollTop = top; });
+      document.body.style.overflow = '';
+      document.body.style.position = '';
+      document.body.style.top = '';
+      document.body.style.width = '';
+      window.scrollTo(0, scrollY);
+    };
+  }, []);
 
   const [myCommunityRating, setMyCommunityRating] = useState(0);
   const [submitted, setSubmitted] = useState(false);
@@ -2012,51 +2198,52 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
   const [existingRating, setExistingRating] = useState(null);
   const [loadingExisting, setLoadingExisting] = useState(true);
   const [shareOpen, setShareOpen] = useState(false);
-  const [friendsUsing, setFriendsUsing] = useState(product?.friends || []);
+  const [showFriendsList, setShowFriendsList] = useState(false);
+  const [reportState, setReportState] = useState("idle");
+  const [reportText, setReportText] = useState("");
 
-  // Load who in your network uses this product
-  useEffect(() => {
-    if (!user?.uid || !productName || !profile?.following?.length) return;
-    const followingIds = profile.following || [];
-    Promise.all(
-      followingIds.slice(0, 20).map(uid =>
-        getDoc(doc(db, "users", uid))
-          .then(d => d.exists() ? {uid: d.id, ...d.data()} : null)
-          .catch(() => null)
-      )
-    ).then(friends => {
-      const using = friends.filter(Boolean).filter(f => {
-        const key = productName.toLowerCase().trim();
-        const lists = [
-          ...(f.routine || []),
-          ...(f.loved || []),
-        ].map(n => (n || "").toLowerCase().trim());
-        return lists.some(n => n === key || n.includes(key) || key.includes(n));
-      }).map(f => ({
-        uid: f.uid,
-        displayName: f.displayName || "Someone",
-        photoURL: f.photoURL || "",
-      }));
-      if (using.length) setFriendsUsing(using);
-    });
-  }, [user?.uid, productName, profile?.following]);
+  // Seed + real friends
+  const SEED_FRIENDS = [
+    {uid:"seed_01",displayName:"Cassidy Monroe",  photoURL:"https://i.pravatar.cc/150?img=47"},
+    {uid:"seed_02",displayName:"Jenna Caldwell",  photoURL:"https://i.pravatar.cc/150?img=49"},
+    {uid:"seed_03",displayName:"Leila Ramos",     photoURL:"https://i.pravatar.cc/150?img=32"},
+    {uid:"seed_04",displayName:"Priya Nair",      photoURL:"https://i.pravatar.cc/150?img=44"},
+    {uid:"seed_05",displayName:"Brooke Sullivan", photoURL:"https://i.pravatar.cc/150?img=39"},
+    {uid:"seed_06",displayName:"Danielle Park",   photoURL:"https://i.pravatar.cc/150?img=45"},
+    {uid:"seed_07",displayName:"Alexis Turner",   photoURL:"https://i.pravatar.cc/150?img=38"},
+    {uid:"seed_08",displayName:"Megan Foster",    photoURL:"https://i.pravatar.cc/150?img=26"},
+    {uid:"seed_09",displayName:"Simone Okafor",   photoURL:"https://i.pravatar.cc/150?img=29"},
+    {uid:"seed_10",displayName:"Taylor Nguyen",   photoURL:"https://i.pravatar.cc/150?img=43"},
+    {uid:"seed_11",displayName:"Camille Petit",   photoURL:"https://i.pravatar.cc/150?img=35"},
+    {uid:"seed_12",displayName:"Naomi Whitfield", photoURL:"https://i.pravatar.cc/150?img=25"},
+    {uid:"seed_13",displayName:"Kavya Sharma",    photoURL:"https://i.pravatar.cc/150?img=31"},
+    {uid:"seed_14",displayName:"Riley Andrews",   photoURL:"https://i.pravatar.cc/150?img=27"},
+    {uid:"seed_15",displayName:"Ava Chen",        photoURL:"https://i.pravatar.cc/150?img=48"},
+  ];
+  const _seedHash = (productName||"x").split("").reduce((a,c,i)=>a + c.charCodeAt(0)*(i+1), 0);
+  const _seedCount = 2 + (_seedHash % 4);
+  const _seededFriends = [...SEED_FRIENDS].sort((a,b)=>((parseInt(a.uid.slice(-2))*_seedHash)%97)-((parseInt(b.uid.slice(-2))*_seedHash)%97)).slice(0,_seedCount);
+  const [followersWhoUse, setFollowersWhoUse] = useState(_seededFriends);
 
-  // Check both ratings collection AND posts for any prior rating
+  useEffect(()=>{
+    const following = profile?.following || [];
+    if (!following.length) return;
+    (async()=>{
+      try {
+        const snaps = await Promise.all(following.slice(0,15).map(uid=>getDoc(doc(db,"users",uid))));
+        const users = snaps.filter(s=>s.exists()).map(s=>({uid:s.id,...s.data()}));
+        const using = users.filter(u=>(u.routine||[]).some(r=>r.toLowerCase()===productName.toLowerCase()));
+        if (using.length > 0) setFollowersWhoUse(using);
+      } catch {}
+    })();
+  },[productName]);
+
   useEffect(() => {
     if (!user?.uid || !productName || !product) { setLoadingExisting(false); return; }
-    setLoadingExisting(true);
-    setExistingRating(null);
-    setSubmitted(false);
-
+    setLoadingExisting(true); setExistingRating(null); setSubmitted(false);
     Promise.all([
-      // Check ratings collection
-      getDocs(query(collection(db,"ratings"), where("uid","==",user.uid), where("productName","==",productName), limit(1)))
-        .then(snap => snap.empty ? null : Number(snap.docs[0].data().communityRating)||null)
-        .catch(()=>null),
-      // Check posts collection
-      getDocs(query(collection(db,"posts"), where("uid","==",user.uid), where("productName","==",productName), where("communityRating","!=",null), limit(1)))
-        .then(snap => snap.empty ? null : Number(snap.docs[0].data().communityRating)||null)
-        .catch(()=>null),
+      getDocs(query(collection(db,"ratings"), where("uid","==",user.uid), where("productName","==",productName), limit(1))).then(snap => snap.empty ? null : Number(snap.docs[0].data().communityRating)||null).catch(()=>null),
+      getDocs(query(collection(db,"posts"), where("uid","==",user.uid), where("productName","==",productName), where("communityRating","!=",null), limit(1))).then(snap => snap.empty ? null : Number(snap.docs[0].data().communityRating)||null).catch(()=>null),
     ]).then(([fromRatings, fromPosts]) => {
       const found = fromRatings || fromPosts;
       if (found) setExistingRating(found);
@@ -2064,7 +2251,6 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
     });
   }, [user?.uid, productName]);
 
-  // Always recalculate from ingredients so score is consistent with the analyzer
   const _ingAnalysis = product.ingredients ? analyzeIngredients(product.ingredients) : null;
   const liveScore = _ingAnalysis
     ? (_ingAnalysis.avgScore != null ? Math.round(_ingAnalysis.avgScore) : (_ingAnalysis.poreCloggers?.length ? 1 : 0))
@@ -2086,33 +2272,10 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
       const autoPoreScore = analysis.avgScore != null ? Math.round(analysis.avgScore) : (product.poreScore || 0);
       const displayName = profile?.displayName || user.displayName || "Anonymous";
       const photoURL = profile?.photoURL || user.photoURL || "";
-
-      // Upsert to ratings collection — use stable doc ID so re-rating updates in place
       const ratingDocId = `${user.uid}_${productName.toLowerCase().replace(/[^a-z0-9]/g,'_').slice(0,60)}`;
-      await setDoc(doc(db, "ratings", ratingDocId), {
-        uid: user.uid,
-        displayName,
-        photoURL,
-        productName,
-        productId: product.id || product.productId || "",
-        brand: product.brand || "",
-        poreScore: autoPoreScore,
-        communityRating: myCommunityRating,
-        productImage: product.adminImage || product.image || product.productImage || "",
-        ingredients: ingredients.slice(0, 500),
-        updatedAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-      }, { merge: true });
-
-      // Also write to posts feed as before
-      await postScan(
-        user.uid, displayName, photoURL,
-        productName, product.brand || "",
-        autoPoreScore, myCommunityRating,
-        ingredients, analysis.found,
-      );
-      setSubmitted(true);
-      setExistingRating(myCommunityRating);
+      await setDoc(doc(db, "ratings", ratingDocId), { uid:user.uid, displayName, photoURL, productName, productId:product.id||product.productId||"", brand:product.brand||"", poreScore:autoPoreScore, communityRating:myCommunityRating, productImage:product.adminImage||product.image||product.productImage||"", ingredients:ingredients.slice(0,500), updatedAt:serverTimestamp(), createdAt:serverTimestamp() }, { merge: true });
+      await postScan(user.uid, displayName, photoURL, productName, product.brand||"", autoPoreScore, myCommunityRating, ingredients, analysis.found);
+      setSubmitted(true); setExistingRating(myCommunityRating);
       onUpdateProfile?.(p=>({...p, _ratingsRefresh: Date.now()}));
     } catch(e) { console.error("submitRating error:", e); }
     setSubmitting(false);
@@ -2131,87 +2294,51 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
         await updateDoc(doc(db,"users",user.uid),{[field]:arrayUnion(name)});
         onUpdateProfile?.(p=>({...p,[field]:[...(p[field]||[]),name]}));
       }
-    const toastMsg = newLists[listKey] ? `Added to ${listKey==="routine"?"Routine":listKey==="loved"?"Loved":"Want to Try"} ✓` : "Removed";
-    const t = document.createElement("div"); t.className="save-toast"; t.textContent=toastMsg;
-    document.body.appendChild(t); setTimeout(()=>t.remove(), 2100);
-  } catch(e) { console.error("toggleList error", e); }
+      const listLabel = field==="routine"?"Routine":field==="loved"?"Loved":"Want to Try";
+      const t = document.createElement("div"); t.className="save-toast"; t.textContent=inList?"Removed":`Added to ${listLabel} ✓`;
+      document.body.appendChild(t); setTimeout(()=>t.remove(), 2100);
+    } catch(e) { console.error("toggleList error", e); }
   }
 
-  // Separate pore-cloggers and irritants for display
   const {poreCloggers: modalCloggers, irritants: modalIrritants} = (() => {
-    if (_ingAnalysis) {
-      return {
-        poreCloggers: (_ingAnalysis.poreCloggers||[]).sort((a,b)=>b.score-a.score).slice(0,6),
-        irritants: (_ingAnalysis.irritants||[]).slice(0,6),
-      };
-    }
+    if (_ingAnalysis) return { poreCloggers:(_ingAnalysis.poreCloggers||[]).sort((a,b)=>b.score-a.score).slice(0,6), irritants:(_ingAnalysis.irritants||[]).slice(0,6) };
     if (product.flaggedIngredients?.length) {
       const mapped = product.flaggedIngredients.map(rawName => {
         const key = rawName.toLowerCase().replace(/\s*\(.*?\)/g,"").trim();
-        const dbEntry = INGDB[key] || Object.entries(INGDB).find(([k,v])=>
-          k===key || (v.aliases||[]).some(a=>key.includes(a) || a.includes(key))
-        )?.[1];
+        const dbEntry = INGDB[key] || Object.entries(INGDB).find(([k,v])=>k===key||(v.aliases||[]).some(a=>a===key))?.[1];
         return { name:rawName, score:dbEntry?.score??3, note:dbEntry?.note??"Potential pore-clogger", irritant:dbEntry?.irritant };
       });
-      return {
-        poreCloggers: mapped.filter(i=>i.score>=1).sort((a,b)=>b.score-a.score),
-        irritants: mapped.filter(i=>i.irritant&&i.score<1),
-      };
+      return { poreCloggers:mapped.filter(i=>i.score>=1).sort((a,b)=>b.score-a.score), irritants:mapped.filter(i=>i.irritant&&i.score<1) };
     }
     return {poreCloggers:[], irritants:[]};
   })();
-  const ingredientBreakdown = [...modalCloggers, ...modalIrritants];
 
-  // Followers who use this product (in their routine)
-  const SEED_FRIENDS = [
-    {uid:"seed_01",displayName:"Cassidy Monroe",  photoURL:"https://i.pravatar.cc/150?img=47"},
-    {uid:"seed_02",displayName:"Jenna Caldwell",  photoURL:"https://i.pravatar.cc/150?img=49"},
-    {uid:"seed_03",displayName:"Leila Ramos",     photoURL:"https://i.pravatar.cc/150?img=32"},
-    {uid:"seed_04",displayName:"Priya Nair",      photoURL:"https://i.pravatar.cc/150?img=44"},
-    {uid:"seed_05",displayName:"Brooke Sullivan", photoURL:"https://i.pravatar.cc/150?img=39"},
-    {uid:"seed_06",displayName:"Danielle Park",   photoURL:"https://i.pravatar.cc/150?img=45"},
-    {uid:"seed_07",displayName:"Alexis Turner",   photoURL:"https://i.pravatar.cc/150?img=38"},
-    {uid:"seed_08",displayName:"Megan Foster",    photoURL:"https://i.pravatar.cc/150?img=26"},
-    {uid:"seed_09",displayName:"Simone Okafor",   photoURL:"https://i.pravatar.cc/150?img=29"},
-    {uid:"seed_10",displayName:"Taylor Nguyen",   photoURL:"https://i.pravatar.cc/150?img=43"},
-    {uid:"seed_11",displayName:"Camille Petit",   photoURL:"https://i.pravatar.cc/150?img=35"},
-    {uid:"seed_12",displayName:"Naomi Whitfield", photoURL:"https://i.pravatar.cc/150?img=25"},
-    {uid:"seed_13",displayName:"Kavya Sharma",    photoURL:"https://i.pravatar.cc/150?img=31"},
-    {uid:"seed_14",displayName:"Riley Andrews",   photoURL:"https://i.pravatar.cc/150?img=27"},
-    {uid:"seed_15",displayName:"Ava Chen",        photoURL:"https://i.pravatar.cc/150?img=48"},
-  ];
-  // Compute seed friends synchronously so they show immediately without waiting for useEffect
-  const _seedHash = (productName||"x").split("").reduce((a,c,i)=>a + c.charCodeAt(0) * (i+1), 0);
-  const _seedCount = 2 + (_seedHash % 4);
-  const _seededFriends = [...SEED_FRIENDS].sort((a,b)=>{
-    const av = (parseInt(a.uid.slice(-2)) * _seedHash) % 97;
-    const bv = (parseInt(b.uid.slice(-2)) * _seedHash) % 97;
-    return av - bv;
-  }).slice(0, _seedCount);
+  // ── Pore score SVG dial values
+  const DIAL_R = 28;
+  const DIAL_CIRC = 2 * Math.PI * DIAL_R;
+  const dialFill = Math.min(liveScore / 5, 1);
+  const dialDash = `${dialFill * DIAL_CIRC} ${DIAL_CIRC}`;
+  const scoreLabel = ["Clear","Minimal","Low","High","High","Avoid"][liveScore] || "Clear";
+  const scoreSubtext = ["Won't clog pores","Very unlikely to clog","May affect some skin","Likely to clog pores","High clog risk","Avoid — clogs pores"][liveScore] || "";
 
-  const [followersWhoUse, setFollowersWhoUse] = useState(_seededFriends);
-  useEffect(()=>{
-    const following = profile?.following || [];
-    if (!following.length) return; // keep seed friends if no real followers
-    (async()=>{
-      try {
-        const snaps = await Promise.all(following.slice(0,15).map(uid=>getDoc(doc(db,"users",uid))));
-        const users = snaps.filter(s=>s.exists()).map(s=>({uid:s.id,...s.data()}));
-        const using = users.filter(u=>(u.routine||[]).some(r=>r.toLowerCase()===productName.toLowerCase()));
-        if (using.length > 0) setFollowersWhoUse(using);
-        // else keep seed friends already shown
-      } catch {}
-    })();
-  },[productName]);
+  // ── Community stars
+  const commStars = product.communityRating ? (() => {
+    const s = product.communityRating / 2;
+    return { full:Math.floor(s), half:s-Math.floor(s)>=0.5, empty:5-Math.floor(s)-(s-Math.floor(s)>=0.5?1:0), label:product.communityRating>=9?"Loved":product.communityRating>=7?"Liked":product.communityRating>=5?"Mixed":"Low" };
+  })() : null;
+
+  const buyUrl = product.buyUrl || amazonUrl(product.productName||product.name||"", product.brand||"", product.barcode||product.code||"");
 
   return (
-    <div style={{position:"fixed",inset:0,zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}}>
-      {/* Backdrop — tap to close */}
-      <div onClick={onClose} style={{position:"absolute",inset:0,background:"rgba(28,28,26,0.45)",backdropFilter:"blur(4px)",cursor:"pointer"}}/>
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9500,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}}>
+      {/* Backdrop */}
+      <div onClick={()=>{setSelectedIngredient(null);onClose();}} style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(28,28,26,0.45)",backdropFilter:"blur(4px)",cursor:"pointer"}}/>
+
       {/* Sheet */}
-      <div style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.5rem 1.5rem 2.5rem",boxShadow:"0 -8px 40px rgba(28,28,26,0.15)",maxHeight:"88vh",overflowY:"auto",zIndex:1}} className="fu">
-        {/* Drag handle + close button */}
-        <div style={{display:"flex",alignItems:"center",justifyContent:"center",marginBottom:"1.25rem",position:"relative"}}>
+      <div ref={modalRef} style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1.25rem",paddingBottom:"calc(2.5rem + env(safe-area-inset-bottom))",boxShadow:"0 -8px 40px rgba(28,28,26,0.15)",maxHeight:"92vh",overflowY:selectedIngredient?"hidden":"auto",zIndex:1}} className="fu">
+
+        {/* ── Handle + share/close ── */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",marginBottom:"1rem",position:"relative"}}>
           <div style={{width:"36px",height:"4px",background:T.border,borderRadius:"999px"}}/>
           <button onClick={()=>setShareOpen(true)} style={{position:"absolute",left:0,top:"50%",transform:"translateY(-50%)",background:T.surfaceAlt,border:"none",borderRadius:"50%",width:"28px",height:"28px",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:T.textMid}}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
@@ -2220,186 +2347,174 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
         </div>
         {shareOpen&&user&&<ShareProductModal user={user} product={product} onClose={()=>setShareOpen(false)}/>}
 
-        {/* Product image */}
-        <div style={{width:"100%",height:"200px",background:`linear-gradient(135deg,${T.iceBlue}40,${T.surfaceAlt})`,borderRadius:"1rem",overflow:"hidden",marginBottom:"1.25rem",display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${T.iceBlue}66`}}>
+        {/* ── 1. Product image ── */}
+        <div style={{width:"100%",height:"190px",background:`linear-gradient(135deg,${T.iceBlue}40,${T.surfaceAlt})`,borderRadius:"1rem",overflow:"hidden",marginBottom:"1.1rem",display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${T.iceBlue}66`}}>
           <ProductImage src={product.image} name={product.productName} brand={product.brand} barcode={product.barcode}/>
         </div>
 
-        {/* Name + brand */}
+        {/* ── 2. Brand pill + Name ── */}
         <div style={{marginBottom:"1rem"}}>
-          {product.brand&&<div style={{display:"inline-block",fontSize:"0.6rem",color:T.navy,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:"0.4rem",fontFamily:"'Inter',sans-serif",background:T.iceBlue+"55",padding:"0.2rem 0.6rem",borderRadius:"999px",border:`1px solid ${T.iceBlue}`}}>{product.brand}</div>}
-          <div style={{fontSize:"1.5rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif",lineHeight:1.2,marginBottom:"0.35rem",letterSpacing:"-0.03em"}}>{product.productName}</div>
-
+          {product.brand&&<div style={{display:"inline-block",fontSize:"0.6rem",color:T.navy,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:"0.35rem",fontFamily:"'Inter',sans-serif",background:T.iceBlue+"55",padding:"0.2rem 0.6rem",borderRadius:"999px",border:`1px solid ${T.iceBlue}`}}>{product.brand}</div>}
+          <div style={{fontSize:"1.45rem",fontWeight:"800",color:T.navy,fontFamily:"'Inter',sans-serif",lineHeight:1.15,letterSpacing:"-0.03em"}}>{product.productName}</div>
         </div>
 
-        {/* ── Scores: two matching boxes ── */}
-        <div style={{display:"flex",gap:"0.6rem",marginBottom:"0",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`}}>
-          {/* Pore Clog Score */}
-          <div style={{flex:1,padding:"0.75rem",background:ps.color+"10",borderRadius:"0.75rem",textAlign:"center",border:`1px solid ${ps.color}22`}}>
-            <div style={{fontSize:"0.58rem",color:T.slateGray,fontWeight:"600",fontFamily:"'Inter',sans-serif",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.1em",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.3rem"}}>Pore Clog Score <PoreScoreInfo score={liveScore} inline/></div>
-            {(_ingAnalysis || liveScore > 0) ? (
-              <>
-                <div style={{fontSize:"2rem",fontWeight:"700",color:ps.color,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{liveScore}<span style={{fontSize:"0.75rem",color:T.textLight,fontWeight:"400"}}>/5</span></div>
-                <div style={{fontSize:"0.65rem",color:ps.color,marginTop:"4px",fontWeight:"600"}}>{ps.label}</div>
-                <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",lineHeight:1.4,padding:"0 2px"}}>
-                  {liveScore===0?"Won't clog your pores":liveScore===1?"Very unlikely to clog":liveScore===2?"May affect some skin":liveScore===3?"Likely to clog pores":liveScore===4?"High clog risk":"Avoid — clogs pores"}
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{fontSize:"2rem",fontWeight:"700",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1}}>—</div>
-                <div style={{fontSize:"0.65rem",color:T.amber,marginTop:"4px",fontWeight:"500"}}>Not yet scored</div>
-                <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",lineHeight:1.4}}>We need the ingredient list</div>
-              </>
-            )}
-          </div>
-          {/* Rallier Score */}
-          <div style={{flex:1,padding:"0.75rem",background:`linear-gradient(135deg,${T.iceBlue}30,${cc}10)`,borderRadius:"0.75rem",textAlign:"center",border:`1px solid ${T.iceBlue}88`}}>
-            <div style={{fontSize:"0.58rem",color:T.slateGray,fontWeight:"600",fontFamily:"'Inter',sans-serif",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.1em"}}>Rallier Score</div>
-            {product.communityRating ? (
-              <>
-                <div style={{fontSize:"2rem",fontWeight:"700",color:cc,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{product.communityRating}<span style={{fontSize:"0.75rem",color:T.textLight,fontWeight:"400"}}>/10</span></div>
-                <div style={{fontSize:"0.65rem",color:cc,marginTop:"4px",fontWeight:"600"}}>{product.communityRating>=8?"Loved":product.communityRating>=6?"Liked":product.communityRating>=4?"Mixed":"Low rating"}</div>
-                <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",lineHeight:1.4,padding:"0 2px"}}>
-                  {product.ratingCount>0?`${product.ratingCount} ratings`:"Rated by Ralliers"}
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{fontSize:"2rem",fontWeight:"700",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1}}>—</div>
-                <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"4px",fontWeight:"500"}}>No ratings yet</div>
-                <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",lineHeight:1.4}}>Be the first to rate it</div>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* ── Friends Also Using ── */}
-        {followersWhoUse.length > 0 && (
-          <div style={{paddingTop:"1rem",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"0",background:T.iceBlue+"22",borderRadius:"0.75rem",padding:"0.85rem 1rem",margin:"0.75rem 0"}}>
-            <div style={{fontSize:"0.6rem",color:T.textLight,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.65rem",fontFamily:"'Inter',sans-serif"}}>Friends Also Using</div>
-            <div style={{display:"flex",alignItems:"center",gap:"0.75rem"}}>
-              <div style={{display:"flex",flexShrink:0}}>
-                {followersWhoUse.slice(0,4).map((u,i)=>(
-                  <div key={u.uid} style={{width:"34px",height:"34px",borderRadius:"50%",overflow:"hidden",border:`2px solid ${T.surface}`,marginLeft:i>0?"-9px":"0",background:T.accent+"22",flexShrink:0,position:"relative",zIndex:10-i,boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}}>
-                    {u.photoURL
-                      ? <img src={u.photoURL} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>
-                      : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:T.accent,fontSize:"0.62rem",fontWeight:"700",color:"#fff"}}>{(u.displayName||"?")[0].toUpperCase()}</div>
-                    }
-                  </div>
-                ))}
-              </div>
-              <span style={{fontSize:"0.8rem",color:T.text,fontWeight:"500",fontFamily:"'Inter',sans-serif",lineHeight:1.35}}>
-                {followersWhoUse.length} {followersWhoUse.length===1?"friend uses":"friends use"} this
-              </span>
+        {/* ── 3. Score row: dial + label + community ── */}
+        <div style={{display:"flex",alignItems:"center",gap:"1rem",paddingBottom:"1rem",borderBottom:`1px solid ${T.border}`}}>
+          <div style={{position:"relative",width:72,height:72,flexShrink:0}}>
+            <svg viewBox="0 0 68 68" width="72" height="72">
+              <circle cx="34" cy="34" r={DIAL_R} fill="none" stroke={T.border} strokeWidth="5"/>
+              <circle cx="34" cy="34" r={DIAL_R} fill="none" stroke={ps.color} strokeWidth="5" strokeDasharray={dialDash} strokeLinecap="round" transform="rotate(-90 34 34)" style={{transition:"stroke-dasharray 0.5s ease"}}/>
+            </svg>
+            <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+              <span style={{fontSize:"1.4rem",fontWeight:"800",color:ps.color,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{liveScore}</span>
+              <span style={{fontSize:"0.42rem",color:T.textLight,fontFamily:"'Inter',sans-serif",textTransform:"uppercase"}}>/5</span>
             </div>
           </div>
-        )}
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:"0.55rem",color:T.textLight,fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.2rem",fontFamily:"'Inter',sans-serif"}}>Pore Score</div>
+            <div style={{fontSize:"1rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.2}}>{scoreLabel} risk</div>
+            <div style={{fontSize:"0.68rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginTop:"0.15rem"}}>{scoreSubtext}</div>
+          </div>
+          <div style={{textAlign:"right",flexShrink:0}}>
+            {product.communityRating ? (<>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:"2px"}}>
+                {commStars&&<>{[...Array(commStars.full)].map((_,i)=><svg key={"f"+i} width="15" height="15" viewBox="0 0 24 24" fill="#F59E0B" stroke="#F59E0B" strokeWidth="1"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>)}{commStars.half&&<svg key="h" width="15" height="15" viewBox="0 0 24 24" stroke="#F59E0B" strokeWidth="1"><defs><linearGradient id="hgc"><stop offset="50%" stopColor="#F59E0B"/><stop offset="50%" stopColor="none" stopOpacity="0"/></linearGradient></defs><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" fill="url(#hgc)"/></svg>}{[...Array(commStars.empty)].map((_,i)=><svg key={"e"+i} width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="1.5" opacity="0.3"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>)}</>}
+              </div>
+              <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",fontFamily:"'Inter',sans-serif",textAlign:"right"}}>{commStars?.label||""} · Community</div>
+            </>) : (<>
+              <div style={{display:"flex",gap:"2px",justifyContent:"flex-end"}}>
+                {[1,2,3,4,5].map(i=><svg key={i} width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="1.5" opacity="0.2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>)}
+              </div>
+              <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",fontFamily:"'Inter',sans-serif",textAlign:"right"}}>No ratings yet</div>
+            </>)}
+          </div>
+        </div>
 
-        {/* ── Action buttons: 3 equal options ── */}
+        {/* ── 4. Attribute rows ── */}
+        <div style={{marginBottom:"0.5rem"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"0.65rem",padding:"0.6rem 0",borderBottom:`0.5px solid ${T.border}`}}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="1.5" style={{flexShrink:0}}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span style={{fontSize:"0.8rem",color:T.textMid,flex:1,fontFamily:"'Inter',sans-serif"}}>Flagged ingredients</span>
+            <span style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{(modalCloggers.length+modalIrritants.length)>0?`${modalCloggers.length+modalIrritants.length} flagged`:"None found"}</span>
+            <div style={{width:8,height:8,borderRadius:"50%",flexShrink:0,background:(modalCloggers.length+modalIrritants.length)>2?T.rose:(modalCloggers.length+modalIrritants.length)>0?T.amber:T.sage}}/>
+          </div>
+          {product.skinTypes?.length>0&&(
+            <div style={{display:"flex",alignItems:"center",gap:"0.65rem",padding:"0.6rem 0",borderBottom:`0.5px solid ${T.border}`}}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="1.5" style={{flexShrink:0}}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+              <span style={{fontSize:"0.8rem",color:T.textMid,flex:1,fontFamily:"'Inter',sans-serif"}}>Skin types</span>
+              <span style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{product.skinTypes.join(", ")}</span>
+              <div style={{width:8,height:8,borderRadius:"50%",flexShrink:0,background:T.sage}}/>
+            </div>
+          )}
+          {followersWhoUse.length>0&&(
+            <div style={{display:"flex",alignItems:"center",gap:"0.65rem",padding:"0.6rem 0",borderBottom:`0.5px solid ${T.border}`}}>
+              <div style={{display:"flex",flexShrink:0}}>
+                {followersWhoUse.slice(0,3).map((u,i)=>{
+                  const isSeed=u.uid?.startsWith("seed_");
+                  return <div key={u.uid} onClick={()=>{if(!isSeed&&onUserTap){onClose();onUserTap(u.uid);}}} style={{width:24,height:24,borderRadius:"50%",overflow:"hidden",border:`2px solid ${T.surface}`,marginLeft:i>0?-7:0,background:T.accent+"22",flexShrink:0,cursor:(!isSeed&&onUserTap)?"pointer":"default",zIndex:10-i,position:"relative"}}>
+                    {u.photoURL?<img src={u.photoURL} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>:<div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:T.accent,fontSize:"0.5rem",fontWeight:"700",color:"#fff"}}>{(u.displayName||"?")[0].toUpperCase()}</div>}
+                  </div>;
+                })}
+              </div>
+              <button onClick={()=>{if(followersWhoUse.length===1&&!followersWhoUse[0].uid?.startsWith("seed_")&&onUserTap){onClose();onUserTap(followersWhoUse[0].uid);}else{setShowFriendsList(v=>!v);}}} style={{flex:1,background:"none",border:"none",padding:0,cursor:"pointer",textAlign:"left"}}>
+                <span style={{fontSize:"0.8rem",color:T.textMid,fontFamily:"'Inter',sans-serif"}}>
+                  {followersWhoUse.length===1?<><b style={{color:T.text}}>{followersWhoUse[0].displayName?.split(" ")[0]}</b> uses this</>:<><b style={{color:T.text}}>{followersWhoUse.slice(0,2).map(f=>f.displayName?.split(" ")[0]).join(" & ")}</b> use this</>}
+                </span>
+              </button>
+              <div style={{width:8,height:8,borderRadius:"50%",flexShrink:0,background:T.sage}}/>
+            </div>
+          )}
+          {showFriendsList&&followersWhoUse.length>1&&(
+            <div style={{paddingBottom:"0.5rem",borderBottom:`0.5px solid ${T.border}`}}>
+              {followersWhoUse.map(u=>{const isSeed=u.uid?.startsWith("seed_");return(
+                <button key={u.uid} onClick={()=>{if(!isSeed&&onUserTap){onClose();onUserTap(u.uid);}}} style={{width:"100%",display:"flex",alignItems:"center",gap:"0.6rem",background:"none",border:"none",cursor:(!isSeed&&onUserTap)?"pointer":"default",padding:"0.35rem 0",textAlign:"left"}}>
+                  <div style={{width:26,height:26,borderRadius:"50%",overflow:"hidden",background:T.accent+"22",flexShrink:0}}>{u.photoURL?<img src={u.photoURL} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>:<div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:T.accent,fontSize:"0.5rem",fontWeight:"700",color:"#fff"}}>{(u.displayName||"?")[0].toUpperCase()}</div>}</div>
+                  <span style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{u.displayName}</span>
+                  {!isSeed&&onUserTap&&<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" style={{marginLeft:"auto",flexShrink:0}}><polyline points="9 18 15 12 9 6"/></svg>}
+                </button>
+              );})}
+              <button onClick={()=>setShowFriendsList(false)} style={{fontSize:"0.68rem",color:T.textLight,background:"none",border:"none",cursor:"pointer",padding:"0.2rem 0",fontFamily:"'Inter',sans-serif"}}>Show less</button>
+            </div>
+          )}
+        </div>
+
+        {/* ── 5. Action buttons — pill toggle style ── */}
         {user&&(
-          <div style={{display:"flex",gap:"0.5rem",paddingTop:"1.1rem",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"1.1rem"}}>
+          <div style={{display:"flex",gap:"0.4rem",paddingTop:"0.75rem",paddingBottom:"1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"1rem"}}>
             {[
-              {field:"routine",   active:inRoutine,   label:"Add to Routine", activeLabel:"In Routine"},
+              {field:"routine",   active:inRoutine,   label:"Add to Routine", activeLabel:"In Routine ✓"},
               {field:"wantToTry", active:inWantToTry, label:"Want to Try",     activeLabel:"Want to Try ✓"},
               {field:"brokeout",  active:inBrokeout,  label:"Broke Me Out",    activeLabel:"Broke Out ✓"},
             ].map(({field,active,label,activeLabel})=>(
               <button key={field} onClick={()=>toggleList(field,active)}
-                style={{flex:1,padding:"0.75rem 0.25rem",background:active?T.navy:T.surfaceAlt,color:active?"#fff":T.navy,border:`1.5px solid ${active?T.navy:T.border}`,borderRadius:"0.75rem",fontSize:"0.75rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.15s",minWidth:0,display:"flex",alignItems:"center",justifyContent:"center",gap:"0.3rem"}}>
-                {active&&<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
-                {active ? activeLabel : label}
+                style={{flex:1,padding:"0.6rem 0.2rem",background:active?T.navy:"transparent",color:active?"#fff":T.textMid,border:`1px solid ${active?T.navy:T.border}`,borderRadius:"999px",fontSize:"0.7rem",fontWeight:active?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.18s",minWidth:0,textAlign:"center",letterSpacing:active?"-0.01em":"0"}}>
+                {active?activeLabel:label}
               </button>
             ))}
           </div>
         )}
 
-        {/* ── Why this score? expandable ───────────────────── */}
-        {product.ingredients && liveScore !== null && (() => {
-          const [open, setOpen] = React.useState(false);
-          const cloggers = modalCloggers.slice(0, 5);
-          const irritants = modalIrritants.slice(0, 3);
-          const safeHighlights = (() => {
-            if (!product.ingredients) return [];
-            const res = analyzeIngredients(product.ingredients);
-            return (res.found||[])
-              .filter(i => i.score === 0 && !i.irritant)
-              .filter(i => ["niacinamide","hyaluronic acid","sodium hyaluronate","ceramide","glycerin","centella asiatica","salicylic acid","retinol","panthenol","allantoin","squalane","zinc pca","azelaic acid","tranexamic acid","vitamin c","ascorbic acid","alpha-arbutin","niacinamide"].includes(i.name.toLowerCase()))
-              .slice(0, 3);
+        {/* ── 6. Shop + Share ── */}
+        <div style={{display:"flex",gap:"0.5rem",marginBottom:"1rem"}}>
+          <a href={buyUrl} target="_blank" rel="noopener noreferrer"
+            onClick={()=>trackProductClick(product._productId||product.id||null,product.productName||product.name||"")}
+            style={{flex:1,padding:"0.75rem",background:T.navy,color:"#FFFFFF",borderRadius:"0.75rem",fontSize:"0.88rem",fontWeight:"700",textAlign:"center",textDecoration:"none",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.4rem"}}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+            Shop
+          </a>
+          <button onClick={()=>shareProduct(product.productName||product.name||"",product.brand||"")} style={{padding:"0.75rem 1.1rem",background:"transparent",border:`1.5px solid ${T.border}`,borderRadius:"0.75rem",color:T.textMid,cursor:"pointer",display:"flex",alignItems:"center",gap:"0.35rem",fontFamily:"'Inter',sans-serif",fontSize:"0.85rem",fontWeight:"600"}}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+            Share
+          </button>
+        </div>
+
+        {/* ── 7. Why this score? (collapsed by default) ── */}
+        {product.ingredients&&liveScore!==null&&(()=>{
+          const cloggers=modalCloggers.slice(0,5);
+          const irritants=modalIrritants.slice(0,3);
+          const safeHighlights=(()=>{
+            if(!product.ingredients)return[];
+            const res=analyzeIngredients(product.ingredients);
+            return(res.found||[]).filter(i=>i.score===0&&!i.irritant).filter(i=>["niacinamide","hyaluronic acid","sodium hyaluronate","ceramide","glycerin","centella asiatica","salicylic acid","retinol","panthenol","allantoin","squalane","zinc pca","azelaic acid","tranexamic acid","vitamin c","ascorbic acid","alpha-arbutin"].includes(i.name.toLowerCase())).slice(0,3);
           })();
-
-          // Plain-English sentence
-          const sentence = (() => {
-            if (liveScore === 0 && cloggers.length === 0) {
-              if (safeHighlights.length) return `Clean formula — no pore-clogging ingredients detected. Contains ${safeHighlights.map(i=>i.name).join(", ")}.`;
-              return "No pore-clogging ingredients detected in this formula.";
-            }
-            if (liveScore === 0 && cloggers.length > 0) {
-              return `Low risk — contains ${cloggers[0].name}${cloggers.length > 1 ? ` and ${cloggers.length - 1} other ingredient${cloggers.length > 2 ? "s" : ""}` : ""} that may affect some skin types.`;
-            }
-            if (cloggers.length === 1) {
-              const c = cloggers[0];
-              const pct = c.score >= 4 ? "highly likely" : c.score === 3 ? "moderately likely" : "may be likely";
-              return `Scored ${liveScore}/5 because it contains ${c.name}, which is ${pct} to clog pores.`;
-            }
-            const worst = cloggers[0];
-            return `Scored ${liveScore}/5 — primarily due to ${worst.name}${cloggers.length > 1 ? ` and ${cloggers.length - 1} other ingredient${cloggers.length > 2 ? "s" : ""}` : ""} known to clog pores.`;
+          const sentence=(()=>{
+            if(liveScore===0&&!cloggers.length)return safeHighlights.length?`Clean formula — no pore-clogging ingredients. Contains ${safeHighlights.map(i=>i.name).join(", ")}.`:"No pore-clogging ingredients detected in this formula.";
+            if(cloggers.length===1){const c=cloggers[0];return`Scored ${liveScore}/5 because it contains ${c.name}, which is ${c.score>=4?"highly likely":c.score===3?"moderately likely":"likely"} to clog pores.`;}
+            const w=cloggers[0];return`Scored ${liveScore}/5 — primarily due to ${w?.name}${cloggers.length>1?` and ${cloggers.length-1} other ingredient${cloggers.length>2?"s":""}`:""} known to clog pores.`;
           })();
-
-          const scoreLabels = {5:"Very high risk",4:"High risk",3:"Moderate risk",2:"Low-moderate risk",1:"Low risk",0:"Pore-safe"};
-
-          return (
+          return(
             <div style={{marginBottom:"1rem"}}>
-              <button onClick={()=>setOpen(o=>!o)}
-                style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.7rem 0.9rem",background:ps.color+"0D",border:`1px solid ${ps.color}30`,borderRadius:open?"0.75rem 0.75rem 0 0":"0.75rem",cursor:"pointer",textAlign:"left",transition:"border-radius 0.15s"}}>
+              <button onClick={()=>setWhyScoreOpen(o=>!o)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.7rem 0.9rem",background:ps.color+"0D",border:`1px solid ${ps.color}30`,borderRadius:whyScoreOpen?"0.75rem 0.75rem 0 0":"0.75rem",cursor:"pointer",textAlign:"left"}}>
                 <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={ps.color} strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                   <span style={{fontSize:"0.78rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>Why this score?</span>
                 </div>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2.5" style={{transform:open?"rotate(180deg)":"none",transition:"transform 0.2s"}}><polyline points="6 9 12 15 18 9"/></svg>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2.5" style={{transform:whyScoreOpen?"rotate(180deg)":"none",transition:"transform 0.2s"}}><polyline points="6 9 12 15 18 9"/></svg>
               </button>
+              {whyScoreOpen&&(
+                <div style={{border:`1px solid ${T.border}`,borderTop:"none",borderRadius:"0 0 0.75rem 0.75rem",padding:"0.85rem 0.9rem",background:T.surface}}>
+                  <p style={{fontSize:"0.8rem",color:T.textMid,lineHeight:1.55,margin:"0 0 0.9rem"}}>{sentence}</p>
 
-              {open && (
-                <div style={{border:`1px solid ${ps.color}30`,borderTop:"none",borderRadius:"0 0 0.75rem 0.75rem",padding:"0.75rem 0.9rem",background:T.surface,display:"flex",flexDirection:"column",gap:"0.6rem"}}>
-                  {/* Plain English summary */}
-                  <p style={{fontSize:"0.82rem",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.5,margin:0}}>{sentence}</p>
-
-                  {/* Cloggers */}
-                  {cloggers.length > 0 && (
-                    <div>
-                      <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.35rem"}}>Pore-clogging ingredients</div>
-                      <div style={{display:"flex",flexDirection:"column",gap:"0.3rem"}}>
-                        {cloggers.map((ing,i)=>{
-                          const ingPs = poreStyle(ing.score);
-                          const pctMap = {5:"~70% of users",4:"~55% of users",3:"~35% of users",2:"~20% of users",1:"~10% of users"};
-                          return (
-                            <div key={i} style={{display:"flex",alignItems:"flex-start",gap:"0.5rem",padding:"0.45rem 0.6rem",background:ingPs.color+"0A",borderRadius:"0.55rem",border:`1px solid ${ingPs.color}20`}}>
-                              <div style={{flexShrink:0,marginTop:"1px",width:"18px",height:"18px",borderRadius:"0.3rem",background:ingPs.color,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                                <span style={{fontSize:"0.58rem",fontWeight:"700",color:"#fff"}}>{ing.score}</span>
-                              </div>
-                              <div style={{flex:1,minWidth:0}}>
-                                <div style={{fontSize:"0.76rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>{ing.name}</div>
-                                <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"1px",lineHeight:1.3}}>{ing.note || "May clog pores"} · Affects {pctMap[ing.score]||"some users"}</div>
-                              </div>
+                  {/* Watch out for — flagged + irritants combined */}
+                  {(cloggers.length>0||irritants.length>0)&&(
+                    <div style={{marginBottom:"0.85rem"}}>
+                      <div style={{fontSize:"0.58rem",fontWeight:"600",color:T.rose,textTransform:"uppercase",letterSpacing:"0.09em",marginBottom:"0.45rem"}}>Watch out for</div>
+                      <div style={{display:"flex",flexDirection:"column"}}>
+                        {cloggers.map((ing,i)=>(
+                          <div key={"c"+i} style={{display:"flex",alignItems:"flex-start",gap:"0.55rem",padding:"0.42rem 0",borderBottom:`0.5px solid ${T.border}`}}>
+                            <div style={{width:7,height:7,borderRadius:"50%",background:ing.score>=3?T.rose:T.amber,flexShrink:0,marginTop:"0.28rem"}}/>
+                            <div style={{flex:1}}>
+                              <span style={{fontSize:"0.78rem",fontWeight:"600",color:T.text,textTransform:"capitalize"}}>{ing.name}</span>
+                              <span style={{fontSize:"0.72rem",color:T.textMid,marginLeft:"0.4rem"}}>{ing.note||"Pore-clogging"}</span>
                             </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Irritants */}
-                  {irritants.length > 0 && (
-                    <div>
-                      <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.35rem"}}>Potential irritants</div>
-                      <div style={{display:"flex",flexDirection:"column",gap:"0.3rem"}}>
+                          </div>
+                        ))}
                         {irritants.map((ing,i)=>(
-                          <div key={i} style={{display:"flex",alignItems:"flex-start",gap:"0.5rem",padding:"0.45rem 0.6rem",background:"#f59e0b0A",borderRadius:"0.55rem",border:"1px solid #f59e0b20"}}>
-                            <div style={{flexShrink:0,marginTop:"1px",width:"18px",height:"18px",borderRadius:"0.3rem",background:"#f59e0b",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                              <span style={{fontSize:"0.62rem",color:"#fff"}}>!</span>
-                            </div>
-                            <div style={{flex:1,minWidth:0}}>
-                              <div style={{fontSize:"0.76rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>{ing.name}</div>
-                              <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"1px",lineHeight:1.3}}>{ing.note || "Known skin sensitizer"}</div>
+                          <div key={"ir"+i} style={{display:"flex",alignItems:"flex-start",gap:"0.55rem",padding:"0.42rem 0",borderBottom:`0.5px solid ${T.border}`}}>
+                            <div style={{width:7,height:7,borderRadius:"50%",background:T.amber,flexShrink:0,marginTop:"0.28rem"}}/>
+                            <div style={{flex:1}}>
+                              <span style={{fontSize:"0.78rem",fontWeight:"600",color:T.text,textTransform:"capitalize"}}>{ing.name}</span>
+                              <span style={{fontSize:"0.72rem",color:T.textMid,marginLeft:"0.4rem"}}>{ing.note||"Potential irritant"}</span>
                             </div>
                           </div>
                         ))}
@@ -2407,23 +2522,29 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
                     </div>
                   )}
 
-                  {/* Safe highlights */}
-                  {safeHighlights.length > 0 && (
+                  {/* Works in your favour — beneficial ingredients */}
+                  {safeHighlights.length>0&&(
                     <div>
-                      <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.35rem"}}>Good stuff in here</div>
-                      <div style={{display:"flex",flexWrap:"wrap",gap:"0.3rem"}}>
+                      <div style={{fontSize:"0.58rem",fontWeight:"600",color:T.sage,textTransform:"uppercase",letterSpacing:"0.09em",marginBottom:"0.45rem"}}>Works in your favour</div>
+                      <div style={{display:"flex",flexDirection:"column"}}>
                         {safeHighlights.map((ing,i)=>(
-                          <span key={i} style={{padding:"0.2rem 0.55rem",background:T.sage+"12",border:`1px solid ${T.sage}30`,borderRadius:"999px",fontSize:"0.68rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif",textTransform:"capitalize"}}>✓ {ing.name}</span>
+                          <div key={"g"+i} style={{display:"flex",alignItems:"flex-start",gap:"0.55rem",padding:"0.42rem 0",borderBottom:i<safeHighlights.length-1?`0.5px solid ${T.border}`:"none"}}>
+                            <div style={{width:7,height:7,borderRadius:"50%",background:T.sage,flexShrink:0,marginTop:"0.28rem"}}/>
+                            <div style={{flex:1}}>
+                              <span style={{fontSize:"0.78rem",fontWeight:"600",color:T.text,textTransform:"capitalize"}}>{ing.name}</span>
+                              <span style={{fontSize:"0.72rem",color:T.textMid,marginLeft:"0.4rem"}}>{INGDB_META[ing.name.toLowerCase()]?.benefit||ing.note||""}</span>
+                            </div>
+                          </div>
                         ))}
                       </div>
                     </div>
                   )}
 
                   {/* All clear */}
-                  {cloggers.length === 0 && irritants.length === 0 && (
-                    <div style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.45rem 0.6rem",background:T.sage+"0D",borderRadius:"0.55rem",border:`1px solid ${T.sage}25`}}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.sage} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                      <span style={{fontSize:"0.73rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>No flagged ingredients — this formula is pore-safe</span>
+                  {!cloggers.length&&!irritants.length&&(
+                    <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
+                      <div style={{width:7,height:7,borderRadius:"50%",background:T.sage,flexShrink:0}}/>
+                      <span style={{fontSize:"0.78rem",color:T.sage,fontWeight:"600"}}>No flagged ingredients — pore-safe formula</span>
                     </div>
                   )}
                 </div>
@@ -2432,189 +2553,90 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile}) {
           );
         })()}
 
-
-
-        {/* Skin types */}
-        {product.skinTypes?.length>0&&(
-          <div style={{marginBottom:"1rem"}}>
-            <div style={{fontSize:"0.68rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.4rem"}}>Best for</div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:"0.35rem"}}>
-              {product.skinTypes.map(t=>(
-                <span key={t} style={{padding:"0.25rem 0.7rem",background:T.accentSoft,color:T.accent,borderRadius:"999px",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif"}}>{t}</span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Description */}
-        {product.description&&(
-          <div style={{marginBottom:"1.25rem"}}>
-            <div style={{fontSize:"0.68rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.4rem"}}>About</div>
-            <div style={{fontSize:"0.85rem",color:T.textMid,lineHeight:1.7}}>{product.description}</div>
-          </div>
-        )}
-
-        {/* ── Rate this product ── */}
+        {/* ── 8. Rate this product ── */}
         {user&&(
-          <div style={{paddingTop:"1rem",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"1.1rem"}}>
-            <div style={{fontSize:"0.6rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",fontWeight:"700",marginBottom:"0.5rem",fontFamily:"'Inter',sans-serif"}}>
-              {submitted ? "Rating saved! ✓" : existingRating ? `Your rating: ${existingRating}/10 — tap to update` : "Rate this product"}
+          <div style={{paddingTop:"0.75rem",paddingBottom:"1rem",borderTop:`1px solid ${T.border}`,borderBottom:`1px solid ${T.border}`,marginBottom:"1rem"}}>
+            <div style={{fontSize:"0.6rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",fontWeight:"700",marginBottom:"0.6rem",fontFamily:"'Inter',sans-serif"}}>
+              {submitted?"Rating saved! ✓":existingRating?`Your rating: ${existingRating/2}/5 stars — tap to update`:"Rate this product"}
             </div>
-            {loadingExisting ? (
-              <div style={{height:"36px",borderRadius:"0.75rem"}} className="skeleton"/>
-            ) : (
-              <div style={{display:"flex",gap:"0.15rem",alignItems:"center"}}>
-                <div style={{display:"flex",gap:"0.15rem",flex:1,overflow:"hidden"}}>
-                  {[1,2,3,4,5,6,7,8,9,10].map(n=>{
-                    const activeVal = myCommunityRating || existingRating || 0;
-                    return (
-                      <button key={n} onClick={()=>setMyCommunityRating(n===myCommunityRating?0:n)}
-                        style={{flex:1,height:"32px",minWidth:0,borderRadius:"0.25rem",border:`1.5px solid ${n<=activeVal?communityColor(activeVal):T.border}`,background:n<=activeVal?communityColor(activeVal)+"22":"transparent",cursor:"pointer",fontSize:"0.62rem",fontWeight:"700",color:n<=activeVal?communityColor(activeVal):T.textLight,fontFamily:"'Inter',sans-serif",transition:"all 0.1s",padding:0}}>
-                        {n}
-                      </button>
-                    );
+            {loadingExisting?<div style={{height:"36px",borderRadius:"0.75rem"}} className="skeleton"/>:(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <div style={{display:"flex",gap:"0.15rem"}}>
+                  {[2,4,6,8,10].map(val=>{
+                    const filled=(myCommunityRating||existingRating||0)>=val;
+                    return(<button key={val} onClick={()=>setMyCommunityRating(myCommunityRating===val?0:val)} style={{background:"none",border:"none",cursor:"pointer",padding:"0.1rem",lineHeight:1,transition:"transform 0.1s"}} onMouseEnter={e=>e.currentTarget.style.transform="scale(1.2)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
+                      <svg width="32" height="32" viewBox="0 0 24 24" strokeWidth="1.5" fill={filled?"#F59E0B":"none"} stroke={filled?"#F59E0B":"#D1D5DB"}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                    </button>);
                   })}
                 </div>
-                <button onClick={submitRating} disabled={submitting||!myCommunityRating}
-                  style={{width:"32px",height:"32px",borderRadius:"50%",background:myCommunityRating?T.accent:T.surfaceAlt,border:"none",cursor:myCommunityRating?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.15s",marginLeft:"0.3rem"}}>
-                  {submitting
-                    ? <div style={{width:"10px",height:"10px",borderRadius:"50%",border:"2px solid #FFFFFF",borderTopColor:"transparent",animation:"spin 0.7s linear infinite"}}/>
-                    : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={myCommunityRating?"#FFFFFF":T.textLight} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                  }
-                </button>
+                <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
+                  {myCommunityRating>0&&<span style={{fontSize:"0.78rem",fontWeight:"700",color:"#F59E0B"}}>{myCommunityRating/2}/5</span>}
+                  <button onClick={submitRating} disabled={submitting||!myCommunityRating} style={{width:"34px",height:"34px",borderRadius:"50%",background:myCommunityRating?T.accent:T.surfaceAlt,border:"none",cursor:myCommunityRating?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.15s"}}>
+                    {submitting?<div style={{width:"10px",height:"10px",borderRadius:"50%",border:"2px solid #fff",borderTopColor:"transparent",animation:"spin 0.7s linear infinite"}}/>:<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={myCommunityRating?"#fff":T.textLight} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
+                  </button>
+                </div>
               </div>
             )}
           </div>
         )}
 
-        {/* ── Shop + Share ── */}
-        {(()=>{const url=product.buyUrl||amazonUrl(product.productName||product.name||"",product.brand||"",product.barcode||product.code||"");return(
-          <div style={{display:"flex",gap:"0.5rem",paddingBottom:"1.1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"1.1rem"}}>
-            <a href={url} target="_blank" rel="noopener noreferrer"
-              onClick={()=>trackProductClick(product._productId||product.id||null, product.productName||product.name||"")}
-              style={{flex:1,padding:"0.7rem",background:T.navy,color:"#FFFFFF",borderRadius:"0.75rem",fontSize:"0.85rem",fontWeight:"600",textAlign:"center",textDecoration:"none",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
-              Shop
-            </a>
-            <button onClick={()=>shareProduct(product.productName||product.name||"",product.brand||"")}
-              style={{padding:"0.7rem 1rem",background:"transparent",border:`1.5px solid ${T.border}`,borderRadius:"0.75rem",color:T.textMid,cursor:"pointer",display:"flex",alignItems:"center",gap:"0.35rem",fontFamily:"'Inter',sans-serif",fontSize:"0.82rem",fontWeight:"600"}}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-              Share
-            </button>
-          </div>
-        );})()}
-
-                {/* Full ingredient list */}
+        {/* ── 9. Key Actives + Full Ingredient List ── */}
         {product.ingredients&&product.ingredients.trim()&&(
-          <div style={{marginBottom:"1rem"}}>
-            {/* Key Actives */}
-            {(()=>{
-              const ACTIVES = [
-                {name:"niacinamide",      label:"Niacinamide",       benefit:"Pore-minimizing, brightening",   detail:"A form of vitamin B3 that visibly shrinks pores, fades dark spots, and regulates oil production — all without irritating the skin.", goodFor:["Oily","Acne-prone","Combination","Hyperpigmentation"], howToUse:"Can be used morning and night. Pairs well with most actives including retinol and vitamin C."},
-                {name:"retinol",          label:"Retinol",            benefit:"Cell turnover, anti-aging",       detail:"Converts to retinoic acid on the skin, speeding up cell renewal. One of the best-studied anti-aging ingredients — also clears pores over time.", goodFor:["Mature","Acne-prone","Dull"], howToUse:"Start 1–2x per week at night. Always follow with SPF the next morning. Expect some purging in weeks 2–4."},
-                {name:"retinyl",          label:"Retinyl",            benefit:"Gentle vitamin A derivative",    detail:"Retinyl palmitate or acetate — a gentler retinoid that converts to retinol, then retinoic acid. Less potent but much better tolerated.", goodFor:["Sensitive","Beginners","Mature"], howToUse:"Can be used nightly. A good entry point before moving to stronger retinol."},
-                {name:"salicylic acid",   label:"Salicylic Acid",    benefit:"BHA — unclogs pores",             detail:"A beta-hydroxy acid (BHA) that's oil-soluble, so it can penetrate inside pores and dissolve the sebum and dead cells causing blackheads and breakouts.", goodFor:["Oily","Acne-prone","Blackheads"], howToUse:"Use 1–3x per week. Avoid combining with other strong acids on the same day."},
-                {name:"glycolic acid",    label:"Glycolic Acid",     benefit:"AHA — exfoliates & brightens",    detail:"The smallest AHA molecule — penetrates deepest and exfoliates most effectively. Resurfaces dead skin, brightens tone, and stimulates collagen.", goodFor:["Dull","Uneven tone","Rough texture"], howToUse:"Use at night, 2–3x per week. Always wear SPF next day — AHAs increase sun sensitivity."},
-                {name:"lactic acid",      label:"Lactic Acid",       benefit:"AHA — gentle exfoliant",          detail:"A larger AHA molecule that exfoliates more gently than glycolic. Also a humectant — it hydrates while it resurfaces, making it ideal for dry or sensitive skin.", goodFor:["Dry","Sensitive","Beginners"], howToUse:"Can be used 2–3x per week at night. Gentler than glycolic but still requires SPF the next day."},
-                {name:"mandelic acid",    label:"Mandelic Acid",     benefit:"AHA — acne-safe exfoliant",       detail:"The largest AHA molecule — exfoliates slowest and most gently. Also has antimicrobial properties, making it one of the safest exfoliants for acne-prone and darker skin tones.", goodFor:["Sensitive","Acne-prone","Darker skin tones"], howToUse:"Can be used 2–3x per week at night. Lower irritation risk than glycolic or lactic acid."},
-                {name:"azelaic acid",     label:"Azelaic Acid",      benefit:"Fades marks, calms redness",      detail:"Naturally found in wheat and barley. Fades post-acne marks, reduces redness, and kills acne bacteria. One of the few actives safe during pregnancy.", goodFor:["Rosacea","Post-acne marks","Sensitive"], howToUse:"Can be used morning and/or night. Works well layered under SPF. No major interactions."},
-                {name:"ascorbic acid",    label:"Vitamin C",         benefit:"Brightening, antioxidant",        detail:"L-ascorbic acid is the purest, most potent form of vitamin C. Inhibits melanin production to fade dark spots, boosts collagen, and neutralises free radical damage from UV.", goodFor:["Dull","Hyperpigmentation","Anti-aging"], howToUse:"Use in the morning under SPF — sunlight degrades vitamin C. Store in a dark, cool place."},
-                {name:"thd ascorbate",    label:"Vitamin C (THD)",   benefit:"Stable vitamin C derivative",    detail:"Tetrahexyldecyl ascorbate — an oil-soluble, highly stable vitamin C that penetrates deeper than L-ascorbic acid without the irritation or oxidation issues.", goodFor:["Sensitive","Dry","Anti-aging"], howToUse:"Can be used morning or night. More stable than L-ascorbic acid — less likely to oxidise."},
-                {name:"hyaluronic acid",  label:"Hyaluronic Acid",   benefit:"Deep hydration",                 detail:"A sugar molecule that holds up to 1000x its weight in water. Draws moisture from the air into skin and creates a plumping, smoothing effect.", goodFor:["Dry","Dehydrated","All skin types"], howToUse:"Apply to damp skin before moisturiser. Layer under a cream to seal in hydration."},
-                {name:"sodium hyaluronate",label:"Hyaluronic Acid",  benefit:"Surface hydration",              detail:"A smaller form of hyaluronic acid that penetrates the skin surface more effectively. Hydrates the epidermis and reduces the appearance of fine lines.", goodFor:["All skin types","Dehydrated"], howToUse:"Use morning and night before heavier products. Layer under moisturiser."},
-                {name:"ceramide",         label:"Ceramides",         benefit:"Barrier repair",                  detail:"Lipids naturally found in skin (40–50% of the stratum corneum). Ceramides seal the gaps between skin cells, locking in moisture and keeping irritants out.", goodFor:["Dry","Eczema","Sensitive","Damaged barrier"], howToUse:"Can be used morning and night. Essential in a barrier-repair routine — combine with cholesterol and fatty acids for best results."},
-                {name:"zinc oxide",       label:"Zinc Oxide",        benefit:"Mineral SPF + calming",           detail:"Broad-spectrum mineral UV filter that sits on the surface of skin, reflecting and scattering UV rays. Also has anti-inflammatory and mild antimicrobial properties.", goodFor:["Sensitive","Acne-prone","Rosacea"], howToUse:"Apply as the last step in your morning routine, before makeup. Reapply every 2 hours in sun."},
-                {name:"benzoyl peroxide", label:"Benzoyl Peroxide",  benefit:"Kills acne bacteria",             detail:"One of the most effective over-the-counter acne treatments. Releases oxygen into the pore, killing C. acnes bacteria that cause breakouts. Also helps unclog pores.", goodFor:["Acne-prone","Oily"], howToUse:"Start with 2.5% to minimise irritation. Use as a spot treatment or thin layer — avoid mixing with retinol on the same application."},
-                {name:"peptide",          label:"Peptides",          benefit:"Firming, anti-aging",             detail:"Short chains of amino acids that signal the skin to produce more collagen and elastin. Different peptides target different concerns — from wrinkles to sagging to discoloration.", goodFor:["Mature","Anti-aging"], howToUse:"Can be used morning and night. Layer under moisturiser. Generally well tolerated alongside most other actives."},
-                {name:"ferulic acid",     label:"Ferulic Acid",      benefit:"Antioxidant booster",             detail:"A plant-derived antioxidant that dramatically boosts the stability and effectiveness of vitamin C and E. Standard in high-performance vitamin C serums.", goodFor:["All skin types","Anti-aging"], howToUse:"Usually formulated with vitamin C — no separate application needed. Use in the morning under SPF."},
-                {name:"snail secretion",  label:"Snail Mucin",       benefit:"Barrier repair, hydration",       detail:"Snail secretion filtrate contains glycoproteins, hyaluronic acid, glycolic acid, and antimicrobial peptides. Repairs skin barrier, fades scars, and provides lightweight hydration.", goodFor:["Acne scars","Dry","Damaged barrier"], howToUse:"Can be used morning and night. Layer under heavier creams. Extremely gentle — suitable for sensitive skin."},
-                {name:"centella",         label:"Centella Asiatica",  benefit:"Calming, healing",               detail:"Also called cica or tiger grass. Contains madecassoside and asiaticoside — compounds that promote wound healing, reduce inflammation, and strengthen the skin barrier.", goodFor:["Sensitive","Rosacea","Post-procedure","Acne scars"], howToUse:"Can be used morning and night. Ideal after treatments, waxing, or during a compromised-barrier recovery period."},
-                {name:"squalane",         label:"Squalane",           benefit:"Lightweight moisturizer",         detail:"A stable, skin-identical emollient derived from sugarcane or olives. Mimics the skin's own squalene, absorbs without grease, and is completely non-comedogenic.", goodFor:["All skin types","Oily","Sensitive"], howToUse:"Apply morning or night before heavier moisturisers, or mix a drop into your existing cream. Also works as a hair serum."},
-                {name:"allantoin",        label:"Allantoin",          benefit:"Soothing, healing",               detail:"A compound found in comfrey root. Promotes cell proliferation, speeds healing, and has keratolytic properties — softening rough skin while calming irritation.", goodFor:["Sensitive","Dry","Post-active irritation"], howToUse:"Works well in any routine step. Often used to buffer the irritation caused by retinol or acids."},
-              ];
-              const ingLower = product.ingredients.toLowerCase();
-              const found = ACTIVES.filter((a,i,arr) =>
-                ingLower.includes(a.name) &&
-                arr.findIndex(b=>b.label===a.label)===i
-              );
-              if (!found.length) return null;
-              const [activeDetail, setActiveDetail] = React.useState(null);
-              return (
-                <div style={{marginBottom:"0.75rem"}}>
-                  <div style={{fontSize:"0.6rem",color:T.navy,textTransform:"uppercase",letterSpacing:"0.14em",fontWeight:"600",marginBottom:"0.5rem"}}>Key Actives <span style={{fontWeight:"400",color:T.textLight,textTransform:"none",letterSpacing:0,fontSize:"0.58rem"}}>— tap to learn more</span></div>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:"0.35rem"}}>
-                    {found.map(a=>{
-                      const isOpen = activeDetail===a.name;
-                      const dbEntry = INGDB_META[a.name.toLowerCase()] || {};
-                      return (
-                        <div key={a.name} style={{width:"100%"}}>
-                          <button onClick={()=>setActiveDetail(isOpen?null:a.name)}
-                            style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",background:isOpen?T.accent+"18":T.accent+"10",border:`1px solid ${isOpen?T.accent+"55":T.accent+"25"}`,borderRadius:isOpen?"0.5rem 0.5rem 0 0":"0.5rem",padding:"0.4rem 0.65rem",cursor:"pointer",textAlign:"left",transition:"all 0.15s"}}>
-                            <div>
-                              <div style={{fontSize:"0.72rem",fontWeight:"700",color:T.accent}}>{a.label}</div>
-                              <div style={{fontSize:"0.62rem",color:T.textMid}}>{a.benefit}</div>
-                            </div>
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2.5" style={{flexShrink:0,transform:isOpen?"rotate(180deg)":"none",transition:"transform 0.2s"}}><polyline points="6 9 12 15 18 9"/></svg>
-                          </button>
-                          {isOpen&&(
-                            <div style={{background:T.accent+"08",border:`1px solid ${T.accent+"25"}`,borderTop:"none",borderRadius:"0 0 0.5rem 0.5rem",padding:"0.65rem 0.75rem",display:"flex",flexDirection:"column",gap:"0.5rem",animation:"fadeUp 0.15s ease"}}>
-                              {dbEntry.benefit&&<div>
-                                <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.sage,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>What it does</div>
-                                <div style={{fontSize:"0.78rem",color:T.text,lineHeight:1.5}}>{dbEntry.benefit}</div>
-                              </div>}
-                              {a.detail&&<div>
-                                <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.accent,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>How it works</div>
-                                <div style={{fontSize:"0.78rem",color:T.text,lineHeight:1.5}}>{a.detail}</div>
-                              </div>}
-                              {a.goodFor&&<div>
-                                <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textMid,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"4px"}}>Best for</div>
-                                <div style={{display:"flex",flexWrap:"wrap",gap:"0.25rem"}}>
-                                  {a.goodFor.map(s=><span key={s} style={{padding:"0.15rem 0.5rem",background:T.sage+"15",border:`1px solid ${T.sage}30`,borderRadius:"999px",fontSize:"0.65rem",color:T.sage,fontWeight:"500"}}>{s}</span>)}
-                                </div>
-                              </div>}
-                              {dbEntry.concern&&dbEntry.concern!=="None known"&&<div>
-                                <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.rose,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>Watch out</div>
-                                <div style={{fontSize:"0.75rem",color:T.textMid,lineHeight:1.45}}>{dbEntry.concern}</div>
-                              </div>}
-                              {a.howToUse&&<div style={{padding:"0.45rem 0.6rem",background:"rgba(255,255,255,0.7)",borderRadius:"0.4rem",border:`1px solid ${T.border}`}}>
-                                <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textMid,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"2px"}}>How to use</div>
-                                <div style={{fontSize:"0.72rem",color:T.textMid,lineHeight:1.45}}>{a.howToUse}</div>
-                              </div>}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })()}
-
-            <div style={{display:"flex",alignItems:"center",gap:"0.4rem",marginBottom:"0.5rem"}}>
+          <div style={{marginBottom:"1rem",position:"relative"}}>
+            <div style={{display:"flex",alignItems:"center",gap:"0.4rem",marginBottom:"0.25rem"}}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.navy} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2v7.31l-3.24 4.65A3 3 0 0 0 9.24 19H14.76a3 3 0 0 0 2.48-5.04L14 9.31V2"/><line x1="8.5" y1="2" x2="15.5" y2="2"/></svg>
               <div style={{fontSize:"0.6rem",color:T.navy,textTransform:"uppercase",letterSpacing:"0.14em",fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>Full Ingredient List</div>
             </div>
-            <div style={{padding:"0.75rem 0.9rem",background:T.surfaceAlt,borderRadius:"0.75rem",border:`1px solid ${T.border}`}}>
-              <p style={{margin:0,fontSize:"0.65rem",color:T.textLight,lineHeight:1.7,fontFamily:"'Inter',sans-serif",letterSpacing:"0.01em"}}>
-                {product.ingredients.split(",").map((ing,i,arr)=>{
-                  const trimmed = ing.trim();
-                  const key = trimmed.toLowerCase().replace(/\s*\(.*?\)/g,"").trim();
-                  const isFlagged = Object.entries(INGDB).some(([name,data])=>{
-                    const allNames = [name,...(data.aliases||[])];
-                    return allNames.some(n=>n&&key.includes(n.toLowerCase())) && (data.score>=1||data.irritant);
-                  });
-                  return (
-                    <span key={i}>
-                      <span style={{color:isFlagged?T.rose:T.textLight,fontWeight:isFlagged?"600":"400"}}>{trimmed}</span>
-                      {i<arr.length-1&&<span style={{color:T.border}}>, </span>}
-                    </span>
-                  );
-                })}
-              </p>
+            <div style={{fontSize:"0.58rem",color:T.textLight,marginBottom:"0.5rem",fontFamily:"'Inter',sans-serif"}}>Tap any ingredient to learn more</div>
+
+            <div style={{display:"flex",flexWrap:"wrap",gap:"0.22rem",marginBottom:"0.4rem"}}>
+              {product.ingredients.split(",").map((ingRaw,i)=>{
+                const trimmed=ingRaw.trim();
+                if(!trimmed)return null;
+                const key=trimmed.toLowerCase().replace(/\s*\(.*?\)/g,"").trim();
+                const dbEntry=INGDB[key]||(()=>{const found=Object.entries(INGDB).find(([k,v])=>{const allNames=[k,...(v.aliases||[])];return allNames.some(n=>n&&n.toLowerCase()===key);});return found?found[1]:null;})();
+                const isFlagged=dbEntry&&(dbEntry.score>=1||dbEntry.irritant);
+                const isSelected=selectedIngredient?.name===trimmed;
+                return(
+                  <button key={i} onClick={()=>setSelectedIngredient(isSelected?null:{name:trimmed,irritant:dbEntry?.irritant,score:dbEntry?.score??0})}
+                    style={{fontSize:"0.6rem",padding:"0.18rem 0.55rem",borderRadius:20,cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.12s",border:isSelected?`1.5px solid ${T.navy}`:"none",background:isSelected?(isFlagged?"#FAECE7":T.accentSoft):isFlagged?"#FAECE7":T.surfaceAlt,color:isFlagged?"#712B13":isSelected?T.navy:T.textMid,fontWeight:isFlagged?"600":"400",outline:"none"}}>
+                    {trimmed}{isFlagged?" ⚠":""}
+                  </button>
+                );
+              })}
             </div>
-            <div style={{fontSize:"0.58rem",color:T.textLight,marginTop:"0.35rem",fontStyle:"italic"}}>Flagged ingredients shown in red</div>
+            <div style={{fontSize:"0.56rem",color:T.textLight,fontStyle:"italic",fontFamily:"'Inter',sans-serif"}}>⚠ flagged ingredients may clog pores or irritate</div>
+
+            {selectedIngredient&&<IngredientDetailSheet ing={selectedIngredient} onClose={()=>setSelectedIngredient(null)}/>}
           </div>
         )}
+
+        {/* ── 10. Report wrong ingredients (subtle, at the bottom) ── */}
+        {user&&product.ingredients&&(()=>{
+          const lowConfidence=(product.ingredients||"").split(",").length<8;
+          async function submitReport(){
+            if(!reportText.trim())return;
+            setReportState("sending");
+            try{
+              await addDoc(collection(db,"ingredientReports"),{productName:product.productName||product.name||"",brand:product.brand||"",productId:product._productId||product.id||"",currentIngredients:product.ingredients||"",reportText:reportText.trim(),reportedBy:user.uid,reporterName:profile?.displayName||"",createdAt:serverTimestamp(),status:"pending"});
+              setReportState("sent");
+            }catch{setReportState("editing");}
+          }
+          return(
+            <div style={{paddingTop:"0.75rem",borderTop:`1px solid ${T.border}`}}>
+              {reportState==="sent"
+                ?<div style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.6rem 0.75rem",background:T.sage+"12",borderRadius:"0.65rem",border:`1px solid ${T.sage}25`}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.sage} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg><span style={{fontSize:"0.75rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>Thanks — we'll review and update this</span></div>
+                :reportState==="editing"
+                ?<div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}><div style={{fontSize:"0.68rem",color:T.textLight,lineHeight:1.4}}>Paste the correct ingredient list from the packaging or brand website:</div><textarea value={reportText} onChange={e=>setReportText(e.target.value)} placeholder="Aqua, Glycerin, Niacinamide…" rows={4} style={{width:"100%",padding:"0.6rem 0.75rem",borderRadius:"0.6rem",border:`1.5px solid ${T.accent}`,fontSize:"0.78rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface,outline:"none",resize:"vertical",boxSizing:"border-box",lineHeight:1.5}}/><div style={{display:"flex",gap:"0.5rem"}}><button onClick={submitReport} disabled={!reportText.trim()||reportState==="sending"} style={{flex:1,padding:"0.6rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.78rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>{reportState==="sending"?"Sending…":"Submit correction"}</button><button onClick={()=>setReportState("idle")} style={{padding:"0.6rem 0.85rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.78rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Cancel</button></div></div>
+                :<button onClick={()=>setReportState("editing")} style={{display:"flex",alignItems:"center",gap:"0.4rem",background:"none",border:"none",cursor:"pointer",padding:"0.2rem 0",fontFamily:"'Inter',sans-serif"}}>
+                  {lowConfidence&&<span style={{fontSize:"0.6rem",color:T.amber,background:T.amber+"15",padding:"0.1rem 0.4rem",borderRadius:"999px",border:`1px solid ${T.amber}30`,fontWeight:"700",marginRight:"0.15rem"}}>⚠ Low confidence</span>}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <span style={{fontSize:"0.7rem",color:T.textLight}}>Ingredients look wrong? Report a correction</span>
+                </button>
+              }
+            </div>
+          );
+        })()}
 
       </div>
     </div>
@@ -3087,12 +3109,13 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
         user={null}
         profile={currentProfile}
         onUpdateProfile={onUpdateProfile}
+        onUserTap={onUserTap}
       />
     )}
-    {showFollowList && (
-      <div style={{position:"fixed",inset:0,zIndex:300,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}}>
-        <div onClick={()=>setShowFollowList(null)} style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.4)",backdropFilter:"blur(4px)"}}/>
-        <div style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1.25rem 0",maxHeight:"80vh",display:"flex",flexDirection:"column",zIndex:1}}>
+    {showFollowList && ReactDOM.createPortal(
+      <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9000,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}}>
+        <div onClick={()=>setShowFollowList(null)} style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.4)",backdropFilter:"blur(4px)"}}/>
+        <div style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1.25rem 0",height:"70vh",display:"flex",flexDirection:"column",zIndex:1}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexShrink:0}}>
             <div style={{fontSize:"1rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>
               {showFollowList === "followers" ? "Followers" : "Following"}
@@ -3112,7 +3135,7 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
           </div>
         </div>
       </div>
-    )}
+    , document.body)}
     </>
   );
 }
@@ -3154,8 +3177,8 @@ function AddProductModal({onClose, onAdded, user, prefillBarcode="", prefillName
 
   const inp = {width:"100%",padding:"0.75rem 1rem",borderRadius:"0.65rem",border:`1px solid ${T.border}`,fontSize:"0.85rem",color:T.text,background:"#FFFFFF",outline:"none",fontFamily:"'Inter',sans-serif",boxSizing:"border-box",marginBottom:"0.75rem"};
 
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:100,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+  return ReactDOM.createPortal(
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.45)",zIndex:9000,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
       <div style={{background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",width:"100%",maxWidth:"480px",padding:"1.5rem 1.25rem 2.5rem",maxHeight:"90vh",overflowY:"auto"}} className="fu">
         {/* Handle */}
         <div style={{width:"2.5rem",height:"0.25rem",background:T.border,borderRadius:"999px",margin:"0 auto 1.25rem"}}/>
@@ -3191,7 +3214,7 @@ function AddProductModal({onClose, onAdded, user, prefillBarcode="", prefillName
         )}
       </div>
     </div>
-  );
+  , document.body);
 }
 
 
@@ -3652,11 +3675,18 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
         {/* Search tab */}
         {inputMode==="search"&&(
           <div className="fu">
-            <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.75rem"}}>
-              <input type="text" value={searchQ} onChange={e=>setSearchQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doSearch()} placeholder='e.g. "CeraVe moisturizer"' style={{...inp,flex:1}} onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border}/>
-              <button onClick={doSearch} disabled={!searchQ.trim()||searchLoading} style={{padding:"0.75rem 1rem",background:searchQ.trim()?T.accent:T.surfaceAlt,color:searchQ.trim()?"#FFFFFF":T.textLight,border:"none",borderRadius:"0.65rem",fontSize:"0.82rem",cursor:searchQ.trim()?"pointer":"not-allowed",fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>
-                {searchLoading?"…":"Go"}
-              </button>
+            <div style={{position:"relative",marginBottom:"0.75rem"}}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" style={{position:"absolute",left:"0.85rem",top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" value={searchQ}
+                onChange={e=>{ setSearchQ(e.target.value); if(!e.target.value.trim()){setSearchRes([]);setHasSearched(false);setSearchErr("");} else { setSearchLoading(true); clearTimeout(window._scanSearchTimer); window._scanSearchTimer=setTimeout(async()=>{ try{ const res=await searchProducts(e.target.value); setSearchRes(res); setHasSearched(true); if(!res.length)setSearchErr("no_results"); else setSearchErr(""); }catch{setSearchErr("Search failed.");} setSearchLoading(false); },350); } }}
+                onKeyDown={e=>e.key==="Enter"&&doSearch()}
+                placeholder="Search products or brands…"
+                style={{...inp, paddingLeft:"2.25rem", paddingRight:searchQ?"2.25rem":"0.85rem"}}
+                onFocus={e=>e.target.style.borderColor=T.accent}
+                onBlur={e=>e.target.style.borderColor=T.border}
+                autoFocus
+              />
+              {searchQ&&<button onClick={()=>{setSearchQ("");setSearchRes([]);setHasSearched(false);setSearchErr("");}} style={{position:"absolute",right:"0.75rem",top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:T.textLight,padding:"2px",display:"flex"}}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>}
             </div>
             {searchErr&&searchErr!=="no_results"&&<div style={{padding:"0.65rem",background:"#FBF0EE",border:`1px solid ${T.rose}44`,borderRadius:"0.5rem",fontSize:"0.78rem",color:T.rose,marginBottom:"0.75rem"}}>{searchErr}</div>}
             {searchErr==="no_results"&&(
@@ -3669,18 +3699,38 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
                 </button>
               </div>
             )}
-            {searchLoading&&<div style={{textAlign:"center",padding:"1.5rem",color:T.textLight,fontSize:"0.85rem"}}>Searching…</div>}
+            {searchLoading&&<div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem",padding:"1.25rem",color:T.textLight,fontSize:"0.82rem"}}><div style={{width:"14px",height:"14px",borderRadius:"50%",border:`2px solid ${T.accent}`,borderTopColor:"transparent",animation:"spin 0.7s linear infinite"}}/> Searching…</div>}
             {!searchLoading&&searchRes.length>0&&(
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
-                {searchRes.map(p=>(
-                  <SearchResultCard key={p.code||p.name} p={p} onSelect={selectProduct}/>
-                ))}
-              </div>
-            )}
-            {!searchLoading&&hasSearched&&searchRes.length>0&&(
-              <div style={{textAlign:"center",marginTop:"0.5rem",paddingBottom:"0.5rem"}}>
+              <div style={{display:"flex",flexDirection:"column",gap:"0"}}>
+                {searchRes.map((p,i)=>{
+                  const res = analyzeIngredients(p.ingredients||"");
+                  const ps = poreStyle(res.avgScore||0);
+                  return (
+                    <button key={p.code||i} onClick={()=>selectProduct(p)}
+                      style={{width:"100%",display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.65rem 0.5rem",background:"none",border:"none",borderBottom:i<searchRes.length-1?`1px solid ${T.border}`:"none",cursor:"pointer",textAlign:"left",transition:"background 0.1s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=T.surfaceAlt}
+                      onMouseLeave={e=>e.currentTarget.style.background="none"}>
+                      <div style={{width:"44px",height:"44px",borderRadius:"0.65rem",flexShrink:0,overflow:"hidden",background:T.surfaceAlt}}>
+                        <ProductImage src={p.image||null} name={p.name} brand={p.brand||""} barcode={p.code||""} size="full"/>
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
+                        {p.brand&&<div style={{fontSize:"0.72rem",color:T.textMid,marginTop:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.brand}</div>}
+                        {(p.communityRating||p.scanCount>0)&&<div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"1px"}}>
+                          {p.communityRating?`⭐ ${p.communityRating}/10`:""}{p.scanCount>0?` · ${p.scanCount} scans`:""}
+                        </div>}
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"0.25rem",flexShrink:0}}>
+                        <PoreScoreBadge score={res.avgScore!=null?Math.round(res.avgScore):null} size="sm"/>
+                        {p._cached&&p._approved
+                          ? <span style={{fontSize:"0.5rem",color:T.sage,background:T.sage+"15",padding:"0.05rem 0.3rem",borderRadius:"999px",border:`1px solid ${T.sage}30`,fontWeight:"700"}}>✓ In Ralli</span>
+                          : null}
+                      </div>
+                    </button>
+                  );
+                })}
                 <button onClick={()=>{setAddPrefillName(searchQ);setShowAddModal(true);}}
-                  style={{background:"transparent",border:"none",fontSize:"0.75rem",color:T.textLight,cursor:"pointer",fontFamily:"'Inter',sans-serif",textDecoration:"underline"}}>
+                  style={{background:"transparent",border:"none",fontSize:"0.75rem",color:T.textLight,cursor:"pointer",fontFamily:"'Inter',sans-serif",textDecoration:"underline",padding:"0.75rem 0.5rem",textAlign:"left"}}>
                   Can't find your product? Add it
                 </button>
               </div>
@@ -3791,7 +3841,7 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
           </div>
         )}
       </div>
-      {selectedProduct&&<ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdateProfile||(() => {})}/>}
+      {selectedProduct&&<ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdateProfile||(() => {})} onUserTap={onUserTap}/>}
       {showAddModal&&<AddProductModal
         user={user}
         prefillBarcode={addPrefillBarcode}
@@ -3825,8 +3875,8 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
 
       {/* Glossary slide-up sheet */}
       {showGlossary&&(
-        <div style={{position:"fixed",inset:0,zIndex:100,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
-          <div onClick={()=>setShowGlossary(false)} style={{position:"absolute",inset:0,background:"rgba(15,25,35,0.35)",backdropFilter:"blur(2px)"}}/>
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:100,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
+          <div onClick={()=>setShowGlossary(false)} style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(15,25,35,0.35)",backdropFilter:"blur(2px)"}}/>
           <div style={{position:"relative",background:T.bg,borderRadius:"1.5rem 1.5rem 0 0",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 -8px 40px rgba(0,0,0,0.12)"}}>
             <div style={{position:"sticky",top:0,background:T.bg,padding:"0.75rem 1.25rem 0.5rem",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:`1px solid ${T.border}`,zIndex:1}}>
               <span style={{fontFamily:"'Inter',sans-serif",fontWeight:"700",fontSize:"1rem",color:T.text,letterSpacing:"-0.02em"}}>Ingredient Glossary</span>
@@ -3898,6 +3948,138 @@ function NetworkGroupCard({productName, brand, productImage, poreScore, users, o
       {shareOpen&&<ShareProductModal user={{uid:currentUid}} product={{productName,brand,productImage,poreScore}} onClose={()=>setShareOpen(false)}/>}
     </div>
   );
+}
+
+
+// ── TrendingSection — extracted from FeedPage IIFE to fix Rules of Hooks ──
+function TrendingSection({ openProductFromPost, trendingList }) {
+  const [trendData, setTrendData] = React.useState([]);
+  const [trendReady, setTrendReady] = React.useState(false);
+  React.useEffect(()=>{
+    (async()=>{
+      try {
+        const weekAgo = Date.now() - 7*24*60*60*1000;
+        const snap = await getDocs(query(collection(db,"posts"), orderBy("createdAt","desc"), limit(300)));
+        const map = {};
+        snap.docs.forEach(d=>{
+          const p = d.data();
+          const ts = p.createdAt?.seconds ? p.createdAt.seconds*1000 : 0;
+          if (ts < weekAgo) return;
+          const key = (p.productName||"").toLowerCase().trim();
+          if (!key) return;
+          if (!map[key]) {
+            // Compute poreScore from ingredients at aggregation time so card matches modal
+            const ing = (p.ingredients||"").trim();
+            const computedScore = ing.length > 10
+              ? (()=>{ const r = analyzeIngredients(ing); return r.avgScore!=null ? Math.round(r.avgScore) : (r.poreCloggers?.length?1:0); })()
+              : (p.poreScore??0);
+            map[key] = {...p, id:d.id, scanCount:0, totalRating:0, ratingCount:0, lovedCount:0, brokeoutCount:0, poreScore:computedScore};
+          }
+          map[key].scanCount++;
+          if (p.communityRating){ map[key].totalRating+=Number(p.communityRating); map[key].ratingCount++; }
+          if (p.postType==="loved") map[key].lovedCount++;
+          if (p.postType==="brokeout") map[key].brokeoutCount++;
+        });
+        const weekly = Object.values(map).sort((a,b)=>b.scanCount-a.scanCount).slice(0,8).map(p=>({...p, avgCommunity: p.ratingCount>0?Math.round(p.totalRating/p.ratingCount):null}));
+        setTrendData(weekly.length ? weekly : trendingList.slice(0,8));
+      } catch { setTrendData(trendingList.slice(0,8)); }
+      setTrendReady(true);
+    })();
+  },[]);
+  if (!trendReady || !trendData.length) return null;
+const now = new Date();
+const weekStart = new Date(now); weekStart.setDate(now.getDate()-now.getDay());
+const weekStr = weekStart.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+const endStr = now.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+const topProduct = trendData[0];
+const rest = trendData.slice(1);
+return (
+  <div style={{marginBottom:"1rem"}}>
+    {/* Header */}
+    <div style={{display:"flex",alignItems:"center",gap:"0.4rem",padding:"0 1rem",marginBottom:"0.75rem"}}>
+      <span style={{fontSize:"1rem"}}>🔥</span>
+      <div>
+        <div style={{fontSize:"0.82rem",fontWeight:"800",color:T.text,fontFamily:"'Inter',sans-serif",letterSpacing:"-0.01em"}}>Trending This Week</div>
+        <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{weekStr} – {endStr} · {trendData.reduce((a,b)=>a+b.scanCount,0)} scans across Ralli</div>
+      </div>
+    </div>
+
+    {/* #1 hero card */}
+    <button onClick={()=>openProductFromPost(topProduct)}
+      style={{width:"calc(100% - 2rem)",margin:"0 1rem 0.65rem",background:T.surface,border:`0.5px solid ${T.border}`,borderRadius:"1rem",padding:"0.85rem",cursor:"pointer",textAlign:"left",overflow:"hidden",display:"flex",gap:"0.85rem",alignItems:"center",transition:"transform 0.15s"}}
+      onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+      onMouseLeave={e=>e.currentTarget.style.transform=""}>
+      {/* Product image */}
+      <div style={{width:72,height:72,flexShrink:0,background:T.surfaceAlt,borderRadius:"0.65rem",overflow:"hidden",position:"relative"}}>
+        <ProductImage src={topProduct.productImage||topProduct.image||null} name={topProduct.productName} brand={topProduct.brand||""} barcode={topProduct.barcode||""} size="full"/>
+        <div style={{position:"absolute",top:4,left:4,background:T.navy,borderRadius:"999px",padding:"1px 6px"}}>
+          <span style={{fontSize:"0.48rem",fontWeight:"700",color:"#fff"}}>#1</span>
+        </div>
+      </div>
+      {/* Info */}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:"0.58rem",color:T.textLight,marginBottom:"0.15rem",textTransform:"uppercase",letterSpacing:"0.06em"}}>{topProduct.brand||""}</div>
+        <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,marginBottom:"0.4rem",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{topProduct.productName}</div>
+        {/* Score row */}
+        <div style={{display:"flex",alignItems:"center",gap:"0.6rem",marginBottom:"0.35rem"}}>
+          {(()=>{const ps=poreStyle(topProduct.poreScore??0);return(
+            <div style={{display:"flex",alignItems:"center",gap:"0.3rem"}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:ps.color,flexShrink:0}}/>
+              <span style={{fontSize:"0.7rem",fontWeight:"600",color:ps.color}}>{topProduct.poreScore??0}/5</span>
+              <span style={{fontSize:"0.65rem",color:T.textLight}}>pore score</span>
+            </div>
+          );})()}
+          {topProduct.avgCommunity&&(
+            <div style={{display:"flex",alignItems:"center",gap:"0.2rem"}}>
+              <span style={{fontSize:"0.7rem",color:"#F59E0B"}}>★</span>
+              <span style={{fontSize:"0.7rem",fontWeight:"600",color:T.textMid}}>{(topProduct.avgCommunity/2).toFixed(1)}</span>
+            </div>
+          )}
+        </div>
+        {/* Reaction pills */}
+        <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
+          {topProduct.lovedCount>0&&<span style={{fontSize:"0.6rem",color:T.sage,background:T.surfaceAlt,padding:"0.1rem 0.45rem",borderRadius:"999px",border:`0.5px solid ${T.border}`}}>{topProduct.lovedCount} loved it</span>}
+          {topProduct.brokeoutCount>0&&<span style={{fontSize:"0.6rem",color:T.rose,background:T.surfaceAlt,padding:"0.1rem 0.45rem",borderRadius:"999px",border:`0.5px solid ${T.border}`}}>{topProduct.brokeoutCount} broke out</span>}
+          <span style={{fontSize:"0.6rem",color:T.textLight,background:T.surfaceAlt,padding:"0.1rem 0.45rem",borderRadius:"999px",border:`0.5px solid ${T.border}`}}>{topProduct.scanCount} scans</span>
+        </div>
+      </div>
+    </button>
+
+    {/* #2–8 horizontal scroll */}
+    {rest.length>0&&(
+      <div style={{display:"flex",gap:"0.6rem",overflowX:"auto",paddingLeft:"1rem",paddingRight:"1rem",paddingBottom:"0.5rem",scrollbarWidth:"none",WebkitOverflowScrolling:"touch"}}>
+        {rest.map((p,i)=>{
+          const rank = i+2;
+          const rankColor = T.navy;
+          return (
+            <button key={p.productName+rank} onClick={()=>openProductFromPost(p)}
+              style={{flexShrink:0,width:"110px",background:T.surface,borderRadius:"0.85rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 1px 4px rgba(0,0,0,0.05)",transition:"transform 0.15s"}}
+              onMouseEnter={e=>e.currentTarget.style.transform="translateY(-2px)"}
+              onMouseLeave={e=>e.currentTarget.style.transform=""}>
+              <div style={{width:"100%",aspectRatio:"1/1",background:T.surfaceAlt,position:"relative",overflow:"hidden"}}>
+                <ProductImage src={p.productImage||p.image||null} name={p.productName} brand={p.brand||""} barcode={p.barcode||""} size="full"/>
+                <div style={{position:"absolute",top:"5px",left:"5px",width:"18px",height:"18px",borderRadius:"50%",background:rankColor,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <span style={{fontSize:"0.5rem",fontWeight:"800",color:"#fff"}}>{rank}</span>
+                </div>
+                <div style={{position:"absolute",top:"5px",right:"5px"}}><PoreScoreBadge score={p.poreScore??0} size="sm"/></div>
+              </div>
+              <div style={{padding:"0.4rem 0.45rem 0.5rem",flex:1,display:"flex",flexDirection:"column",gap:"0.12rem"}}>
+                <div style={{fontSize:"0.56rem",color:T.textLight,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.brand||""}</div>
+                <div style={{fontSize:"0.66rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",lineHeight:1.3}}>{p.productName}</div>
+                <div style={{display:"flex",alignItems:"center",gap:"0.2rem",marginTop:"auto",paddingTop:"0.15rem"}}>
+                  {p.lovedCount>0&&<span style={{fontSize:"0.52rem",color:T.sage}}>💚{p.lovedCount}</span>}
+                  {p.brokeoutCount>0&&<span style={{fontSize:"0.52rem",color:T.rose}}>⚠{p.brokeoutCount}</span>}
+                  <span style={{fontSize:"0.52rem",color:T.textLight,marginLeft:"auto"}}>{p.scanCount} scans</span>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    )}
+    <div style={{margin:"0.75rem 1rem 0",height:"1px",background:T.border}}/>
+  </div>
+);
 }
 
 function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
@@ -4160,7 +4342,12 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
             const allGlobal = await getGlobalFeed();
             const weekAgo = Date.now() - 7*24*60*60*1000;
             const recent = allGlobal.filter(p=>{ const ts=p.createdAt?.seconds?p.createdAt.seconds*1000:0; return ts>weekAgo; });
-            if (recent.length) { const top=recent.reduce((a,b)=>(b.likes?.length||0)>(a.likes?.length||0)?b:a); if(top.productName)setTrendingList([top]); }
+            if (recent.length) {
+              const counted = {};
+              recent.forEach(p=>{ if(!p.productName) return; const k=p.productName.toLowerCase(); if(!counted[k]) counted[k]={productName:p.productName,brand:p.brand,poreScore:p.poreScore,communityRating:p.communityRating,image:p.productImage||p.image||"",scanCount:0,likeCount:0,postType:p.postType}; counted[k].scanCount++; counted[k].likeCount+=(p.likes?.length||0); });
+              const top5 = Object.values(counted).sort((a,b)=>(b.scanCount+b.likeCount)-(a.scanCount+a.likeCount)).slice(0,5);
+              if(top5.length) setTrendingList(top5);
+            }
             return;
           }
         }
@@ -4188,7 +4375,12 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
         const allGlobal = await getGlobalFeed();
         const weekAgo = Date.now() - 7*24*60*60*1000;
         const recent = allGlobal.filter(p=>{ const ts=p.createdAt?.seconds?p.createdAt.seconds*1000:0; return ts>weekAgo; });
-        if (recent.length) { const top=recent.reduce((a,b)=>(b.likes?.length||0)>(a.likes?.length||0)?b:a); if(top.productName)setTrendingList([top]); }
+        if (recent.length) {
+          const counted = {};
+          recent.forEach(p=>{ if(!p.productName) return; const k=p.productName.toLowerCase(); if(!counted[k]) counted[k]={productName:p.productName,brand:p.brand,poreScore:p.poreScore,communityRating:p.communityRating,image:p.productImage||p.image||"",scanCount:0,likeCount:0}; counted[k].scanCount++; counted[k].likeCount+=(p.likes?.length||0); });
+          const top5 = Object.values(counted).sort((a,b)=>(b.scanCount+b.likeCount)-(a.scanCount+a.likeCount)).slice(0,5);
+          if(top5.length) setTrendingList(top5);
+        }
       } catch {
         setRecPosts(CURATED_RECS_FALLBACK);
       }
@@ -4356,9 +4548,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
                         <PoreScoreBadge score={res.avgScore!=null ? Math.round(res.avgScore) : null} size="sm"/>
                         {p._cached && p._approved
                           ? <span style={{fontSize:"0.5rem",color:T.navy,background:T.iceBlue+"80",padding:"0.05rem 0.35rem",borderRadius:"999px",border:`1px solid ${T.iceBlue}`,fontWeight:"700"}}>✓ In Ralli</span>
-                          : p._cached
-                          ? <span style={{fontSize:"0.5rem",color:T.amber,background:T.amber+"15",padding:"0.05rem 0.3rem",borderRadius:"999px",border:`1px solid ${T.amber}30`,fontWeight:"600"}}>Pending</span>
-                          : <span style={{fontSize:"0.45rem",color:T.textLight,background:T.surfaceAlt,padding:"0.05rem 0.25rem",borderRadius:"999px",border:`1px solid ${T.border}`}}>OBF</span>
+                          : null
                         }
                         {p.communityRating&&<span style={{fontSize:"0.5rem",color:T.textMid,fontWeight:"500"}}>⭐ {p.communityRating}/10</span>}
                         {p.scanCount>0&&<span style={{fontSize:"0.48rem",color:T.textLight}}>{p.scanCount} {p.scanCount===1?"scan":"scans"}</span>}
@@ -4390,7 +4580,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
         );
       })()}
 
-      <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdateProfile}/>
+      <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdateProfile} onUserTap={onUserTap}/>
 
       {loading
         ? <FeedSkeleton/>
@@ -4455,6 +4645,9 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
                       <button onClick={()=>onUpdateProfile({_navigateTo:"profile_people"})} style={{padding:"0.4rem 0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"999px",fontSize:"0.72rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",flexShrink:0}}>Find People →</button>
                     </div>
                   )}
+
+                  {/* ── Trending This Week ── */}
+                  <TrendingSection openProductFromPost={openProductFromPost} trendingList={trendingList} />
 
                   {/* Clean product feed */}
                   <div style={{display:"flex",flexDirection:"column",gap:"0.75rem",padding:"0 0.75rem"}}>
@@ -4563,7 +4756,7 @@ function ListItemImage({name, color}) {
   return (
     <div style={{width:"100%",height:"100%",position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
       {!img&&<PlaceholderCard name={name} brand=""  />}
-      {img&&<img src={img} alt={name} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",padding:"6px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={()=>setImg(null)}/>}
+      {img&&<img src={img} alt={name} style={{position:"absolute",top:0,left:0,right:0,bottom:0,width:"100%",height:"100%",objectFit:"contain",padding:"6px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={()=>setImg(null)}/>}
     </div>
   );
 }
@@ -4802,7 +4995,7 @@ function AvatarCropModal({photoURL, initialOffsetX=50, initialOffsetY=50, initia
   };
 
   return (
-    <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.75)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"1.5rem"}}>
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9999,background:"rgba(0,0,0,0.75)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"1.5rem"}}>
       <div style={{background:"#fff",borderRadius:"1.25rem",padding:"1.25rem",width:"100%",maxWidth:"360px"}}>
         <div style={{fontSize:"0.6rem",letterSpacing:"0.15em",textTransform:"uppercase",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"600",marginBottom:"0.75rem",textAlign:"center"}}>
           Position & Zoom
@@ -5166,7 +5359,7 @@ function DeleteAccountModal({ user, onClose, onDeleted }) {
   }
 
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:9999,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.55)",zIndex:9999,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
       onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
       <div style={{background:T.bg,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.5rem 1.25rem 2.5rem",width:"100%",maxWidth:"480px",boxShadow:"0 -4px 32px rgba(0,0,0,0.15)"}}>
         {step === "done" ? (
@@ -5573,10 +5766,10 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
     <div style={{maxWidth:"480px",margin:"0 auto",paddingBottom:"6rem"}}>
       <div style={{padding:"1rem 1rem 0"}}>
 
-      {/* Followers/Following modal */}
-      {userListModal&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(28,28,26,0.45)",zIndex:200,display:"flex",alignItems:"flex-end"}} onClick={()=>setUserListModal(null)}>
-          <div style={{width:"100%",maxWidth:"480px",margin:"0 auto",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1rem 0",maxHeight:"82vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+      {/* Followers/Following modal — rendered via portal to escape CSS transform stacking context */}
+      {userListModal&&ReactDOM.createPortal(
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(28,28,26,0.45)",zIndex:9000,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}} onClick={()=>setUserListModal(null)}>
+          <div style={{width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1rem 0",height:"70vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexShrink:0}}>
               <span style={{fontSize:"1rem",fontWeight:"700",fontFamily:"'Inter',sans-serif",color:T.text,textTransform:"capitalize"}}>
                 {userListModal}
@@ -5613,7 +5806,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       {/* ── Profile Header ── */}
       <div style={{marginBottom:"1.25rem",paddingTop:"0.5rem"}}>
@@ -5785,7 +5978,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
                       <div style={{fontWeight:"600",color:T.textMid,marginBottom:"0.25rem"}}>No ratings yet</div>
                       <div style={{fontSize:"0.75rem"}}>Rate products after scanning them</div>
                     </div>
-                    <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate}/>
+                    <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate} onUserTap={onUserTap}/>
                   </div>
                 );
               }
@@ -5818,7 +6011,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
                       </div>
                     </button>
                   ))}
-                  <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate}/>
+                  <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate} onUserTap={onUserTap}/>
                 </div>
               );
             })()
@@ -5874,7 +6067,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             allProducts={allProds}
             onItemTap={openListItem}
           />
-          <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate}/>
+          <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate} onUserTap={onUserTap}/>
             </>);
           })()}
         </div>
@@ -6234,7 +6427,7 @@ function PoreScoreInfo({ score, inline=false }) {
       </button>
       {open && (
         <>
-          <div style={{position:"fixed",inset:0,zIndex:9998}} onClick={()=>setOpen(false)}/>
+          <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9998}} onClick={()=>setOpen(false)}/>
           <div style={{position:"absolute",bottom:"calc(100% + 8px)",left:"50%",transform:"translateX(-50%)",zIndex:9999,
             background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",
             padding:"1rem",width:"260px",boxShadow:"0 8px 32px rgba(0,0,0,0.15)"}}>
@@ -6355,7 +6548,7 @@ function TrendingPage({user, profile, onProductTap}) {
         </div>
       )}
 
-      {selectedProduct&&<ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdateProfile||(() => {})}/>}
+      {selectedProduct&&<ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdateProfile||(() => {})} onUserTap={onUserTap}/>}
       {showAddModal&&<AddProductModal
         user={user}
         prefillBarcode={addPrefillBarcode}
@@ -6584,9 +6777,9 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
 // ── Our Story popup (shown for first 5 logins) ─────────────────
 function OurStoryPopup({onClose, onUserTap}) {
   return (
-    <div style={{position:"fixed",inset:0,zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"1.5rem"}}
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"1.5rem"}}
       onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-      <div style={{position:"absolute",inset:0,background:"rgba(28,28,26,0.55)",backdropFilter:"blur(6px)",pointerEvents:"none"}}/>
+      <div style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(28,28,26,0.55)",backdropFilter:"blur(6px)",pointerEvents:"none"}}/>
       <div style={{position:"relative",width:"100%",maxWidth:"420px",background:T.accentSoft,borderRadius:"1.5rem",padding:"1.75rem 1.5rem 1.5rem",boxShadow:"0 20px 60px rgba(28,28,26,0.2)",overflow:"hidden"}}>
         <div style={{position:"absolute",right:"-1.5rem",bottom:"-1.5rem",opacity:0.07,pointerEvents:"none"}}>
           {RalliIcons.flask(T.navy,130)}
@@ -7482,7 +7675,7 @@ function ShopImageCell({p}) {
       )}
       {/* Fallback shown while loading or on error */}
       {(showFallback || status==="loading")&&(
-        <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",
+        <div style={{position:"absolute",top:0,left:0,right:0,bottom:0,display:"flex",flexDirection:"column",
           alignItems:"center",justifyContent:"center",gap:"5px",padding:"12px",
           opacity: status==="loaded" ? 0 : 1, transition:"opacity 0.2s"}}>
           <div style={{width:"42px",height:"42px",borderRadius:"50%",background:bc.accent,
@@ -9421,7 +9614,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
 
       {/* ── Triage Modal ── */}
       {triageMode&&(
-        <div style={{position:"fixed",inset:0,zIndex:400,background:"rgba(0,0,0,0.88)",backdropFilter:"blur(6px)",display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:400,background:"rgba(0,0,0,0.88)",backdropFilter:"blur(6px)",display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
           <div style={{background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",width:"100%",maxWidth:"520px",boxShadow:"0 -8px 40px rgba(0,0,0,0.25)",height:"88vh",overflowY:"auto"}}>
 
             {/* Header */}
@@ -9461,6 +9654,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
                         {!triageImg&&<span style={{fontSize:"0.58rem",padding:"0.12rem 0.45rem",borderRadius:"999px",background:T.rose+"12",color:T.rose,fontWeight:"600"}}>No image</span>}
                         {!p.buyUrl&&<span style={{fontSize:"0.58rem",padding:"0.12rem 0.45rem",borderRadius:"999px",background:T.rose+"12",color:T.rose,fontWeight:"600"}}>No link</span>}
                         {!p.ingredients&&<span style={{fontSize:"0.58rem",padding:"0.12rem 0.45rem",borderRadius:"999px",background:T.rose+"12",color:T.rose,fontWeight:"600"}}>No ingredients</span>}
+                        {p.ingredients&&p.ingredients.split(",").length<8&&<span style={{fontSize:"0.58rem",padding:"0.12rem 0.45rem",borderRadius:"999px",background:T.amber+"15",color:T.amber,fontWeight:"600"}}>⚠ Low confidence</span>}
                         {p.scanCount>0&&<span style={{fontSize:"0.58rem",padding:"0.12rem 0.45rem",borderRadius:"999px",background:T.accent+"12",color:T.accent,fontWeight:"600"}}>{p.scanCount} scans</span>}
                       </div>
                     </div>
@@ -9605,7 +9799,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
 
       {/* ── Re-seed password confirmation modal ── */}
       {showSeedConfirm&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(28,28,26,0.65)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}}>
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(28,28,26,0.65)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}}>
           <div style={{background:T.surface,borderRadius:"1.25rem",padding:"1.5rem",width:"100%",maxWidth:"360px",boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}}>
             <div style={{fontSize:"1.5rem",textAlign:"center",marginBottom:"0.5rem"}}>⚠️</div>
             <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"700",fontSize:"1rem",color:T.text,textAlign:"center",marginBottom:"0.25rem"}}>Confirm Re-seed</div>
@@ -10249,7 +10443,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
                       : null
                     }
                     <div style={{width:"100%",height:"100%",background:T.surfaceAlt,display:good?"none":"flex",alignItems:"center",justifyContent:"center",fontSize:"1.1rem",position:"absolute",inset:0}}>📦</div>
-                    {!good && <div style={{position:"absolute",inset:0,background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)"}}/>}
+                    {!good && <div style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)"}}/>}
                     {!hasIng(p) && good && <div style={{position:"absolute",bottom:0,right:0,width:"6px",height:"6px",background:T.amber,borderRadius:"999px",margin:"2px"}}/>}
                   </div>
                 );
@@ -11070,6 +11264,242 @@ function AdminIngredientFiller() {
 }
 
 
+// ── AdminIngredientReports — review user-submitted corrections + run full audit ──
+function AdminIngredientReports() {
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [auditResults, setAuditResults] = useState([]);
+  const [auditRunning, setAuditRunning] = useState(false);
+  const [auditProgress, setAuditProgress] = useState("");
+  const [auditTab, setAuditTab] = useState("reports"); // reports | audit
+
+  useEffect(() => {
+    getDocs(query(collection(db, "ingredientReports"), orderBy("createdAt","desc"), limit(50)))
+      .then(snap => { setReports(snap.docs.map(d => ({id:d.id,...d.data()}))); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  async function runAudit() {
+    setAuditRunning(true);
+    setAuditResults([]);
+    setAuditProgress("Loading all products…");
+    try {
+      const snap = await getDocs(query(collection(db,"products"), limit(500)));
+      const products = snap.docs.map(d => ({id:d.id,...d.data()}));
+      setAuditProgress(`Checking ${products.length} products…`);
+
+      const issues = [];
+      for (let i = 0; i < products.length; i++) {
+        const p = products[i];
+        if (!p.productName) continue;
+        setAuditProgress(`Checking ${i+1}/${products.length}: ${p.productName}`);
+
+        const ingCount = p.ingredients ? p.ingredients.split(",").filter(s=>s.trim()).length : 0;
+
+        // Flag: no ingredients
+        if (!p.ingredients || ingCount === 0) {
+          issues.push({ id:p.id, name:p.productName, brand:p.brand||"", issue:"No ingredients", severity:"high", current:"", barcode:p.barcode||"" });
+          continue;
+        }
+
+        // Flag: suspiciously few ingredients (<8)
+        if (ingCount < 8) {
+          issues.push({ id:p.id, name:p.productName, brand:p.brand||"", issue:`Only ${ingCount} ingredients`, severity:"medium", current:p.ingredients, barcode:p.barcode||"" });
+        }
+
+        // Check OBF for this product if it has a barcode
+        if (p.barcode && ingCount > 0) {
+          try {
+            const r = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${p.barcode}.json`, {signal:AbortSignal.timeout(5000)});
+            const d = await r.json();
+            if (d.status === 1) {
+              const obfIng = (d.product?.ingredients_text_en || d.product?.ingredients_text || "").trim();
+              if (obfIng) {
+                const obfCount = obfIng.split(",").filter(s=>s.trim()).length;
+                const diff = Math.abs(obfCount - ingCount);
+                // Flag if OBF has significantly more ingredients (>5 more)
+                if (obfCount > ingCount + 5) {
+                  issues.push({ id:p.id, name:p.productName, brand:p.brand||"", issue:`Missing ~${diff} ingredients (OBF has ${obfCount}, we have ${ingCount})`, severity:"high", current:p.ingredients, suggested:obfIng, barcode:p.barcode });
+                }
+              }
+            }
+          } catch {}
+        }
+
+        // Small delay to avoid rate limiting
+        if (i % 10 === 0) await new Promise(r => setTimeout(r, 200));
+      }
+
+      setAuditResults(issues);
+      setAuditProgress(`Done — ${issues.length} issue${issues.length!==1?"s":""} found across ${products.length} products`);
+    } catch(e) {
+      setAuditProgress("Error: " + e.message);
+    }
+    setAuditRunning(false);
+  }
+
+  async function applyOBFIngredients(result) {
+    if (!result.suggested) return;
+    try {
+      await updateDoc(doc(db,"products",result.id), {
+        ingredients: result.suggested,
+        updatedAt: serverTimestamp(),
+        lastVerified: serverTimestamp(),
+      });
+      setAuditResults(r => r.filter(x => x.id !== result.id));
+    } catch(e) { alert("Error: " + e.message); }
+  }
+
+  async function resolveReport(report, action) {
+    try {
+      if (action === "apply") {
+        const q = query(collection(db,"products"), where("productName","==",report.productName), limit(1));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          await updateDoc(doc(db,"products",snap.docs[0].id), {
+            ingredients: report.reportText,
+            updatedAt: serverTimestamp(),
+            lastVerified: serverTimestamp(),
+          });
+        }
+      }
+      await updateDoc(doc(db,"ingredientReports",report.id), {
+        status: action==="apply" ? "applied" : "dismissed",
+        resolvedAt: serverTimestamp(),
+      });
+      setReports(r => r.map(x => x.id===report.id ? {...x, status:action==="apply"?"applied":"dismissed"} : x));
+    } catch(e) { alert("Error: " + e.message); }
+  }
+
+  const pending = reports.filter(r => r.status==="pending");
+  const resolved = reports.filter(r => r.status!=="pending");
+  const highIssues = auditResults.filter(r => r.severity==="high");
+  const medIssues = auditResults.filter(r => r.severity==="medium");
+
+  return (
+    <div style={{padding:"0.5rem 0"}}>
+      {/* Sub-tabs */}
+      <div style={{display:"flex",gap:"0.35rem",marginBottom:"1rem",padding:"0.2rem",background:T.surfaceAlt,borderRadius:"0.5rem"}}>
+        {[["reports",`User Reports ${pending.length>0?`(${pending.length})`:""}`,],["audit","Full Audit"]].map(([id,lbl])=>(
+          <button key={id} onClick={()=>setAuditTab(id)}
+            style={{flex:1,padding:"0.45rem",background:auditTab===id?T.surface:"transparent",color:auditTab===id?T.accent:T.textMid,border:auditTab===id?`1px solid ${T.border}`:"1px solid transparent",borderRadius:"0.4rem",fontSize:"0.7rem",fontWeight:auditTab===id?"700":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {/* User reports tab */}
+      {auditTab==="reports"&&(
+        <div>
+          {loading && <div style={{textAlign:"center",padding:"2rem",color:T.textLight}}>Loading…</div>}
+          {!loading&&pending.length===0&&<div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.82rem"}}>No pending reports ✓</div>}
+          {pending.map(r=>(
+            <div key={r.id} style={{background:T.surface,borderRadius:"0.85rem",border:`1px solid ${T.amber}44`,padding:"0.85rem",marginBottom:"0.75rem"}}>
+              <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:"0.5rem"}}>
+                <div>
+                  <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>{r.productName}</div>
+                  <div style={{fontSize:"0.65rem",color:T.textLight}}>{r.brand} · by {r.reporterName||"unknown"}</div>
+                </div>
+                <span style={{fontSize:"0.55rem",color:T.amber,background:T.amber+"15",padding:"0.15rem 0.45rem",borderRadius:"999px",border:`1px solid ${T.amber}30`,fontWeight:"700",flexShrink:0,marginLeft:"0.5rem"}}>Pending</span>
+              </div>
+              <div style={{marginBottom:"0.5rem"}}>
+                <div style={{fontSize:"0.6rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.25rem"}}>Current</div>
+                <div style={{fontSize:"0.68rem",color:T.textMid,background:T.surfaceAlt,padding:"0.5rem",borderRadius:"0.4rem",lineHeight:1.5,maxHeight:"60px",overflowY:"auto"}}>{r.currentIngredients||"None"}</div>
+              </div>
+              <div style={{marginBottom:"0.75rem"}}>
+                <div style={{fontSize:"0.6rem",color:T.sage,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.25rem"}}>Suggested</div>
+                <div style={{fontSize:"0.68rem",color:T.text,background:T.sage+"08",padding:"0.5rem",borderRadius:"0.4rem",border:`1px solid ${T.sage}20`,lineHeight:1.5,maxHeight:"80px",overflowY:"auto"}}>{r.reportText}</div>
+              </div>
+              <div style={{display:"flex",gap:"0.5rem"}}>
+                <button onClick={()=>resolveReport(r,"apply")} style={{flex:1,padding:"0.55rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.55rem",fontSize:"0.75rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>✓ Apply</button>
+                <button onClick={()=>resolveReport(r,"dismiss")} style={{flex:1,padding:"0.55rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.55rem",fontSize:"0.75rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Dismiss</button>
+              </div>
+            </div>
+          ))}
+          {resolved.length>0&&(
+            <div style={{marginTop:"1rem"}}>
+              <div style={{fontSize:"0.62rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.5rem"}}>Resolved ({resolved.length})</div>
+              {resolved.map(r=>(
+                <div key={r.id} style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.5rem 0.65rem",background:T.surfaceAlt,borderRadius:"0.55rem",marginBottom:"0.35rem"}}>
+                  <span style={{fontSize:"0.65rem",fontWeight:"700",color:r.status==="applied"?T.sage:T.textLight}}>{r.status==="applied"?"✓ Applied":"Dismissed"}</span>
+                  <span style={{fontSize:"0.72rem",color:T.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.productName}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Full audit tab */}
+      {auditTab==="audit"&&(
+        <div>
+          <button onClick={runAudit} disabled={auditRunning}
+            style={{width:"100%",padding:"0.75rem",background:auditRunning?T.surfaceAlt:T.navy,color:auditRunning?T.textLight:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.85rem",fontWeight:"700",cursor:auditRunning?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem"}}>
+            {auditRunning&&<div style={{width:"12px",height:"12px",borderRadius:"50%",border:"2px solid #fff",borderTopColor:"transparent",animation:"spin 0.7s linear infinite"}}/>}
+            {auditRunning?"Running audit…":"Run Full Ingredient Audit"}
+          </button>
+
+          {auditProgress&&(
+            <div style={{fontSize:"0.72rem",color:T.textLight,textAlign:"center",marginBottom:"0.75rem",fontFamily:"'Inter',sans-serif"}}>{auditProgress}</div>
+          )}
+
+          {auditResults.length>0&&(
+            <div>
+              <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.75rem"}}>
+                <div style={{flex:1,padding:"0.65rem",background:T.rose+"10",borderRadius:"0.65rem",border:`1px solid ${T.rose}25`,textAlign:"center"}}>
+                  <div style={{fontSize:"1.4rem",fontWeight:"800",color:T.rose,fontFamily:"'Inter',sans-serif"}}>{highIssues.length}</div>
+                  <div style={{fontSize:"0.6rem",color:T.rose,fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>High priority</div>
+                </div>
+                <div style={{flex:1,padding:"0.65rem",background:T.amber+"10",borderRadius:"0.65rem",border:`1px solid ${T.amber}25`,textAlign:"center"}}>
+                  <div style={{fontSize:"1.4rem",fontWeight:"800",color:T.amber,fontFamily:"'Inter',sans-serif"}}>{medIssues.length}</div>
+                  <div style={{fontSize:"0.6rem",color:T.amber,fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Low confidence</div>
+                </div>
+              </div>
+
+              {[["high","🔴 High Priority — Missing or mismatched ingredients",T.rose],["medium","🟡 Low Confidence — Fewer than 8 ingredients",T.amber]].map(([sev,label,color])=>{
+                const items = auditResults.filter(r=>r.severity===sev);
+                if (!items.length) return null;
+                return (
+                  <div key={sev} style={{marginBottom:"1rem"}}>
+                    <div style={{fontSize:"0.65rem",fontWeight:"700",color,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.5rem",fontFamily:"'Inter',sans-serif"}}>{label}</div>
+                    {items.map(r=>(
+                      <div key={r.id} style={{background:T.surface,borderRadius:"0.75rem",border:`1px solid ${color}33`,padding:"0.75rem",marginBottom:"0.5rem"}}>
+                        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:"0.4rem"}}>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:"0.82rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</div>
+                            <div style={{fontSize:"0.62rem",color:T.textLight}}>{r.brand}</div>
+                          </div>
+                          <span style={{fontSize:"0.58rem",color,background:color+"12",padding:"0.12rem 0.45rem",borderRadius:"999px",border:`1px solid ${color}30`,fontWeight:"700",flexShrink:0,marginLeft:"0.5rem"}}>{r.issue}</span>
+                        </div>
+                        {r.current&&(
+                          <div style={{fontSize:"0.65rem",color:T.textMid,background:T.surfaceAlt,padding:"0.35rem 0.5rem",borderRadius:"0.4rem",marginBottom:"0.4rem",lineHeight:1.4,maxHeight:"45px",overflowY:"auto"}}>{r.current}</div>
+                        )}
+                        {r.suggested&&(
+                          <>
+                            <div style={{fontSize:"0.6rem",color:T.sage,fontWeight:"600",marginBottom:"0.2rem"}}>OBF suggests ({r.suggested.split(",").length} ingredients):</div>
+                            <div style={{fontSize:"0.65rem",color:T.text,background:T.sage+"08",padding:"0.35rem 0.5rem",borderRadius:"0.4rem",border:`1px solid ${T.sage}20`,marginBottom:"0.5rem",lineHeight:1.4,maxHeight:"55px",overflowY:"auto"}}>{r.suggested}</div>
+                            <button onClick={()=>applyOBFIngredients(r)}
+                              style={{width:"100%",padding:"0.5rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.5rem",fontSize:"0.75rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                              Apply OBF ingredients
+                            </button>
+                          </>
+                        )}
+                        {!r.suggested&&(
+                          <div style={{fontSize:"0.65rem",color:T.textLight,fontStyle:"italic"}}>No OBF data available — update manually in All Products</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog}) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -11110,7 +11540,7 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
       {/* Row 2: sub-tabs that change based on active section */}
       {activeTab==="products"&&(
         <div style={{display:"flex",gap:"0.25rem",marginBottom:"0.9rem",padding:"0.2rem",background:T.surfaceAlt+"80",borderRadius:"0.5rem"}}>
-          {[["database","All Products"],["requests","Requests"],["shop","Explore"]].map(([id,lbl])=>(
+          {[["database","All Products"],["requests","Requests"],["reports","⚠ Ingredients"],["shop","Explore"]].map(([id,lbl])=>(
             <button key={id} onClick={()=>setActiveTab(id)}
               style={{flex:1,padding:"0.38rem 0.2rem",background:activeTab===id?T.surface:"transparent",color:activeTab===id?T.accent:T.textMid,border:activeTab===id?`1px solid ${T.border}`:"1px solid transparent",borderRadius:"0.4rem",fontSize:"0.6rem",fontWeight:activeTab===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif",boxShadow:activeTab===id?"0 1px 3px rgba(0,0,0,0.06)":"none"}}>
               {lbl}
@@ -11138,6 +11568,9 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
       {activeTab==="picks"&&<AdminFounderPicks/>}
       {/* Requests — own tab */}
       {activeTab==="requests"&&<AdminRequestsTab/>}
+
+      {/* Ingredient Reports tab */}
+      {activeTab==="reports"&&<AdminIngredientReports/>}
 
       {activeTab==="overview"&&(
         <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
@@ -12030,10 +12463,16 @@ async function sendMessage(fromUid, toUid, msg) {
 }
 
 // ── MessagesPage ──────────────────────────────────────────────
-function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen }) {
+function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, chatCloseRef }) {
   const [convos, setConvos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [openConvo, setOpenConvo] = useState(null);
+
+  // Register close fn so AppInner nav can close the chat from outside
+  React.useEffect(() => {
+    if (chatCloseRef) chatCloseRef.current = () => { setOpenConvo(null); onChatOpen?.(false); };
+    return () => { if (chatCloseRef) chatCloseRef.current = null; };
+  }, []);
   const [chatProduct, setChatProduct] = useState(null);
   const [chatProductLoading, setChatProductLoading] = useState(false);
 
@@ -12134,7 +12573,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen }) 
         <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, zIndex:60, background:T.bg, display:"flex", flexDirection:"column", height:"100%", maxHeight:"-webkit-fill-available"}}>
           <ChatView user={user} profile={profile} other={openConvo} onBack={() => { setOpenConvo(null); onChatOpen?.(false); }} onUserTap={onUserTap} onProductTap={openChatProduct}/>
         </div>
-        {chatProduct && <ProductModal product={chatProduct} user={user} profile={profile} onUpdateProfile={()=>{}} onClose={() => setChatProduct(null)}/>}
+        {chatProduct && <ProductModal product={chatProduct} user={user} profile={profile} onUpdateProfile={()=>{}} onClose={() => setChatProduct(null)} onUserTap={onUserTap}/>}
       </>
     );
   }
@@ -12151,7 +12590,6 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen }) 
       <div style={{ padding: "1rem 1rem 0.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: T.bg, zIndex: 10, borderBottom: `1px solid ${T.border}`, marginBottom: "0.5rem" }}>
         <div>
           <div style={{ fontSize: "1.1rem", fontWeight: "700", color: T.navy, fontFamily: "'Inter',sans-serif", letterSpacing: "-0.02em", lineHeight: 1 }}>Messages</div>
-          <div style={{ fontSize: "0.6rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.1em", marginTop: "2px", fontFamily: "'Inter',sans-serif" }}>by GoodSisters</div>
         </div>
         {convos.length > 0 && (
           <div style={{ fontSize: "0.65rem", color: T.textLight, fontFamily: "'Inter',sans-serif" }}>
@@ -12453,7 +12891,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
 
       {/* Long-press delete sheet */}
       {longPressMsg && (
-        <div style={{ position:"fixed", inset:0, zIndex:200, background:"rgba(0,0,0,0.4)" }} onClick={() => setLongPressMsg(null)}>
+        <div style={{ position:"fixed",top:0,left:0,right:0,bottom:0, zIndex:200, background:"rgba(0,0,0,0.4)" }} onClick={() => setLongPressMsg(null)}>
           <div style={{ position:"absolute", bottom:0, left:0, right:0, background:T.surface, borderRadius:"1.25rem 1.25rem 0 0", padding:"1rem", paddingBottom:"calc(1rem + env(safe-area-inset-bottom))" }} onClick={e => e.stopPropagation()}>
             <div style={{ width:"36px", height:"4px", borderRadius:"2px", background:T.border, margin:"0 auto 1rem" }}/>
             {longPressMsg.isMe ? (
@@ -12537,7 +12975,7 @@ function ProductPickerModal({ user, onSelect, onClose }) {
   }, [q]);
 
   return (
-    <div style={{ position:"fixed", inset:0, zIndex:200, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"flex-end" }} onClick={onClose}>
+    <div style={{ position:"fixed",top:0,left:0,right:0,bottom:0, zIndex:200, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"flex-end" }} onClick={onClose}>
       <div style={{ width:"100%", maxWidth:"480px", margin:"0 auto", background:T.surface, borderRadius:"1.25rem 1.25rem 0 0", padding:"1rem", maxHeight:"70vh", display:"flex", flexDirection:"column" }} onClick={e => e.stopPropagation()}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"0.85rem" }}>
           <span style={{ fontSize:"0.95rem", fontWeight:"700", color:T.text, fontFamily:"'Inter',sans-serif" }}>Share a product</span>
@@ -12625,6 +13063,11 @@ function BottomNav({tab, onChange, unreadCount=0, msgUnread=0, currentUid="", is
     {id:"shop",     label:"Explore",  icon:(a) => RalliIcons.compass(a ? T.navy : T.textLight, 22, a)},
     {id:"messages", label:"Messages", icon:(a) => RalliIcons.chat(a ? T.navy : T.textLight)},
     {id:"profile",  label:"Profile",  icon:(a) => RalliIcons.person(a ? T.navy : T.textLight)},
+    ...(isAdmin ? [{id:"admin", label:"Admin", icon:(a) => (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={a ? T.navy : T.textLight} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+      </svg>
+    )}] : []),
   ];
   return (
     <div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",borderTop:`1px solid ${T.border}`,display:"flex",zIndex:50,paddingBottom:"env(safe-area-inset-bottom)"}}>
@@ -12901,6 +13344,7 @@ function AppInner() {
   const [feedRefresh, setFeedRefresh] = useState(0);
   const [msgUnread, setMsgUnread] = useState(0);
   const [chatOpen, setChatOpen] = useState(false);
+  const chatCloseRef = React.useRef(null); // MessagesPage registers its close fn here
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showOurStory, setShowOurStory] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -12984,6 +13428,13 @@ function AppInner() {
   function handleUserTap(uid) { setViewingUid(uid); }
   function handleBack()       { setViewingUid(null); }
 
+  // Global user tap event — fired by ProductModal when onUserTap isn't passed
+  React.useEffect(() => {
+    const handler = (e) => { if(e.detail) { setViewingUid(e.detail); switchTab("feed"); } };
+    window.addEventListener("ralli_view_user", handler);
+    return () => window.removeEventListener("ralli_view_user", handler);
+  }, []);
+
   if (authLoading) return (
     <><style>{GS}</style>
     <div style={{minHeight:"100vh",background:T.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -13032,7 +13483,7 @@ function AppInner() {
             {/* Notification dropdown panel */}
             {showNotifPanel&&(
               <>
-                <div onClick={()=>setShowNotifPanel(false)} style={{position:"fixed",inset:0,zIndex:44}}/>
+                <div onClick={()=>setShowNotifPanel(false)} style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:44}}/>
                 <div style={{position:"absolute",right:0,top:"calc(100% + 8px)",width:"min(340px,90vw)",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",boxShadow:"0 8px 32px rgba(17,24,39,0.12)",zIndex:45,overflow:"hidden",animation:"slideDown 0.18s ease"}}>
                   <NotifDropdown user={user} onUserTap={uid=>{setShowNotifPanel(false);setViewingUid(uid);switchTab("feed");}}/>
                 </div>
@@ -13054,7 +13505,7 @@ function AppInner() {
           : tab==="check"
             ? <ScanPage user={user} profile={profile} onPosted={()=>{setFeedRefresh(r=>r+1);switchTab("feed");}} onUpdateProfile={setProfile}/>
             : tab==="messages"
-              ? <MessagesPage user={user} profile={profile} onUserTap={handleUserTap} onUnreadChange={setMsgUnread} onChatOpen={setChatOpen}/>
+              ? <MessagesPage user={user} profile={profile} onUserTap={handleUserTap} onUnreadChange={setMsgUnread} onChatOpen={setChatOpen} chatCloseRef={chatCloseRef}/>
             : tab==="shop"
               ? <ShopPage user={user} profile={profile} onUpdateProfile={setProfile}/>
             : tab==="admin"
@@ -13092,7 +13543,15 @@ function AppInner() {
         </div>
       )}
 
-      <BottomNav tab={tab} onChange={t=>{switchTab(t);setViewingUid(null);setOpenConvo&&setOpenConvo(null);setChatOpen(false);if(t==="notifs")setUnreadCount(0);if(t==="messages")setMsgUnread(0);}} unreadCount={unreadCount} msgUnread={msgUnread} currentUid={user?.uid||""} isAdmin={isAdmin(user)}/>
+      <BottomNav tab={tab} onChange={t=>{
+        // Close any open chat first
+        if(chatCloseRef.current) chatCloseRef.current();
+        setChatOpen(false);
+        switchTab(t);
+        setViewingUid(null);
+        if(t==="notifs")setUnreadCount(0);
+        if(t==="messages")setMsgUnread(0);
+      }} unreadCount={unreadCount} msgUnread={msgUnread} currentUid={user?.uid||""} isAdmin={isAdmin(user)}/>
       {showOurStory&&!showOnboarding&&(
         <OurStoryPopup onClose={()=>setShowOurStory(false)} onUserTap={handleUserTap}/>
       )}
