@@ -1,43 +1,127 @@
-Ralli
-BY GOODSISTERS
-Privacy Policy
-Last updated: April 2026
-Ralli is built by GoodSisters — a small team that genuinely cares about your skin and your privacy. We collect only what we need to make the app work, we never sell your data, and we try to be straight with you about everything we do.
-What we collect
-When you create an account and use Ralli, we collect:
-	•	Account information — your name, email address, and profile photo if you choose to add one.
-	•	Skin profile — skin type and concerns you select during onboarding. This is used to personalize your experience.
-	•	Product interactions — products you scan, add to your routine, love, or flag as breaking you out.
-	•	Posts and ratings — anything you share to the feed or rate, including ingredients you paste or photograph.
-	•	Messages — direct messages you send to other users.
-	•	Usage data — how you interact with the app (which features you use, how often) to help us improve it.
-What we do not collect
-	•	We do not collect payment information — we have no in-app purchases.
-	•	We do not track your location.
-	•	We do not access your camera roll beyond the specific photo you choose to share.
-	•	We do not read your contacts.
-How we use your data
-	•	To run and improve the Ralli app.
-	•	To show you personalised content — your feed, product scores, and recommendations — based on your skin profile and activity.
-	•	To let other users follow you, see your public posts, and message you.
-	•	To calculate community ratings on products.
-	•	To identify you as an admin if applicable and provide access to admin tools.
-	•	To send you notifications about activity on your posts (likes, comments, new followers).
-Who we share your data with
-We use the following third-party services to run the app:
-	•	Firebase (Google) — database, authentication, and hosting. Your data is stored on Google's servers.
-	•	Anthropic — when you photograph a product or ingredient label, the image is sent to Anthropic's Claude API for analysis. Images are not stored by Anthropic beyond the request.
-	•	Open Beauty Facts — a public ingredient database we query to look up product information.
-	•	Amazon — product links may include our affiliate tag. Clicking them and purchasing earns us a small commission at no extra cost to you.
-We do not sell your personal data to advertisers or any third parties.
-Your public profile
-Your display name, profile photo, and any posts you make to the feed are visible to other Ralli users by default. You can set your product lists (Routine, Loved, Want to Try) to private in your profile settings at any time.
-Data retention
-We keep your data for as long as your account is active. If you delete your account, your profile and posts are removed. Some data — such as anonymised product ratings — may remain in aggregate form.
-Children's privacy
-Ralli is not intended for users under 13. We do not knowingly collect data from children under 13. If you believe a child has provided us with personal data, please contact us and we will delete it.
-Your rights
-You can request access to, correction of, or deletion of your personal data at any time by contacting us. You can also delete your account directly within the app under Profile → Settings.
-Changes to this policy
-We may update this policy from time to time. We'll update the date at the top when we do. Significant changes will be communicated in the app.
-Questions about this policy? Email us at theralliapp@gmail.com — we actually read it.
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — Ralli by GoodSisters</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --navy: #111827;
+    --sage: #2C7A5C;
+    --ice: #CFE8FF;
+    --text: #111827;
+    --mid: #4A5568;
+    --light: #9AACBC;
+    --border: #E6E8EC;
+    --bg: #F8F9FB;
+  }
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 16px;
+    font-weight: 300;
+  }
+  header {
+    padding: 2rem 1.5rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  .logo { font-family: 'DM Serif Display', serif; font-size: 1.4rem; color: var(--navy); text-decoration: none; }
+  .logo span { display: block; font-family: 'DM Sans', sans-serif; font-size: 0.65rem; font-weight: 400; letter-spacing: 0.15em; text-transform: uppercase; color: var(--light); margin-top: -2px; }
+  main { max-width: 720px; margin: 0 auto; padding: 3rem 1.5rem 6rem; background: #fff; border-left: 1px solid var(--border); border-right: 1px solid var(--border); min-height: 100vh; }
+  .page-title { font-family: 'DM Serif Display', serif; font-size: 2.2rem; color: var(--navy); margin-bottom: 0.4rem; }
+  .updated { font-size: 0.8rem; color: var(--light); margin-bottom: 3rem; }
+  .intro { font-size: 1.05rem; color: var(--mid); line-height: 1.8; margin-bottom: 3rem; padding-bottom: 2rem; border-bottom: 1px solid var(--border); }
+  h2 { font-family: 'DM Serif Display', serif; font-size: 1.3rem; color: var(--navy); margin: 2.5rem 0 0.75rem; }
+  p { color: var(--mid); margin-bottom: 1rem; }
+  ul { color: var(--mid); padding-left: 1.25rem; margin-bottom: 1rem; }
+  li { margin-bottom: 0.4rem; }
+  a { color: var(--sage); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .contact-box { background: var(--bg); border-radius: 0.75rem; padding: 1.25rem 1.5rem; margin-top: 3rem; border: 1px solid var(--border); }
+  .contact-box p { margin: 0; }
+  strong { font-weight: 500; color: var(--navy); }
+</style>
+</head>
+<body>
+
+<header>
+  <a href="https://ralli.app" class="logo">Ralli <span>by GoodSisters</span></a>
+</header>
+
+<main>
+  <h1 class="page-title">Privacy Policy</h1>
+  <p class="updated">Last updated: April 2026</p>
+
+  <p class="intro">Ralli is built by GoodSisters — a small team that genuinely cares about your skin and your privacy. We collect only what we need to make the app work, we never sell your data, and we try to be straight with you about everything we do.</p>
+
+  <h2>What we collect</h2>
+  <p>When you create an account and use Ralli, we collect:</p>
+  <ul>
+    <li><strong>Account information</strong> — your name, email address, and profile photo if you choose to add one.</li>
+    <li><strong>Skin profile</strong> — skin type and concerns you select during onboarding. This is used to personalise your experience.</li>
+    <li><strong>Product interactions</strong> — products you scan, add to your routine, love, or flag as breaking you out.</li>
+    <li><strong>Posts and ratings</strong> — anything you share to the feed or rate, including ingredients you paste or photograph.</li>
+    <li><strong>Messages</strong> — direct messages you send to other users.</li>
+    <li><strong>Usage data</strong> — how you interact with the app (which features you use, how often) to help us improve it.</li>
+  </ul>
+
+  <h2>What we do not collect</h2>
+  <ul>
+    <li>We do not collect payment information — we have no in-app purchases.</li>
+    <li>We do not track your location.</li>
+    <li>We do not access your camera roll beyond the specific photo you choose to share.</li>
+    <li>We do not read your contacts.</li>
+  </ul>
+
+  <h2>How we use your data</h2>
+  <ul>
+    <li>To run and improve the Ralli app.</li>
+    <li>To show you personalised content — your feed, product scores, and recommendations — based on your skin profile and activity.</li>
+    <li>To let other users follow you, see your public posts, and message you.</li>
+    <li>To calculate community ratings on products.</li>
+    <li>To identify you as an admin if applicable and provide access to admin tools.</li>
+    <li>To send you notifications about activity on your posts (likes, comments, new followers).</li>
+  </ul>
+
+  <h2>Who we share your data with</h2>
+  <p>We use the following third-party services to run the app:</p>
+  <ul>
+    <li><strong>Firebase (Google)</strong> — database, authentication, and hosting. Your data is stored on Google's servers.</li>
+    <li><strong>Anthropic</strong> — when you photograph a product or ingredient label, the image is sent to Anthropic's Claude API for analysis. Images are not stored by Anthropic beyond the request.</li>
+    <li><strong>Open Beauty Facts</strong> — a public ingredient database we query to look up product information.</li>
+    <li><strong>Amazon</strong> — product links may include our affiliate tag. Clicking them and purchasing earns us a small commission at no extra cost to you.</li>
+  </ul>
+  <p>We do not sell your personal data to advertisers or any third parties.</p>
+
+  <h2>Your public profile</h2>
+  <p>Your display name, profile photo, and any posts you make to the feed are visible to other Ralli users by default. You can set your product lists (Routine, Loved, Want to Try) to private in your profile settings at any time.</p>
+
+  <h2>Data retention</h2>
+  <p>We keep your data for as long as your account is active. If you delete your account, your profile and posts are removed. Some data — such as anonymised product ratings — may remain in aggregate form.</p>
+
+  <h2>Children's privacy</h2>
+  <p>Ralli is not intended for users under 13. We do not knowingly collect data from children under 13. If you believe a child has provided us with personal data, please contact us and we will delete it.</p>
+
+  <h2>Your rights</h2>
+  <p>You can request access to, correction of, or deletion of your personal data at any time by contacting us. You can also delete your account directly within the app under Profile → Settings.</p>
+
+  <h2>Changes to this policy</h2>
+  <p>We may update this policy from time to time. We'll update the date at the top when we do. Significant changes will be communicated in the app.</p>
+
+  <div class="contact-box">
+    <p>Questions about this policy? Email us at <a href="mailto:theralliapp@gmail.com">theralliapp@gmail.com</a> — we actually read it.</p>
+  </div>
+</main>
+
+</body>
+</html>
