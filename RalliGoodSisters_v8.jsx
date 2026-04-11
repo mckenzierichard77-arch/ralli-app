@@ -8464,35 +8464,6 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
     return null;
   }
 
-  async function tryClaudeCandidates(p) {
-    // Returns multiple candidate image URLs for manual selection
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": ANTHROPIC_KEY,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true"
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 600,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-          system: "Find direct product image URLs for a skincare product. Search Sephora, Ulta, and the brand official website. Return ONLY a JSON array of objects: [{\"url\": \"https://...\", \"source\": \"Sephora\"}]. Include up to 4 results. Only direct image file URLs (.jpg .png .webp). No explanation.",
-          messages: [{ role: "user", content: `Find product images for: ${p.brand} ${p.productName}` }]
-        })
-      });
-      const data = await res.json();
-      if (data.error) return [];
-      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").replace(/```json|```/g,"").trim();
-      const arrMatch = text.match(/\[[\s\S]*?\]/);
-      if (!arrMatch) return [];
-      const results = JSON.parse(arrMatch[0]);
-      return results.filter(r=>r.url&&r.url.startsWith("http"));
-    } catch { return []; }
-  }
-
   async function fixProduct(p) {
     // Try OBF only for real numeric barcodes (8-14 digits) — not seed_ fake IDs
     const barcode = p.barcode || "";
@@ -10269,8 +10240,37 @@ function FixAmazonUrls({ products, onFixed }) {
 }
 
 
+async function tryClaudeCandidates(p) {
+  // Returns multiple candidate image URLs for manual selection
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 600,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+        system: "Find direct product image URLs for a skincare product. Search Sephora, Ulta, and the brand official website. Return ONLY a JSON array of objects: [\"url\": \"https://...\", \"source\": \"Sephora\"}]. Include up to 4 results. Only direct image file URLs (.jpg .png .webp). No explanation.",
+        messages: [{ role: "user", content: `Find product images for: ${p.brand} ${p.productName}` }]
+      })
+    });
+    const data = await res.json();
+    if (data.error) return [];
+    const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").replace(/```json|```/g,"").trim();
+    const arrMatch = text.match(/\[[\s\S]*?\]/);
+    if (!arrMatch) return [];
+    const results = JSON.parse(arrMatch[0]);
+    return results.filter(r=>r.url&&r.url.startsWith("http"));
+  } catch { return []; }
+}
+
 // ── AdminImagePicker ─────────────────────────────────────────
-function AdminImagePicker({products, setProducts, tryClaudeCandidates, onBack}) {
+function AdminImagePicker({products, setProducts, onBack}) {
   const noImg = products.filter(p => !hasValidImage(p));
   const [idx, setIdx] = React.useState(0);
   const [candidates, setCandidates] = React.useState([]);
@@ -10384,6 +10384,230 @@ function AdminImagePicker({products, setProducts, tryClaudeCandidates, onBack}) 
         style={{width:"100%",padding:"0.65rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",color:T.textLight,fontSize:"0.78rem",fontFamily:"'Inter',sans-serif"}}>
         Skip this product →
       </button>
+    </div>
+  );
+}
+
+
+// ── AdminProductHub ───────────────────────────────────────────
+// Simple, focused product management — stats → fix ingredients → fix images → approve
+function AdminProductHub() {
+  const [products, setProducts] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [view, setView] = React.useState("home"); // home | ingredients | images | approve | requests | reports
+  const [obfRunning, setObfRunning] = React.useState(false);
+  const [obfStatus, setObfStatus] = React.useState("");
+  const [obfDone, setObfDone] = React.useState(0);
+  const stopRef = React.useRef(false);
+
+  React.useEffect(() => { loadProducts(); }, []);
+
+  async function loadProducts() {
+    setLoading(true);
+    try {
+      const snap = await getDocs(collection(db, "products"));
+      setProducts(snap.docs.map(d => ({id:d.id,...d.data()})));
+    } catch(e) { console.error(e); }
+    setLoading(false);
+  }
+
+  const hasImg = p => hasValidImage(p);
+  const hasIng = p => (p.ingredients||"").trim().length > 10;
+  const isReady = p => hasImg(p) && hasIng(p) && p.approved;
+  const needsImg = p => !hasImg(p);
+  const needsIng = p => !hasIng(p);
+  const needsApproval = p => hasImg(p) && hasIng(p) && !p.approved && !p.hidden;
+
+  const readyCount = products.filter(isReady).length;
+  const imgCount = products.filter(needsImg).length;
+  const ingCount = products.filter(needsIng).length;
+  const approveCount = products.filter(needsApproval).length;
+
+  async function runOBFSweep() {
+    setObfRunning(true); setObfDone(0); stopRef.current = false;
+    const needIng = products.filter(needsIng);
+    setObfStatus(`Fetching ingredients for ${needIng.length} products…`);
+    let found = 0;
+    for (let i = 0; i < needIng.length; i++) {
+      if (stopRef.current) break;
+      const p = needIng[i];
+      setObfStatus(`[${i+1}/${needIng.length}] ${p.productName}…`);
+      try {
+        let ing = "";
+        if (p.barcode && !/^seed_/.test(p.barcode)) {
+          const r = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${p.barcode}.json`, {signal:AbortSignal.timeout(5000)});
+          const d = await r.json();
+          if (d.status===1) ing = d.product?.ingredients_text_en || d.product?.ingredients_text || "";
+        }
+        if (!ing) {
+          const q = encodeURIComponent(`${p.brand||""} ${p.productName||""}`.trim());
+          const r = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${q}&search_simple=1&action=process&json=1&page_size=3&fields=product_name,brands,ingredients_text,ingredients_text_en,code`, {signal:AbortSignal.timeout(5000)});
+          const d = await r.json();
+          const brandLow = (p.brand||"").toLowerCase().split(" ")[0];
+          const hit = (d.products||[]).find(x=>(x.brands||"").toLowerCase().includes(brandLow)) || (d.products||[])[0];
+          ing = hit?.ingredients_text_en || hit?.ingredients_text || "";
+        }
+        if (ing && ing.trim().length > 10) {
+          let poreScore = p.poreScore;
+          try { const a = analyzeIngredients(ing); if (a?.avgScore!=null) poreScore=Math.round(a.avgScore); } catch {}
+          await updateDoc(doc(db,"products",p.id), {ingredients:ing, poreScore, updatedAt:Date.now()});
+          setProducts(ps => ps.map(x => x.id===p.id ? {...x,ingredients:ing,poreScore} : x));
+          found++; setObfDone(found);
+        }
+      } catch(e) { console.error(p.productName, e); }
+    }
+    setObfStatus(`Done — ${found} ingredients added.`);
+    setObfRunning(false);
+  }
+
+  async function approveProduct(p) {
+    await updateDoc(doc(db,"products",p.id), {approved:true, approvedAt:Date.now(), lastVerified:Date.now()});
+    setProducts(ps => ps.map(x => x.id===p.id ? {...x,approved:true} : x));
+  }
+
+  async function hideProduct(p) {
+    await updateDoc(doc(db,"products",p.id), {approved:false, hidden:true});
+    setProducts(ps => ps.map(x => x.id===p.id ? {...x,approved:false,hidden:true} : x));
+  }
+
+  if (loading) return <div style={{textAlign:"center",padding:"3rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Loading…</div>;
+
+  // ── Image Picker view ──
+  if (view === "images") return (
+    <div>
+      <button onClick={()=>setView("home")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
+      <AdminImagePicker products={products} setProducts={setProducts} onBack={()=>setView("home")}/>
+    </div>
+  );
+
+  // ── Approve view ──
+  if (view === "approve") {
+    const queue = products.filter(needsApproval);
+    return (
+      <div>
+        <button onClick={()=>setView("home")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
+        <div style={{fontSize:"0.75rem",color:T.textLight,marginBottom:"1rem",fontFamily:"'Inter',sans-serif"}}>{queue.length} products ready to approve</div>
+        {queue.length === 0 && <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>All done! ✓</div>}
+        {queue.map(p => {
+          const img = p.adminImage || p.image || "";
+          return (
+            <div key={p.id} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",padding:"0.75rem",marginBottom:"0.6rem",display:"flex",alignItems:"center",gap:"0.75rem"}}>
+              <div style={{width:44,height:44,borderRadius:"0.55rem",overflow:"hidden",background:T.surfaceAlt,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {img ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/> : <span style={{fontSize:"0.6rem",color:T.textLight}}>no img</span>}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:"0.65rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",fontFamily:"'Inter',sans-serif"}}>{p.brand}</div>
+                <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
+                <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px",fontFamily:"'Inter',sans-serif"}}>{p.category} · pore {p.poreScore??0}/5</div>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:"0.35rem",flexShrink:0}}>
+                <button onClick={()=>approveProduct(p)} style={{padding:"0.35rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"999px",cursor:"pointer",fontSize:"0.72rem",fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>✓ Approve</button>
+                <button onClick={()=>hideProduct(p)} style={{padding:"0.35rem 0.85rem",background:"none",color:T.textLight,border:`1px solid ${T.border}`,borderRadius:"999px",cursor:"pointer",fontSize:"0.72rem",fontFamily:"'Inter',sans-serif"}}>Hide</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // ── Requests view ──
+  if (view === "requests") return (
+    <div>
+      <button onClick={()=>setView("home")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
+      <AdminRequestsTab/>
+    </div>
+  );
+
+  // ── Reports view ──
+  if (view === "reports") return (
+    <div>
+      <button onClick={()=>setView("home")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
+      <AdminIngredientReports/>
+    </div>
+  );
+
+  // ── Home view ──
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+
+      {/* Status bar */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"1rem",display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
+        <div style={{textAlign:"center",padding:"0.5rem",background:T.sage+"12",borderRadius:"0.6rem"}}>
+          <div style={{fontSize:"1.4rem",fontWeight:"700",color:T.sage,fontFamily:"'Inter',sans-serif"}}>{readyCount}</div>
+          <div style={{fontSize:"0.6rem",color:T.sage,fontFamily:"'Inter',sans-serif",marginTop:"1px"}}>Live in Explore</div>
+        </div>
+        <div style={{textAlign:"center",padding:"0.5rem",background:approveCount>0?T.amber+"12":T.surfaceAlt,borderRadius:"0.6rem"}}>
+          <div style={{fontSize:"1.4rem",fontWeight:"700",color:approveCount>0?T.amber:T.textLight,fontFamily:"'Inter',sans-serif"}}>{approveCount}</div>
+          <div style={{fontSize:"0.6rem",color:approveCount>0?T.amber:T.textLight,fontFamily:"'Inter',sans-serif",marginTop:"1px"}}>Ready to approve</div>
+        </div>
+        <div style={{textAlign:"center",padding:"0.5rem",background:T.rose+"10",borderRadius:"0.6rem"}}>
+          <div style={{fontSize:"1.4rem",fontWeight:"700",color:T.rose,fontFamily:"'Inter',sans-serif"}}>{imgCount}</div>
+          <div style={{fontSize:"0.6rem",color:T.rose,fontFamily:"'Inter',sans-serif",marginTop:"1px"}}>Missing images</div>
+        </div>
+        <div style={{textAlign:"center",padding:"0.5rem",background:T.rose+"10",borderRadius:"0.6rem"}}>
+          <div style={{fontSize:"1.4rem",fontWeight:"700",color:T.rose,fontFamily:"'Inter',sans-serif"}}>{ingCount}</div>
+          <div style={{fontSize:"0.6rem",color:T.rose,fontFamily:"'Inter',sans-serif",marginTop:"1px"}}>Missing ingredients</div>
+        </div>
+      </div>
+
+      {/* Step 1 — Fix ingredients */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"1rem"}}>
+        <div style={{fontWeight:"600",color:T.text,fontSize:"0.88rem",fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>Step 1 — Fill missing ingredients</div>
+        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem"}}>Searches Open Beauty Facts automatically for {ingCount} products</div>
+        {obfRunning ? (
+          <div>
+            <div style={{fontSize:"0.75rem",color:T.accent,fontFamily:"'Inter',sans-serif",marginBottom:"0.5rem"}}>{obfStatus}</div>
+            <div style={{height:"4px",background:T.border,borderRadius:"2px",overflow:"hidden"}}>
+              <div style={{height:"100%",background:T.accent,borderRadius:"2px",width:`${products.filter(needsIng).length>0?(obfDone/products.filter(needsIng).length*100):100}%`,transition:"width 0.3s"}}/>
+            </div>
+            <button onClick={()=>{stopRef.current=true;}} style={{marginTop:"0.5rem",padding:"0.4rem 0.85rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"999px",cursor:"pointer",fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Stop</button>
+          </div>
+        ) : (
+          <div>
+            {obfStatus && <div style={{fontSize:"0.72rem",color:T.sage,fontFamily:"'Inter',sans-serif",marginBottom:"0.5rem"}}>{obfStatus}</div>}
+            <button onClick={runOBFSweep} disabled={ingCount===0}
+              style={{width:"100%",padding:"0.75rem",background:ingCount>0?T.navy:"#ccc",color:"#fff",border:"none",borderRadius:"0.75rem",cursor:ingCount>0?"pointer":"not-allowed",fontWeight:"600",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif"}}>
+              {ingCount>0 ? `Run OBF Sweep (${ingCount} missing)` : "✓ All ingredients filled"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Step 2 — Fix images */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"1rem"}}>
+        <div style={{fontWeight:"600",color:T.text,fontSize:"0.88rem",fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>Step 2 — Find missing images</div>
+        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem"}}>Claude searches Sephora & ULTA — you pick the best photo</div>
+        <button onClick={()=>setView("images")} disabled={imgCount===0}
+          style={{width:"100%",padding:"0.75rem",background:imgCount>0?T.navy:"#ccc",color:"#fff",border:"none",borderRadius:"0.75rem",cursor:imgCount>0?"pointer":"not-allowed",fontWeight:"600",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif"}}>
+          {imgCount>0 ? `Open Image Picker (${imgCount} missing)` : "✓ All images filled"}
+        </button>
+      </div>
+
+      {/* Step 3 — Approve */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"1rem"}}>
+        <div style={{fontWeight:"600",color:T.text,fontSize:"0.88rem",fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>Step 3 — Approve for Explore</div>
+        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem"}}>Products with both image + ingredients, waiting for your sign-off</div>
+        <button onClick={()=>setView("approve")} disabled={approveCount===0}
+          style={{width:"100%",padding:"0.75rem",background:approveCount>0?T.sage:"#ccc",color:"#fff",border:"none",borderRadius:"0.75rem",cursor:approveCount>0?"pointer":"not-allowed",fontWeight:"600",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif"}}>
+          {approveCount>0 ? `Review & Approve (${approveCount} ready)` : "✓ Nothing to approve"}
+        </button>
+      </div>
+
+      {/* Other tools */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
+        <button onClick={()=>setView("requests")}
+          style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.text}}>📬 Requests</div>
+          <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px"}}>User product requests</div>
+        </button>
+        <button onClick={()=>setView("reports")}
+          style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.text}}>⚠️ Reports</div>
+          <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px"}}>Ingredient corrections</div>
+        </button>
+      </div>
+
     </div>
   );
 }
@@ -10508,7 +10732,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
   if (section === "fill")    return <div><button onClick={()=>setSection(null)} style={{marginBottom:"0.75rem",background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back</button><AdminIngredientFiller/></div>;
   if (section === "review")  return <div><button onClick={()=>setSection(null)} style={{marginBottom:"0.75rem",background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back</button><AdminImageReview/></div>;
   if (section === "products") return <div><button onClick={()=>setSection(null)} style={{marginBottom:"0.75rem",background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back to Cleanup</button><AdminManageProducts afRunning={afRunning} afLog={afLog} afDone={afDone} afProducts={afProducts} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog} autoOpenTriage={true}/></div>;
-  if (section === "imagepicker") return <AdminImagePicker products={products} setProducts={setProducts} tryClaudeCandidates={tryClaudeCandidates} onBack={()=>setSection(null)}/>;
+  if (section === "imagepicker") return <AdminImagePicker products={products} setProducts={setProducts} onBack={()=>setSection(null)}/>;
 
 
   return (
@@ -11713,16 +11937,7 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
         ))}
       </div>
       {/* Row 2: sub-tabs that change based on active section */}
-      {activeTab==="products"&&(
-        <div style={{display:"flex",gap:"0.25rem",marginBottom:"0.9rem",padding:"0.2rem",background:T.surfaceAlt+"80",borderRadius:"0.5rem"}}>
-          {[["database","All Products"],["requests","Requests"],["reports","⚠ Ingredients"],["shop","Explore"],["cleanup","🧹 Clean Up"]].map(([id,lbl])=>(
-            <button key={id} onClick={()=>setActiveTab(id)}
-              style={{flex:1,padding:"0.38rem 0.2rem",background:activeTab===id?T.surface:"transparent",color:activeTab===id?T.accent:T.textMid,border:activeTab===id?`1px solid ${T.border}`:"1px solid transparent",borderRadius:"0.4rem",fontSize:"0.6rem",fontWeight:activeTab===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif",boxShadow:activeTab===id?"0 1px 3px rgba(0,0,0,0.06)":"none"}}>
-              {lbl}
-            </button>
-          ))}
-        </div>
-      )}
+
       {activeTab==="content"&&(
         <div style={{display:"flex",gap:"0.25rem",marginBottom:"0.9rem",padding:"0.2rem",background:T.surfaceAlt+"80",borderRadius:"0.5rem"}}>
           {[["schedule","📅 Schedule"],["picks","💛 Founder Picks"]].map(([id,lbl])=>(
@@ -11735,18 +11950,11 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
       )}
       {activeTab==="overview"&&<div style={{marginBottom:"0.9rem"}}/>}
 
-      {/* Products sub-tabs */}
-      {activeTab==="database"&&<AdminManageProducts afRunning={afRunning} afLog={afLog} afDone={afDone} afProducts={afProducts} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog}/>}
-      {activeTab==="shop"&&<AdminExploreTop100/>}
-      {activeTab==="cleanup"&&<AdminCleanup afRunning={afRunning} afLog={afLog} afDone={afDone} afProducts={afProducts} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog}/>}
+      {/* Products — single hub */}
+      {activeTab==="products"&&<AdminProductHub/>}
       {/* Content sub-tabs */}
       {activeTab==="schedule"&&<EditorialCalendar/>}
       {activeTab==="picks"&&<AdminFounderPicks/>}
-      {/* Requests — own tab */}
-      {activeTab==="requests"&&<AdminRequestsTab/>}
-
-      {/* Ingredient Reports tab */}
-      {activeTab==="reports"&&<AdminIngredientReports/>}
 
       {activeTab==="overview"&&(
         <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
