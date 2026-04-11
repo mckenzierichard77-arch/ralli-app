@@ -10241,7 +10241,7 @@ function FixAmazonUrls({ products, onFixed }) {
 
 
 async function tryClaudeCandidates(p) {
-  // Returns multiple candidate image URLs for manual selection
+  if (!ANTHROPIC_KEY) return [];
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -10253,20 +10253,33 @@ async function tryClaudeCandidates(p) {
       },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 600,
+        max_tokens: 800,
         tools: [{ type: "web_search_20250305", name: "web_search" }],
-        system: "Find direct product image URLs for a skincare product. Search Sephora, Ulta, and the brand official website. Return ONLY a JSON array of objects: [\"url\": \"https://...\", \"source\": \"Sephora\"}]. Include up to 4 results. Only direct image file URLs (.jpg .png .webp). No explanation.",
-        messages: [{ role: "user", content: `Find product images for: ${p.brand} ${p.productName}` }]
+        system: `You are finding product images for a skincare admin tool. Search for "${p.brand} ${p.productName}" on Sephora, Ulta, and the brand website. Find direct image URLs that end in .jpg, .png, or .webp. Return a JSON array like this: [{"url":"https://...","source":"Sephora"},{"url":"https://...","source":"Ulta"}]. Return up to 4 results. Return ONLY the JSON array, nothing else.`,
+        messages: [{ role: "user", content: `Find product image URLs for: ${p.brand} ${p.productName}` }]
       })
     });
     const data = await res.json();
-    if (data.error) return [];
+    if (data.error) { console.error("Claude error:", data.error); return []; }
+    // Extract all text content
     const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").replace(/```json|```/g,"").trim();
+    console.log("[ImagePicker] Claude response:", text.slice(0, 300));
+    // Try to parse JSON array
     const arrMatch = text.match(/\[[\s\S]*?\]/);
-    if (!arrMatch) return [];
-    const results = JSON.parse(arrMatch[0]);
-    return results.filter(r=>r.url&&r.url.startsWith("http"));
-  } catch { return []; }
+    if (arrMatch) {
+      try {
+        const results = JSON.parse(arrMatch[0]);
+        const valid = results.filter(r=>r&&r.url&&r.url.startsWith("http"));
+        if (valid.length) return valid;
+      } catch {}
+    }
+    // Fallback: extract all URLs from text
+    const urlMatches = [...text.matchAll(/https?:\/\/[^\s"'<>)]+\.(?:jpg|jpeg|png|webp|avif)/gi)];
+    if (urlMatches.length) {
+      return urlMatches.slice(0,4).map(m=>({url:m[0], source:"Web"}));
+    }
+    return [];
+  } catch(e) { console.error("[ImagePicker] Error:", e); return []; }
 }
 
 // ── AdminImagePicker ─────────────────────────────────────────
@@ -10562,12 +10575,7 @@ function AdminProductHub() {
   if (loading) return <div style={{textAlign:"center",padding:"3rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Loading…</div>;
 
   // ── Image Picker view ──
-  if (view === "images") return (
-    <div>
-      <button onClick={()=>setView("home")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
-      <AdminImagePicker products={products} setProducts={setProducts} onBack={()=>setView("home")}/>
-    </div>
-  );
+  if (view === "images") return <AdminImagePicker products={products} setProducts={setProducts} onBack={()=>setView("home")}/>;
 
   // ── Approve view ──
   if (view === "approve") {
