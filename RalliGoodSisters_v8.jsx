@@ -11715,7 +11715,7 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
       {/* Row 2: sub-tabs that change based on active section */}
       {activeTab==="products"&&(
         <div style={{display:"flex",gap:"0.25rem",marginBottom:"0.9rem",padding:"0.2rem",background:T.surfaceAlt+"80",borderRadius:"0.5rem"}}>
-          {[["database","All Products"],["requests","Requests"],["reports","⚠ Ingredients"],["shop","Explore"]].map(([id,lbl])=>(
+          {[["database","All Products"],["requests","Requests"],["reports","⚠ Ingredients"],["shop","Explore"],["cleanup","🧹 Clean Up"]].map(([id,lbl])=>(
             <button key={id} onClick={()=>setActiveTab(id)}
               style={{flex:1,padding:"0.38rem 0.2rem",background:activeTab===id?T.surface:"transparent",color:activeTab===id?T.accent:T.textMid,border:activeTab===id?`1px solid ${T.border}`:"1px solid transparent",borderRadius:"0.4rem",fontSize:"0.6rem",fontWeight:activeTab===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif",boxShadow:activeTab===id?"0 1px 3px rgba(0,0,0,0.06)":"none"}}>
               {lbl}
@@ -11738,6 +11738,7 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
       {/* Products sub-tabs */}
       {activeTab==="database"&&<AdminManageProducts afRunning={afRunning} afLog={afLog} afDone={afDone} afProducts={afProducts} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog}/>}
       {activeTab==="shop"&&<AdminExploreTop100/>}
+      {activeTab==="cleanup"&&<AdminCleanup afRunning={afRunning} afLog={afLog} afDone={afDone} afProducts={afProducts} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog}/>}
       {/* Content sub-tabs */}
       {activeTab==="schedule"&&<EditorialCalendar/>}
       {activeTab==="picks"&&<AdminFounderPicks/>}
