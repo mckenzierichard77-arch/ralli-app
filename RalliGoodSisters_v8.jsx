@@ -587,12 +587,12 @@ function ProductImg({ src, alt, style = {}, brand = "" }) {
 
 // ── Helpers ─────────────────────────────────────────────────── ───────────────────────────────────────────────────
 function poreStyle(score) {
-  if (score === 0) return {color:T.sage,  label:"Clear"};
-  if (score === 1) return {color:T.sage,  label:"Mild"};
-  if (score === 2) return {color:T.amber, label:"Low risk"};
-  if (score === 3) return {color:T.amber, label:"Medium risk"};
-  if (score === 4) return {color:T.rose,  label:"High risk"};
-  return               {color:T.rose,  label:"Avoid"};
+  if (score === 0) return {color:T.sage,  label:"Clear",   sub:"Won't clog pores"};
+  if (score === 1) return {color:T.sage,  label:"Minimal", sub:"Very low risk"};
+  if (score === 2) return {color:T.amber, label:"Low risk", sub:"May affect some skin"};
+  if (score === 3) return {color:T.amber, label:"Medium",   sub:"Likely to clog pores"};
+  if (score === 4) return {color:T.rose,  label:"High",     sub:"High clog risk"};
+  return               {color:T.rose,  label:"Avoid",   sub:"Clogs pores"};
 }
 
 // ── PoreScoreBadge ────────────────────────────────────────────
@@ -2954,12 +2954,12 @@ function AuthPage() {
         {mode==="signup"&&(
           <div style={{marginTop:"0.9rem",fontSize:"0.72rem",color:T.textLight,textAlign:"center",lineHeight:1.6}}>
             By creating an account, you agree to our{" "}
-            <a href="https://ralli.app/terms" target="_blank" rel="noopener noreferrer"
+            <a href="https://theralliapp.com/terms.html" target="_blank" rel="noopener noreferrer"
               style={{color:T.textMid,textDecoration:"underline",textDecorationColor:T.border,cursor:"pointer"}}>
               Terms of Service
             </a>
             {" "}and{" "}
-            <a href="https://ralli.app/privacy" target="_blank" rel="noopener noreferrer"
+            <a href="https://theralliapp.com/privacy.html" target="_blank" rel="noopener noreferrer"
               style={{color:T.textMid,textDecoration:"underline",textDecorationColor:T.border,cursor:"pointer"}}>
               Privacy Policy
             </a>
@@ -3214,9 +3214,8 @@ function SearchResultCard({p, onSelect}) {
   const fromCatalog = p.source === "catalog";
   const ingText = p.ingredients||"";
   const hasIng = ingText.trim().length > 0;
-  // Use our verified poreScore for catalog products; calculate for external sources
-  const pScore = fromCatalog && p.poreScore != null ? p.poreScore
-    : hasIng ? Math.round(analyzeIngredients(ingText).avgScore||0) : null;
+  // Always recalculate live from ingredients so score is always accurate
+  const pScore = hasIng ? Math.round(analyzeIngredients(ingText).avgScore||0) : (p.poreScore??null);
   const ps = pScore !== null ? poreStyle(pScore) : null;
   return (
     <button onClick={()=>onSelect(p)} style={{background:T.surface,border:`1.5px solid ${fromCatalog?T.sage+"66":T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",padding:0,overflow:"hidden",transition:"all 0.15s",display:"flex",flexDirection:"column",position:"relative"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=fromCatalog?T.sage+"66":T.border;}}>
@@ -6090,12 +6089,12 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
 
       {/* Legal links */}
       <div style={{marginTop:"1.25rem",display:"flex",gap:"1rem",justifyContent:"center",flexWrap:"wrap"}}>
-        <a href="https://ralli.app/privacy" target="_blank" rel="noopener noreferrer"
+        <a href="https://theralliapp.com/privacy.html" target="_blank" rel="noopener noreferrer"
           style={{fontSize:"0.72rem",color:T.textLight,textDecoration:"underline",textDecorationColor:T.border,fontFamily:"'Inter',sans-serif",cursor:"pointer"}}>
           Privacy Policy
         </a>
         <span style={{fontSize:"0.72rem",color:T.border}}>·</span>
-        <a href="https://ralli.app/terms" target="_blank" rel="noopener noreferrer"
+        <a href="https://theralliapp.com/terms.html" target="_blank" rel="noopener noreferrer"
           style={{fontSize:"0.72rem",color:T.textLight,textDecoration:"underline",textDecorationColor:T.border,fontFamily:"'Inter',sans-serif",cursor:"pointer"}}>
           Terms of Service
         </a>
@@ -6524,7 +6523,7 @@ function TrendingPage({user, profile, onProductTap}) {
       {!loading&&trending.length>0&&(
         <div style={{display:"flex",flexDirection:"column",gap:"0.6rem"}}>
           {trending.map((p,i)=>{
-            const ps = poreStyle(p.poreScore||0);
+            const livePs = (p.ingredients&&p.ingredients.trim().length>10) ? Math.round(analyzeIngredients(p.ingredients).avgScore||0) : (p.poreScore||0); const ps = poreStyle(livePs);
             return (
               <button key={p.id||i} onClick={()=>openProduct(p)}
                 style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"0.75rem",display:"flex",alignItems:"center",gap:"0.85rem",cursor:"pointer",textAlign:"left",transition:"all 0.15s",width:"100%"}}
@@ -6546,7 +6545,7 @@ function TrendingPage({user, profile, onProductTap}) {
                 </div>
                 {/* Pore badge */}
                 <div style={{padding:"0.25rem 0.5rem",background:ps.color+"18",borderRadius:"0.4rem",border:`1px solid ${ps.color}30`,flexShrink:0,textAlign:"center"}}>
-                  <div style={{fontSize:"0.65rem",fontWeight:"700",color:ps.color,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{p.poreScore||0}<span style={{fontSize:"0.5rem",opacity:0.7}}>/5</span></div>
+                  <div style={{fontSize:"0.65rem",fontWeight:"700",color:ps.color,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{livePs}<span style={{fontSize:"0.5rem",opacity:0.7}}>/5</span></div>
                   <div style={{fontSize:"0.48rem",color:ps.color,fontWeight:"600",opacity:0.8}}>{ps.label}</div>
                 </div>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
@@ -10001,7 +10000,7 @@ function AdminShopManager() {
       {/* Product list */}
       <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
         {filtered.map(p => {
-          const img = p.adminImage || p.image || "";
+          const img = p.adminImage || p.image || p.productImage || "";
           const hasImg = img.startsWith("http");
           const hasIng = (p.ingredients||"").trim().length > 5;
           const hasBuy = (p.buyUrl||"").startsWith("http");
