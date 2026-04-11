@@ -7335,8 +7335,7 @@ function ShopPage({user, profile, onUpdateProfile}) {
 
   // Only show products with a verified real image, buy link, and ingredients
   function hasRealImage(p) {
-    const img = (p.adminImage || p.image || "").trim();
-    return img.startsWith("http");
+    return hasValidImage(p);
   }
   const completeProducts = products.filter(p => {
     if (!p.approved) return false;
@@ -8124,10 +8123,12 @@ async function getShopProducts() {
       })
       .filter(p => {
         if (p.shopOverride) return true; // manual override always shows
-        const img = (p.adminImage||p.image||"").trim();
         const ing = (p.ingredients||"").trim();
         const buy = (p.buyUrl||"").trim();
-        return img.startsWith("http") && ing.length > 10 && buy.startsWith("http");
+        if (!hasValidImage(p)) return false;
+        if (ing.length <= 10) return false;
+        if (!buy.startsWith("http")) return false;
+        return true;
       });
 
     // Group by category, pick top 15 per category
