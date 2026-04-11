@@ -10391,10 +10391,99 @@ function AdminImagePicker({products, setProducts, onBack}) {
 
 // ── AdminProductHub ───────────────────────────────────────────
 // Simple, focused product management — stats → fix ingredients → fix images → approve
+
+// ── AdminProductEditInline ────────────────────────────────────
+function AdminProductEditInline({product, onSave, onBack}) {
+  const [name, setName] = React.useState(product.productName||"");
+  const [brand, setBrand] = React.useState(product.brand||"");
+  const [category, setCategory] = React.useState(product.category||"");
+  const [ingredients, setIngredients] = React.useState(product.ingredients||"");
+  const [imageUrl, setImageUrl] = React.useState(product.adminImage||product.image||"");
+  const [buyUrl, setBuyUrl] = React.useState(product.buyUrl||"");
+  const [approved, setApproved] = React.useState(!!product.approved);
+  const [saving, setSaving] = React.useState(false);
+
+  const liveScore = ingredients.trim().length > 10
+    ? (() => { try { const r = analyzeIngredients(ingredients); return r.avgScore!=null ? Math.round(r.avgScore) : null; } catch { return null; } })()
+    : null;
+  const ps = liveScore != null ? poreStyle(liveScore) : null;
+
+  const cats = ["face-wash","moisturizer","serum","spf","toner","eye","body","acne","exfoliant","mask","lip","hair","makeup","other"];
+
+  async function save() {
+    setSaving(true);
+    await onSave({
+      productName: name.trim(),
+      brand: brand.trim(),
+      category: category||"other",
+      ingredients: ingredients.trim(),
+      adminImage: imageUrl.trim(),
+      image: imageUrl.trim(),
+      buyUrl: buyUrl.trim(),
+      approved,
+      poreScore: liveScore ?? product.poreScore ?? 0,
+    });
+    setSaving(false);
+  }
+
+  const inp = {width:"100%",padding:"0.6rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.82rem",color:T.text,background:T.surface,outline:"none",fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem"};
+  const lbl = {fontSize:"0.62rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.07em",fontFamily:"'Inter',sans-serif",marginBottom:"0.3rem",display:"block"};
+
+  return (
+    <div style={{maxWidth:"480px",margin:"0 auto"}}>
+      <button onClick={onBack} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
+
+      {/* Image preview */}
+      {imageUrl && (
+        <div style={{width:"100%",height:"180px",background:T.surfaceAlt,borderRadius:"0.85rem",marginBottom:"0.75rem",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
+          <img src={imageUrl} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/>
+        </div>
+      )}
+
+      <label style={lbl}>Product name</label>
+      <input value={name} onChange={e=>setName(e.target.value)} style={inp}/>
+
+      <label style={lbl}>Brand</label>
+      <input value={brand} onChange={e=>setBrand(e.target.value)} style={inp}/>
+
+      <label style={lbl}>Category</label>
+      <select value={category} onChange={e=>setCategory(e.target.value)} style={{...inp,marginBottom:"0.75rem"}}>
+        {cats.map(c=><option key={c} value={c}>{c}</option>)}
+      </select>
+
+      <label style={lbl}>Image URL</label>
+      <input value={imageUrl} onChange={e=>setImageUrl(e.target.value)} placeholder="https://..." style={inp}/>
+
+      <label style={lbl}>Buy URL</label>
+      <input value={buyUrl} onChange={e=>setBuyUrl(e.target.value)} placeholder="https://..." style={inp}/>
+
+      <label style={lbl}>
+        Ingredients
+        {liveScore!=null && <span style={{marginLeft:"0.5rem",color:ps.color,fontWeight:"600"}}> · Pore score: {liveScore}/5 ({ps.label})</span>}
+      </label>
+      <textarea value={ingredients} onChange={e=>setIngredients(e.target.value)} rows={5}
+        placeholder="Water, Glycerin, Niacinamide…"
+        style={{...inp,resize:"vertical",lineHeight:1.6,marginBottom:"0.75rem"}}/>
+
+      <div style={{display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"1rem"}}>
+        <input type="checkbox" id="approved-cb" checked={approved} onChange={e=>setApproved(e.target.checked)} style={{width:16,height:16,cursor:"pointer"}}/>
+        <label htmlFor="approved-cb" style={{fontSize:"0.82rem",color:T.text,fontFamily:"'Inter',sans-serif",cursor:"pointer"}}>Approved — show in Explore</label>
+      </div>
+
+      <button onClick={save} disabled={saving}
+        style={{width:"100%",padding:"0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.75rem",cursor:"pointer",fontWeight:"600",fontSize:"0.9rem",fontFamily:"'Inter',sans-serif"}}>
+        {saving ? "Saving…" : "Save changes"}
+      </button>
+    </div>
+  );
+}
+
 function AdminProductHub() {
   const [products, setProducts] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
-  const [view, setView] = React.useState("home"); // home | ingredients | images | approve | requests | reports
+  const [view, setView] = React.useState("home"); // home | ingredients | images | approve | requests | reports | edit
+  const [editProduct, setEditProduct] = React.useState(null);
+  const [searchQ, setSearchQ] = React.useState("");
   const [obfRunning, setObfRunning] = React.useState(false);
   const [obfStatus, setObfStatus] = React.useState("");
   const [obfDone, setObfDone] = React.useState(0);
@@ -10511,6 +10600,18 @@ function AdminProductHub() {
     );
   }
 
+  // ── Edit view ──
+  if (view === "edit" && editProduct) {
+    return <AdminProductEditInline product={editProduct} onSave={async (updates) => {
+      try {
+        const clean = Object.fromEntries(Object.entries({...updates, updatedAt:serverTimestamp()}).filter(([,v])=>v!==undefined));
+        await updateDoc(doc(db,"products",editProduct.id), clean);
+        setProducts(ps => ps.map(p => p.id===editProduct.id ? {...p,...updates} : p));
+        setView("home");
+      } catch(e) { alert("Save failed: " + e.message); }
+    }} onBack={()=>setView("home")}/>;
+  }
+
   // ── Requests view ──
   if (view === "requests") return (
     <div>
@@ -10606,6 +10707,48 @@ function AdminProductHub() {
           <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.text}}>⚠️ Reports</div>
           <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px"}}>Ingredient corrections</div>
         </button>
+      </div>
+
+      {/* All products — searchable list */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",overflow:"hidden"}}>
+        <div style={{padding:"0.75rem 1rem",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:"0.5rem"}}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search all products…"
+            style={{flex:1,border:"none",outline:"none",fontSize:"0.82rem",color:T.text,background:"transparent",fontFamily:"'Inter',sans-serif"}}/>
+          {searchQ&&<button onClick={()=>setSearchQ("")} style={{background:"none",border:"none",cursor:"pointer",color:T.textLight,fontSize:"0.8rem"}}>✕</button>}
+        </div>
+        <div style={{maxHeight:"400px",overflowY:"auto"}}>
+          {products
+            .filter(p => searchQ.trim().length < 2 ? true : (p.productName+" "+p.brand).toLowerCase().includes(searchQ.toLowerCase()))
+            .sort((a,b) => (a.productName||"").localeCompare(b.productName||""))
+            .slice(0, searchQ.trim().length >= 2 ? 50 : 20)
+            .map(p => {
+              const img = p.adminImage||p.image||"";
+              const ready = hasImg(p) && hasIng(p);
+              return (
+                <div key={p.id} style={{display:"flex",alignItems:"center",gap:"0.65rem",padding:"0.6rem 1rem",borderBottom:`1px solid ${T.border}40`}}>
+                  <div style={{width:36,height:36,borderRadius:"0.45rem",overflow:"hidden",background:T.surfaceAlt,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    {img ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/> : <span style={{fontSize:"0.5rem",color:T.textLight}}>no img</span>}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
+                    <div style={{display:"flex",alignItems:"center",gap:"0.35rem",marginTop:"2px"}}>
+                      {p.approved ? <span style={{fontSize:"0.55rem",background:T.sage+"20",color:T.sage,padding:"1px 5px",borderRadius:"999px",fontWeight:"600"}}>✓ Live</span>
+                        : p.hidden ? <span style={{fontSize:"0.55rem",background:T.rose+"15",color:T.rose,padding:"1px 5px",borderRadius:"999px"}}>Hidden</span>
+                        : <span style={{fontSize:"0.55rem",background:T.amber+"20",color:T.amber,padding:"1px 5px",borderRadius:"999px"}}>Pending</span>}
+                      {!hasImg(p)&&<span style={{fontSize:"0.55rem",color:T.rose,fontFamily:"'Inter',sans-serif"}}>no img</span>}
+                      {!hasIng(p)&&<span style={{fontSize:"0.55rem",color:T.rose,fontFamily:"'Inter',sans-serif"}}>no ing</span>}
+                    </div>
+                  </div>
+                  <button onClick={()=>{setEditProduct(p);setView("edit");}}
+                    style={{padding:"0.3rem 0.75rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"999px",cursor:"pointer",fontSize:"0.7rem",color:T.textMid,fontFamily:"'Inter',sans-serif",flexShrink:0}}>
+                    Edit
+                  </button>
+                </div>
+              );
+          })}
+          {searchQ.trim().length < 2 && <div style={{padding:"0.6rem 1rem",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",textAlign:"center"}}>Search to find any product</div>}
+        </div>
       </div>
 
     </div>
