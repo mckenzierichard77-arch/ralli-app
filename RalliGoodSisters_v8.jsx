@@ -753,11 +753,16 @@ const _imgValidCache = {};
 function hasValidImage(p) {
   const url = ((p.adminImage || p.image) || "").trim();
   if (!url || !url.startsWith("http")) return false;
-  // Reject known bad patterns
+  // Reject known non-image URLs
   if (url.includes("media-amazon.com")) return false;
-  if (url.includes("amazon.com/s?k=")) return false; // search page not image
-  if (url.length < 20) return false;
-  return true; // trust the URL — onError handles actual failures
+  if (url.includes("amazon.com/s?k=")) return false;
+  if (url.includes("amazon.com/dp/")) return false;
+  // Allow known good image CDNs and domains
+  const goodDomains = ["sephora.com","ulta.com","openbeautyfacts.org","clearstem.com","cdn.shopify","images.ctfassets","cloudinary","imgix","akamaized","fastly","squarespace","wixstatic","theordinary.com","cerave.com","neutrogena.com","laroche-posay","skinstore.com","dermstore.com"];
+  if (goodDomains.some(d => url.includes(d))) return true;
+  // For other domains, require a proper image file extension
+  if (/\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(url)) return true;
+  return false;
 }
 // For admin display, use actual image load test
 function AdminImageStatus({ p }) {
