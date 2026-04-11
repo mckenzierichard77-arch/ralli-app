@@ -753,10 +753,11 @@ const _imgValidCache = {};
 function hasValidImage(p) {
   const url = ((p.adminImage || p.image) || "").trim();
   if (!url || !url.startsWith("http")) return false;
-  // Reject known non-image patterns
+  // Reject known bad patterns
   if (url.includes("media-amazon.com")) return false;
-  if (!/\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(url)) return false;
-  return true; // URL looks like a real image — display it and let onError handle failures
+  if (url.includes("amazon.com/s?k=")) return false; // search page not image
+  if (url.length < 20) return false;
+  return true; // trust the URL — onError handles actual failures
 }
 // For admin display, use actual image load test
 function AdminImageStatus({ p }) {
