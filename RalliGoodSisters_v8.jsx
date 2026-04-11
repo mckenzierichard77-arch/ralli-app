@@ -6732,10 +6732,11 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
     const r = analyzeIngredients(p.ingredients);
     return r.avgScore != null ? Math.round(r.avgScore) : 99;
   };
+  const hasImg = p => { const img = (p.adminImage||p.image||p.productImage||"").trim(); return img.startsWith("http"); };
   const skinMatched = skinType.length
-    ? (products||[]).filter(p => getLiveScore(p) <= 1 && p.skinTypes?.some(s => skinType.includes(s) || s === "All"))
+    ? (products||[]).filter(p => getLiveScore(p) <= 1 && hasImg(p) && p.skinTypes?.some(s => skinType.includes(s) || s === "All"))
     : [];
-  const recs = (skinMatched.length >= 4 ? skinMatched : [...(products||[])].filter(p => getLiveScore(p) <= 1))
+  const recs = (skinMatched.length >= 4 ? skinMatched : [...(products||[])].filter(p => getLiveScore(p) <= 1 && hasImg(p)))
     .sort((a,b) => (a.poreScore??99)-(b.poreScore??99) || (b.communityRating||0)-(a.communityRating||0))
     .slice(0, 10);
 
@@ -7365,7 +7366,7 @@ function ShopPage({user, profile, onUpdateProfile}) {
   const categories = CAT_ORDER
     .filter(c => grouped[c]?.length > 0)
     .map(c => {
-      const all = (grouped[c]||[]).sort((a,b)=>(a.poreScore??99)-(b.poreScore??99)||(b.scanCount||0)-(a.scanCount||0));
+      const all = (grouped[c]||[]).filter(p=>{ const img=(p.adminImage||p.image||p.productImage||"").trim(); return img.startsWith("http"); }).sort((a,b)=>(a.poreScore??99)-(b.poreScore??99)||(b.scanCount||0)-(a.scanCount||0));
       const isExpanded = expandedCats.has(c) || activeCat === c;
       return {
         id: c,
