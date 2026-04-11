@@ -8176,7 +8176,9 @@ async function getShopCandidates() {
 }
 
 async function saveProductField(productId, updates) {
-  await updateDoc(doc(db,"products",productId), {...updates, updatedAt:serverTimestamp()});
+  // Strip undefined values — Firestore rejects them
+  const clean = Object.fromEntries(Object.entries({...updates, updatedAt:serverTimestamp()}).filter(([,v]) => v !== undefined));
+  await updateDoc(doc(db,"products",productId), clean);
 }
 
 const SIX_MONTHS_MS = 1000 * 60 * 60 * 24 * 183;
@@ -8441,10 +8443,10 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 200,
+          max_tokens: 400,
           tools: [{ type: "web_search_20250305", name: "web_search" }],
-          system: "Find a direct product image URL for a skincare product. Search Sephora or Ulta. Return ONLY a JSON object: {\"url\": \"https://...(direct .jpg or .png image URL)\"} or {\"url\": null}. No explanation.",
-          messages: [{ role: "user", content: `Find product image URL for: ${p.brand} ${p.productName}` }]
+          system: "Find direct product image URLs for a skincare product from Sephora, Ulta, or the brand website. Return ONLY a JSON object with an array: {\"urls\": [\"https://...\", \"https://...\"]} — up to 4 direct image URLs (.jpg, .png, .webp). No explanation. No nulls in the array.",
+          messages: [{ role: "user", content: `Find product image URLs for: ${p.brand} ${p.productName}` }]
         })
       });
       const data = await res.json();
@@ -8453,11 +8455,42 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
       const match = text.match(/\{[\s\S]*?\}/);
       if (!match) return null;
       const result = JSON.parse(match[0]);
-      if (result.url && result.url.startsWith("http") && await validateImg(result.url)) {
-        return { img: result.url, buyUrl: "", source: "Claude" };
+      // Return first valid URL for auto-fix, but also expose all for manual picker
+      const urls = (result.urls||[result.url]).filter(u=>u&&u.startsWith("http"));
+      for (const url of urls) {
+        if (await validateImg(url)) return { img: url, urls, buyUrl: "", source: "Claude" };
       }
     } catch {}
     return null;
+  }
+
+  async function tryClaudeCandidates(p) {
+    // Returns multiple candidate image URLs for manual selection
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": ANTHROPIC_KEY,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true"
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 600,
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          system: "Find direct product image URLs for a skincare product. Search Sephora, Ulta, and the brand official website. Return ONLY a JSON array of objects: [{\"url\": \"https://...\", \"source\": \"Sephora\"}]. Include up to 4 results. Only direct image file URLs (.jpg .png .webp). No explanation.",
+          messages: [{ role: "user", content: `Find product images for: ${p.brand} ${p.productName}` }]
+        })
+      });
+      const data = await res.json();
+      if (data.error) return [];
+      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").replace(/```json|```/g,"").trim();
+      const arrMatch = text.match(/\[[\s\S]*?\]/);
+      if (!arrMatch) return [];
+      const results = JSON.parse(arrMatch[0]);
+      return results.filter(r=>r.url&&r.url.startsWith("http"));
+    } catch { return []; }
   }
 
   async function fixProduct(p) {
@@ -10235,6 +10268,126 @@ function FixAmazonUrls({ products, onFixed }) {
   );
 }
 
+
+// ── AdminImagePicker ─────────────────────────────────────────
+function AdminImagePicker({products, setProducts, tryClaudeCandidates, onBack}) {
+  const noImg = products.filter(p => !hasValidImage(p));
+  const [idx, setIdx] = React.useState(0);
+  const [candidates, setCandidates] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [saved, setSaved] = React.useState(false);
+  const [customUrl, setCustomUrl] = React.useState("");
+
+  const product = noImg[idx];
+
+  async function search() {
+    if (!product) return;
+    setLoading(true); setCandidates([]); setSaved(false); setCustomUrl("");
+    const results = await tryClaudeCandidates(product);
+    setCandidates(results);
+    setLoading(false);
+  }
+
+  async function pickImage(url) {
+    if (!product || !url) return;
+    await updateDoc(doc(db, "products", product.id), { adminImage: url, image: url, updatedAt: Date.now() });
+    setProducts(ps => ps.map(p => p.id === product.id ? {...p, adminImage: url, image: url} : p));
+    setSaved(true);
+    setTimeout(() => { setIdx(i => i+1); setSaved(false); setCandidates([]); }, 600);
+  }
+
+  async function saveCustom() {
+    if (!customUrl.trim().startsWith("http")) return;
+    await pickImage(customUrl.trim());
+  }
+
+  function skip() { setIdx(i => i+1); setCandidates([]); setSaved(false); setCustomUrl(""); }
+
+  if (!product) return (
+    <div style={{padding:"2rem",textAlign:"center"}}>
+      <div style={{fontSize:"2rem",marginBottom:"0.5rem"}}>✓</div>
+      <div style={{fontWeight:"600",color:T.text}}>All products have images!</div>
+      <button onClick={onBack} style={{marginTop:"1rem",padding:"0.5rem 1rem",background:T.accent,color:"#fff",border:"none",borderRadius:"0.5rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back</button>
+    </div>
+  );
+
+  return (
+    <div style={{maxWidth:"480px",margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"1rem"}}>
+        <button onClick={onBack} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back</button>
+        <span style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{idx+1} of {noImg.length} missing images</span>
+      </div>
+
+      {/* Product info */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",padding:"0.85rem 1rem",marginBottom:"0.85rem"}}>
+        <div style={{fontSize:"0.6rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",fontFamily:"'Inter',sans-serif"}}>{product.brand}</div>
+        <div style={{fontWeight:"600",color:T.text,fontSize:"0.95rem",fontFamily:"'Inter',sans-serif",marginTop:"2px"}}>{product.productName}</div>
+        <div style={{fontSize:"0.7rem",color:T.textLight,marginTop:"3px",fontFamily:"'Inter',sans-serif"}}>{product.category} · pore score {product.poreScore??0}/5</div>
+      </div>
+
+      {/* Search button */}
+      {!loading && candidates.length === 0 && !saved && (
+        <button onClick={search}
+          style={{width:"100%",padding:"0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.85rem",cursor:"pointer",fontWeight:"600",fontSize:"0.9rem",fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem"}}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          Find images with AI
+        </button>
+      )}
+
+      {loading && (
+        <div style={{textAlign:"center",padding:"1.5rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontSize:"0.85rem"}}>
+          <div style={{width:"20px",height:"20px",border:`2px solid ${T.border}`,borderTopColor:T.accent,borderRadius:"50%",animation:"spin 0.8s linear infinite",margin:"0 auto 0.5rem"}}/>
+          Searching Sephora, ULTA & brand sites…
+        </div>
+      )}
+
+      {saved && (
+        <div style={{textAlign:"center",padding:"1rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>✓ Saved! Moving to next…</div>
+      )}
+
+      {/* Candidate grid */}
+      {candidates.length > 0 && !saved && (
+        <div>
+          <div style={{fontSize:"0.65rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",fontFamily:"'Inter',sans-serif",marginBottom:"0.5rem"}}>Tap to select the best image</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.6rem",marginBottom:"0.75rem"}}>
+            {candidates.map((c,i) => (
+              <button key={i} onClick={()=>pickImage(c.url)}
+                style={{background:T.surface,border:`1.5px solid ${T.border}`,borderRadius:"0.75rem",overflow:"hidden",cursor:"pointer",padding:0,display:"flex",flexDirection:"column",textAlign:"left",transition:"border-color 0.15s"}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
+                <div style={{width:"100%",aspectRatio:"1/1",background:T.surfaceAlt,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
+                  <img src={c.url} alt="" style={{width:"90%",height:"90%",objectFit:"contain",mixBlendMode:"multiply"}} onError={e=>{e.target.style.display="none";}}/>
+                </div>
+                <div style={{padding:"0.4rem 0.6rem",fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",borderTop:`1px solid ${T.border}`}}>{c.source||"Web"}</div>
+              </button>
+            ))}
+          </div>
+          {candidates.length === 0 && <div style={{fontSize:"0.78rem",color:T.textLight,textAlign:"center",padding:"0.5rem",fontFamily:"'Inter',sans-serif"}}>No images found — try pasting a URL below</div>}
+        </div>
+      )}
+
+      {/* Manual URL paste */}
+      <div style={{marginBottom:"0.6rem"}}>
+        <div style={{fontSize:"0.65rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",fontFamily:"'Inter',sans-serif",marginBottom:"0.4rem"}}>Or paste an image URL</div>
+        <div style={{display:"flex",gap:"0.5rem"}}>
+          <input value={customUrl} onChange={e=>setCustomUrl(e.target.value)} placeholder="https://..."
+            style={{flex:1,padding:"0.6rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.82rem",color:T.text,background:T.surface,outline:"none",fontFamily:"'Inter',sans-serif"}}/>
+          <button onClick={saveCustom} disabled={!customUrl.trim().startsWith("http")}
+            style={{padding:"0.6rem 0.85rem",background:customUrl.trim().startsWith("http")?T.sage:"#ccc",color:"#fff",border:"none",borderRadius:"0.6rem",cursor:customUrl.trim().startsWith("http")?"pointer":"not-allowed",fontWeight:"600",fontFamily:"'Inter',sans-serif",fontSize:"0.8rem"}}>
+            Save
+          </button>
+        </div>
+      </div>
+
+      {/* Skip */}
+      <button onClick={skip}
+        style={{width:"100%",padding:"0.65rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",color:T.textLight,fontSize:"0.78rem",fontFamily:"'Inter',sans-serif"}}>
+        Skip this product →
+      </button>
+    </div>
+  );
+}
+
 function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog}) {
   const [products, setProducts] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
@@ -10313,6 +10466,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
         if (ing && ing.trim().length > 10) {
           let poreScore = p.poreScore;
           try { const a = analyzeIngredients(ing); if (a?.avgScore != null) poreScore = Math.round(a.avgScore); } catch {}
+          // OBF: ingredients only — never write image from OBF (quality is too low)
           await updateDoc(doc(db, "products", p.id), { ingredients: ing, poreScore, updatedAt: Date.now() });
           setProducts(ps => ps.map(x => x.id === p.id ? { ...x, ingredients: ing, poreScore } : x));
           ingAdded++;
@@ -10354,6 +10508,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
   if (section === "fill")    return <div><button onClick={()=>setSection(null)} style={{marginBottom:"0.75rem",background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back</button><AdminIngredientFiller/></div>;
   if (section === "review")  return <div><button onClick={()=>setSection(null)} style={{marginBottom:"0.75rem",background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back</button><AdminImageReview/></div>;
   if (section === "products") return <div><button onClick={()=>setSection(null)} style={{marginBottom:"0.75rem",background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back to Cleanup</button><AdminManageProducts afRunning={afRunning} afLog={afLog} afDone={afDone} afProducts={afProducts} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog} autoOpenTriage={true}/></div>;
+  if (section === "imagepicker") return <AdminImagePicker products={products} setProducts={setProducts} tryClaudeCandidates={tryClaudeCandidates} onBack={()=>setSection(null)}/>;
 
 
   return (
@@ -10411,15 +10566,20 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
 
       {/* ── Quick action buttons ── */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
-        <button onClick={()=>setSection("review")}
-          style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
-          <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text}}>🖼 Image Review</div>
-          <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"2px"}}>Check & replace images manually</div>
+        <button onClick={()=>setSection("imagepicker")}
+          style={{padding:"0.7rem",background:T.navy,border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>🔍 AI Image Picker</div>
+          <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.6)",marginTop:"2px"}}>Claude finds images, you pick</div>
         </button>
         <button onClick={()=>setSection("fill")}
           style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
           <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text}}>🧪 Fill Ingredients</div>
           <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"2px"}}>Paste ingredient lists</div>
+        </button>
+        <button onClick={()=>setSection("review")}
+          style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text}}>🖼 Image Review</div>
+          <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"2px"}}>Check & replace manually</div>
         </button>
       </div>
 
