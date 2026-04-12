@@ -10255,8 +10255,8 @@ async function tryClaudeCandidates(p) {
         model: "claude-haiku-4-5-20251001",
         max_tokens: 800,
         tools: [{ type: "web_search_20250305", name: "web_search" }],
-        system: `You are finding product images for a skincare admin tool. Search for "${p.brand} ${p.productName}" on Sephora, Ulta, and the brand website. Find direct image URLs that end in .jpg, .png, or .webp. Return a JSON array like this: [{"url":"https://...","source":"Sephora"},{"url":"https://...","source":"Ulta"}]. Return up to 4 results. Return ONLY the JSON array, nothing else.`,
-        messages: [{ role: "user", content: `Find product image URLs for: ${p.brand} ${p.productName}` }]
+        system: `You are a skincare product image finder. Search for the product on Sephora, Ulta, and the brand's official website. Find the actual product image URLs from those pages. Return ONLY a JSON array: [{"url":"https://...","source":"Sephora"}]. Up to 4 results. Any image URL is fine — CDN URLs, query string URLs, all accepted. No explanation, just the JSON array.`,
+        messages: [{ role: "user", content: `Find product images for: ${(p.brand||"").trim()} ${(p.productName||"").trim()}. Search Sephora and Ulta specifically.` }]
       })
     });
     const data = await res.json();
@@ -10273,11 +10273,16 @@ async function tryClaudeCandidates(p) {
         if (valid.length) return valid;
       } catch {}
     }
-    // Fallback: extract all URLs from text
-    const urlMatches = [...text.matchAll(/https?:\/\/[^\s"'<>)]+\.(?:jpg|jpeg|png|webp|avif)/gi)];
-    if (urlMatches.length) {
-      return urlMatches.slice(0,4).map(m=>({url:m[0], source:"Web"}));
-    }
+    // Fallback: extract any https image URLs from text
+    const strictMatches = [...text.matchAll(/https?:\/\/[^\s"'<>)]+\.(?:jpg|jpeg|png|webp|avif)[^\s"'<>)]*/gi)];
+    if (strictMatches.length) return strictMatches.slice(0,4).map(m=>({url:m[0], source:"Web"}));
+    // Even looser: any https URL containing image-like patterns
+    const looseMatches = [...text.matchAll(/https?:\/\/[^\s"'<>)]{20,}/g)];
+    const imgUrls = looseMatches.map(m=>m[0]).filter(u=>
+      u.includes("image") || u.includes("img") || u.includes("photo") || u.includes("media") ||
+      u.includes("cdn") || u.includes("sephora") || u.includes("ulta") || u.match(/\.(?:jpg|jpeg|png|webp)/)
+    );
+    if (imgUrls.length) return imgUrls.slice(0,4).map(u=>({url:u, source:"Web"}));
     return [];
   } catch(e) { console.error("[ImagePicker] Error:", e); return []; }
 }
