@@ -10290,14 +10290,22 @@ function AdminImagePicker({products, setProducts, onBack}) {
   const [loading, setLoading] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
   const [customUrl, setCustomUrl] = React.useState("");
+  const [searchStatus, setSearchStatus] = React.useState("");
 
   const product = noImg[idx];
 
   async function search() {
     if (!product) return;
-    setLoading(true); setCandidates([]); setSaved(false); setCustomUrl("");
-    const results = await tryClaudeCandidates(product);
-    setCandidates(results);
+    if (!ANTHROPIC_KEY) { setSearchStatus("No API key — check VITE_ANTHROPIC_KEY in Vercel"); return; }
+    setLoading(true); setCandidates([]); setSaved(false); setCustomUrl(""); setSearchStatus("Searching…");
+    try {
+      const results = await tryClaudeCandidates(product);
+      setCandidates(results);
+      if (!results.length) setSearchStatus("No images found — try pasting a URL below or skip");
+      else setSearchStatus("");
+    } catch(e) {
+      setSearchStatus("Error: " + e.message);
+    }
     setLoading(false);
   }
 
@@ -10351,6 +10359,11 @@ function AdminImagePicker({products, setProducts, onBack}) {
         <div style={{textAlign:"center",padding:"1.5rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontSize:"0.85rem"}}>
           <div style={{width:"20px",height:"20px",border:`2px solid ${T.border}`,borderTopColor:T.accent,borderRadius:"50%",animation:"spin 0.8s linear infinite",margin:"0 auto 0.5rem"}}/>
           Searching Sephora, ULTA & brand sites…
+        </div>
+      )}
+      {!loading && searchStatus && (
+        <div style={{padding:"0.75rem 1rem",background:candidates.length===0?T.rose+"12":T.sage+"12",border:`1px solid ${candidates.length===0?T.rose:T.sage}33`,borderRadius:"0.65rem",fontSize:"0.78rem",color:candidates.length===0?T.rose:T.sage,fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem"}}>
+          {searchStatus}
         </div>
       )}
 
