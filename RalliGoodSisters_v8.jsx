@@ -1,4 +1,4 @@
-\// v2.4 - compact feed cards, barcode scan icon, navy rank badges
+// v2.4 - compact feed cards, barcode scan icon, navy rank badges
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import ReactDOM from "react-dom";
 import { initializeApp } from "firebase/app";
@@ -10243,41 +10243,43 @@ function FixAmazonUrls({ products, onFixed }) {
 async function tryClaudeCandidates(p) {
   if (!ANTHROPIC_KEY) return [];
   try {
+    // Use proxy to avoid CORS issues
     const res = await fetch("/api/anthropic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 800,
+        max_tokens: 600,
         tools: [{ type: "web_search_20250305", name: "web_search" }],
-        system: `You are a skincare product image finder. Search for the product on Sephora, Ulta, and the brand's official website. Find the actual product image URLs from those pages. Return ONLY a JSON array: [{"url":"https://...","source":"Sephora"}]. Up to 4 results. Any image URL is fine — CDN URLs, query string URLs, all accepted. No explanation, just the JSON array.`,
-        messages: [{ role: "user", content: `Find product images for: ${(p.brand||"").trim()} ${(p.productName||"").trim()}. Search Sephora and Ulta specifically.` }]
+        system: "Find skincare product images. Search Sephora and Ulta for the product. Return ONLY a JSON object: {\"urls\": [\"https://...\", \"https://...\"]}. Include up to 4 direct image URLs ending in .jpg, .png, or .webp. No explanation.",
+        messages: [{ role: "user", content: `Find product image URLs for: ${(p.brand||"").trim()} ${(p.productName||"").trim()}` }]
       })
     });
     const data = await res.json();
     if (data.error) { console.error("Claude error:", data.error); return []; }
-    // Extract all text content
     const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").replace(/```json|```/g,"").trim();
-    console.log("[ImagePicker] Claude response:", text.slice(0, 300));
-    // Try to parse JSON array
+    console.log("[ImagePicker] Response:", text.slice(0,400));
+    // Try JSON object with urls array
+    const objMatch = text.match(/\{[\s\S]*?\}/);
+    if (objMatch) {
+      try {
+        const r = JSON.parse(objMatch[0]);
+        const urls = (r.urls||r.url?[r.url]:[]).filter(u=>u&&u.startsWith("http"));
+        if (urls.length) return urls.map(u=>({url:u,source:"Web"}));
+      } catch {}
+    }
+    // Try JSON array
     const arrMatch = text.match(/\[[\s\S]*?\]/);
     if (arrMatch) {
       try {
-        const results = JSON.parse(arrMatch[0]);
-        const valid = results.filter(r=>r&&r.url&&r.url.startsWith("http"));
+        const r = JSON.parse(arrMatch[0]);
+        const valid = r.filter(x=>x&&(x.url||x).startsWith("http")).map(x=>({url:x.url||x,source:x.source||"Web"}));
         if (valid.length) return valid;
       } catch {}
     }
-    // Fallback: extract any https image URLs from text
-    const strictMatches = [...text.matchAll(/https?:\/\/[^\s"'<>)]+\.(?:jpg|jpeg|png|webp|avif)[^\s"'<>)]*/gi)];
-    if (strictMatches.length) return strictMatches.slice(0,4).map(m=>({url:m[0], source:"Web"}));
-    // Even looser: any https URL containing image-like patterns
-    const looseMatches = [...text.matchAll(/https?:\/\/[^\s"'<>)]{20,}/g)];
-    const imgUrls = looseMatches.map(m=>m[0]).filter(u=>
-      u.includes("image") || u.includes("img") || u.includes("photo") || u.includes("media") ||
-      u.includes("cdn") || u.includes("sephora") || u.includes("ulta") || u.match(/\.(?:jpg|jpeg|png|webp)/)
-    );
-    if (imgUrls.length) return imgUrls.slice(0,4).map(u=>({url:u, source:"Web"}));
+    // Fallback: extract image URLs from raw text
+    const matches = [...text.matchAll(/https?:\/\/[^\s"'<>)]+\.(?:jpg|jpeg|png|webp|avif)[^\s"'<>)]*/gi)];
+    if (matches.length) return matches.slice(0,4).map(m=>({url:m[0],source:"Web"}));
     return [];
   } catch(e) { console.error("[ImagePicker] Error:", e); return []; }
 }
