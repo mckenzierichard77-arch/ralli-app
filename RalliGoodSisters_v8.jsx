@@ -1,4 +1,4 @@
-// v2.4 - compact feed cards, barcode scan icon, navy rank badges
+\// v2.4 - compact feed cards, barcode scan icon, navy rank badges
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import ReactDOM from "react-dom";
 import { initializeApp } from "firebase/app";
@@ -10243,14 +10243,9 @@ function FixAmazonUrls({ products, onFixed }) {
 async function tryClaudeCandidates(p) {
   if (!ANTHROPIC_KEY) return [];
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch("/api/anthropic", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 800,
