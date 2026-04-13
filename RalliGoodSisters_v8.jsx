@@ -3130,7 +3130,7 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
       <ProductModal
         product={selectedProduct}
         onClose={()=>setSelectedProduct(null)}
-        user={null}
+        user={{uid:currentUid, displayName:currentProfile?.displayName, photoURL:currentProfile?.photoURL}}
         profile={currentProfile}
         onUpdateProfile={onUpdateProfile}
         onUserTap={onUserTap}
@@ -13547,22 +13547,22 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
 // ── ProductPickerModal — lets user pick a product to share ────
 function ProductPickerModal({ user, onSelect, onClose }) {
   const [q, setQ] = useState("");
-  const [results, setResults] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [allProducts, setAllProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!q.trim()) { setResults([]); return; }
-    setLoading(true);
-    const lower = q.toLowerCase().trim();
-    getDocs(query(collection(db, "products"),
-      where("productName", ">=", q),
-      where("productName", "<=", q + "\uf8ff"),
-      limit(10)
-    )).then(snap => {
-      setResults(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  }, [q]);
+    // Load all approved products once then filter client-side — no index needed
+    getDocs(query(collection(db, "products"), where("approved", "==", true), limit(200)))
+      .then(snap => {
+        setAllProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setLoading(false);
+      }).catch(() => setLoading(false));
+  }, []);
+
+  const results = q.trim().length < 2 ? [] : allProducts.filter(p =>
+    (p.productName||"").toLowerCase().includes(q.toLowerCase()) ||
+    (p.brand||"").toLowerCase().includes(q.toLowerCase())
+  ).slice(0, 15);
 
   return (
     <div style={{ position:"fixed",top:0,left:0,right:0,bottom:0, zIndex:200, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"flex-end" }} onClick={onClose}>
@@ -13578,7 +13578,7 @@ function ProductPickerModal({ user, onSelect, onClose }) {
           {results.map((p, i) => {
             const ps = poreStyle(p.poreScore ?? 0);
             return (
-              <button key={p.id} onClick={() => onSelect(p)}
+              <button key={p.id} onClick={() => onSelect({...p, image: p.adminImage||p.image||""})}
                 style={{ width:"100%", display:"flex", alignItems:"center", gap:"0.65rem", padding:"0.7rem 0", background:"none", border:"none", borderTop: i > 0 ? `1px solid ${T.border}40` : "none", cursor:"pointer", textAlign:"left" }}>
                 <div style={{ width:"44px", height:"44px", flexShrink:0, borderRadius:"0.6rem", overflow:"hidden", background:T.surfaceAlt }}>
                   {p.image ? <img src={p.image} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"4px", mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)" }}/> : null}
@@ -13591,7 +13591,10 @@ function ProductPickerModal({ user, onSelect, onClose }) {
               </button>
             );
           })}
-          {!loading && q.trim() && results.length === 0 && (
+          {!loading && q.trim().length < 2 && (
+            <div style={{ textAlign:"center", color:T.textLight, padding:"1.5rem", fontSize:"0.78rem" }}>Type to search your products…</div>
+          )}
+          {!loading && q.trim().length >= 2 && results.length === 0 && (
             <div style={{ textAlign:"center", color:T.textLight, padding:"1.5rem", fontSize:"0.78rem" }}>No products found</div>
           )}
         </div>
