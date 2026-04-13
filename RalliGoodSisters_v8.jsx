@@ -24,13 +24,13 @@ const auth     = getAuth(firebaseApp);
 const db       = getFirestore(firebaseApp);
 const gProvider = new GoogleAuthProvider();
 
-// ── Product images now live in Firestore (adminImage field on each product doc) ──
+// -- Product images now live in Firestore (adminImage field on each product doc) --
 
-// ── Anthropic API key — used for photo ingredient scanning only ──
+// -- Anthropic API key — used for photo ingredient scanning only --
 // Set this in your environment / deployment config, never commit it
 const ANTHROPIC_KEY = import.meta.env?.VITE_ANTHROPIC_KEY || "";
 
-// ── Design tokens ─────────────────────────────────────────────
+// -- Design tokens ---------------------------------------------
 const T = {
   bg:        "#F8F9FB",   // Cloud White #F8F9FB
   surface:   "#FFFFFF",
@@ -110,11 +110,11 @@ const GS = `
   .ralli-btn-ghost:hover{border-color:#111827;}
 `;
 
-// ── Curated recs — loaded from Firestore (featured:true products) ──────────
+// -- Curated recs — loaded from Firestore (featured:true products) ----------
 // Data lives in Firestore. Run Admin → Products → "Migrate to Firestore" if needed.
 const CURATED_RECS_FALLBACK = [];
 
-// ── Fetch featured/curated products from Firestore ────────────
+// -- Fetch featured/curated products from Firestore ------------
 // Falls back to CURATED_RECS_FALLBACK if collection is empty.
 async function fetchCuratedRecs() {
   try {
@@ -131,17 +131,17 @@ async function fetchCuratedRecs() {
   return CURATED_RECS_FALLBACK;
 }
 
-// ── PRODUCT_IMG_MAP removed — images now live on product documents in Firestore ──
+// -- PRODUCT_IMG_MAP removed — images now live on product documents in Firestore --
 // The adminImage field on each product document is the source of truth.
 // Run Admin → Products → "Migrate to Firestore" to seed initial data.
 // Use Admin → Products → Auto-fix to fill in any missing images automatically.
 
-// ── Ingredient DB ─────────────────────────────────────────────
+// -- Ingredient DB ---------------------------------------------
 const INGDB = {
   // Schema: score = pore-clogging 0-5, irritant = true if known skin irritant
   // irritant covers: fragrance allergens, drying alcohols, harsh surfactants, essential oils, sensitizers
 
-  // ── Highly pore-clogging (4-5) ──────────────────────────────
+  // -- Highly pore-clogging (4-5) ------------------------------
   "coconut oil":                 {score:4, note:"Heavy oil that clogs pores easily",                aliases:["cocos nucifera oil","cocos nucifera (coconut) oil","cocos nucifera","cocos nucifera (coconut)","coconut"]},
   "wheat germ oil":              {score:5, note:"Very likely to cause breakouts",                   aliases:["triticum vulgare germ oil"]},
   "palm oil":                    {score:4, note:"Clogs pores and triggers breakouts",               aliases:["elaeis guineensis oil","palm kernel oil"]},
@@ -162,7 +162,7 @@ const INGDB = {
   "myristoyl sarcosine":         {score:4, note:"Pore-clogging conditioning agent",                 aliases:[]},
   "peg-16 macadamia glycerides": {score:3, note:"Moderate pore-clogging emollient",                aliases:[]},
 
-  // ── Moderate pore-clogging (3) ──────────────────────────────
+  // -- Moderate pore-clogging (3) ------------------------------
   "butyl stearate":              {score:3, note:"May clog pores in some people",                    aliases:[]},
   "myristic acid":               {score:3, note:"May clog pores in some people",                    aliases:[]},
   "corn oil":                    {score:3, note:"May clog pores in some people",                    aliases:["zea mays oil","zea mays (corn) oil"]},
@@ -181,7 +181,7 @@ const INGDB = {
   "apricot kernel oil":          {score:2, note:"Moderate chance of clogging pores",               aliases:["prunus armeniaca kernel oil"]},
   "borage oil":                  {score:2, note:"Moderate chance of clogging pores",               aliases:["borago officinalis seed oil"]},
 
-  // ── Low-moderate pore-clogging (2) — now flagged as moderate risk ─
+  // -- Low-moderate pore-clogging (2) — now flagged as moderate risk -
   "peach kernel oil":            {score:2, note:"Moderate risk — may clog pores for some",          aliases:["prunus persica kernel oil"]},
   "avocado oil":                 {score:2, note:"Moderate risk — may clog pores for some",          aliases:["persea gratissima oil","persea americana fruit oil"]},
   "olive oil":                   {score:2, note:"Moderate risk — high oleic acid content",          aliases:["olea europaea fruit oil","olea europaea (olive) fruit oil"]},
@@ -199,7 +199,7 @@ const INGDB = {
   "noni extract":                {score:2, note:"Moderate clogging risk extract",                   aliases:["morinda citrifolia fruit extract"]},
   "nylon-12":                    {score:1, note:"Low risk texture agent",                           aliases:[]},
 
-  // ── Irritants — fragrance & alcohols ─────────────────────────
+  // -- Irritants — fragrance & alcohols -------------------------
   "fragrance":                   {score:1, irritant:true, note:"Catch-all for undisclosed scent chemicals — one of the top skin sensitizers",        aliases:["parfum","fragrance mix","aroma"]},
   "parfum":                      {score:1, irritant:true, note:"Synthetic scent blend — common cause of contact dermatitis",                         aliases:["fragrance","perfume"]},
   "denatured alcohol":           {score:0, irritant:true, note:"Drying alcohol that strips the skin barrier and can cause irritation",               aliases:["alcohol denat","alcohol denat.","sd alcohol","sd alcohol 40","sd alcohol 40-b"]},
@@ -234,11 +234,11 @@ const INGDB = {
   "menthol":                     {score:0, irritant:true, note:"Cooling agent that can irritate and sensitize skin with repeated use",               aliases:[]},
   "phthalates":                  {score:0, irritant:true, note:"Plasticizers used in fragrance — potential endocrine disruptors",                    aliases:["dibutyl phthalate","dbp"]},
 
-  // ── Harsh surfactants ─────────────────────────────────────────
+  // -- Harsh surfactants -----------------------------------------
   "ammonium lauryl sulfate":     {score:0, irritant:true, note:"Harsh surfactant — strips skin barrier similar to SLS",                             aliases:["ALS"]},
   "sodium laureth sulfate":      {score:0, irritant:true, note:"Milder than SLS but still potentially irritating with daily use",                   aliases:["SLES","sodium lauryl ether sulfate"]},
 
-  // ── Silicones ─────────────────────────────────────────────────
+  // -- Silicones -------------------------------------------------
   "dimethicone":                 {score:1, note:"Silicone that gives smooth feel — low clogging risk",                aliases:["polydimethylsiloxane","dimethicone crosspolymer"]},
   "cyclomethicone":              {score:1, note:"Lightweight silicone — low clogging risk",                          aliases:["cyclopentasiloxane"]},
   "cyclopentasiloxane":          {score:1, note:"Lightweight volatile silicone",                                     aliases:["D5","cyclopentasiloxane"]},
@@ -247,7 +247,7 @@ const INGDB = {
   "amodimethicone":              {score:0, note:"Light conditioning silicone — non-clogging",                        aliases:[]},
   "trimethylsiloxysilicate":     {score:1, note:"Film-forming silicone — low risk",                                  aliases:[]},
 
-  // ── Safe emollients & waxes ───────────────────────────────────
+  // -- Safe emollients & waxes -----------------------------------
   "petrolatum":                  {score:0, note:"Non-clogging occlusive that seals in moisture",                     aliases:["petroleum jelly","vaseline","white petrolatum"]},
   "mineral oil":                 {score:0, note:"Non-clogging occlusive moisturiser",                                aliases:["paraffinum liquidum","white mineral oil"]},
   "castor oil":                  {score:1, note:"Low clogging risk — thickening and conditioning",                   aliases:["ricinus communis seed oil"]},
@@ -266,7 +266,7 @@ const INGDB = {
   "linoleic acid":               {score:0, note:"Non-clogging fatty acid — actually helps acne-prone skin",          aliases:[]},
   "squalene":                    {score:1, note:"Natural skin lipid — low clogging risk",                            aliases:[]},
 
-  // ── Humectants ────────────────────────────────────────────────
+  // -- Humectants ------------------------------------------------
   "glycerin":                    {score:0, note:"Draws water into skin — essential moisturising ingredient",          aliases:["glycerol","vegetable glycerin"]},
   "hyaluronic acid":             {score:0, note:"Holds 1000x its weight in water — deeply hydrating",               aliases:["sodium hyaluronate","hyaluronate"]},
   "sodium hyaluronate":          {score:0, note:"Smaller HA molecule — penetrates deeper",                          aliases:["hyaluronic acid"]},
@@ -282,7 +282,7 @@ const INGDB = {
   "erythritol":                  {score:0, note:"Sugar humectant — skin-compatible",                                aliases:[]},
   "xylitol":                     {score:0, note:"Sugar humectant with antimicrobial benefits",                      aliases:[]},
 
-  // ── Actives ───────────────────────────────────────────────────
+  // -- Actives ---------------------------------------------------
   "retinol":                     {score:0, note:"Speeds up cell turnover — reduces lines and breakouts",             aliases:["vitamin a","retinyl palmitate","retinyl acetate"]},
   "retinal":                     {score:0, note:"11x stronger than retinol — non-clogging",                         aliases:["retinaldehyde"]},
   "tretinoin":                   {score:0, note:"Prescription retinoid — highly effective",                         aliases:["retinoic acid","all-trans retinoic acid"]},
@@ -305,7 +305,7 @@ const INGDB = {
   "sulfur":                      {score:0, note:"Anti-acne and antimicrobial — spot treatment staple",              aliases:[]},
   "mandelic acid":               {score:0, note:"Gentle AHA — great for sensitive and acne-prone skin",             aliases:[]},
 
-  // ── Exfoliants ────────────────────────────────────────────────
+  // -- Exfoliants ------------------------------------------------
   "lactic acid":                 {score:0, note:"Gentle AHA — hydrating and exfoliating",                           aliases:["sodium lactate"]},
   "glycolic acid":               {score:0, note:"Strong AHA — effective but can be sensitising",                    aliases:[]},
   "malic acid":                  {score:0, note:"Mild AHA from fruit",                                             aliases:[]},
@@ -314,7 +314,7 @@ const INGDB = {
   "polyhydroxy acid":            {score:0, note:"Gentle next-gen AHA — won't irritate sensitive skin",              aliases:["PHA","gluconolactone","lactobionic acid"]},
   "gluconolactone":              {score:0, note:"Gentle PHA — also an antioxidant",                                 aliases:["PHA"]},
 
-  // ── Barrier & Repair ──────────────────────────────────────────
+  // -- Barrier & Repair ------------------------------------------
   "ceramide":                    {score:0, note:"Essential lipid that rebuilds the skin barrier",                   aliases:["ceramide np","ceramide ap","ceramide eg","ceramide eop","ceramide ns","ceramide as"]},
   "ceramide np":                 {score:0, note:"Key barrier ceramide",                                             aliases:[]},
   "ceramide ap":                 {score:0, note:"Key barrier ceramide",                                             aliases:[]},
@@ -334,7 +334,7 @@ const INGDB = {
   "sodium pca":                  {score:0, note:"Natural moisturising factor",                                      aliases:[]},
   "dexpanthenol":                {score:0, note:"Pro-vitamin B5 — barrier repair",                                  aliases:[]},
 
-  // ── Peptides ──────────────────────────────────────────────────
+  // -- Peptides --------------------------------------------------
   "palmitoyl pentapeptide-4":    {score:0, note:"Anti-aging peptide (Matrixyl) — boosts collagen",                  aliases:["matrixyl"]},
   "palmitoyl tripeptide-1":      {score:0, note:"Collagen-boosting peptide",                                        aliases:[]},
   "palmitoyl tripeptide-38":     {score:0, note:"Anti-aging peptide — targets deep wrinkles",                       aliases:["matrixyl synthe'6"]},
@@ -345,7 +345,7 @@ const INGDB = {
   "tripeptide-1":                {score:0, note:"Wound healing and firming peptide",                                aliases:[]},
   "tetrapeptide-21":             {score:0, note:"Collagen-stimulating peptide",                                     aliases:[]},
 
-  // ── Sunscreen Filters ─────────────────────────────────────────
+  // -- Sunscreen Filters -----------------------------------------
   "zinc oxide":                  {score:0, note:"Mineral SPF — broad spectrum, non-clogging",                       aliases:[]},
   "titanium dioxide":            {score:0, note:"Mineral SPF — gentle, no chemical reaction on skin",               aliases:[]},
   "octinoxate":                  {score:0, note:"Chemical UVB filter",                                              aliases:["ethylhexyl methoxycinnamate","octyl methoxycinnamate"]},
@@ -359,7 +359,7 @@ const INGDB = {
   "homosalate":                  {score:0, note:"Chemical UVB filter",                                              aliases:[]},
   "iscotrizinol":                {score:0, note:"Broad-spectrum EU filter",                                         aliases:["DHHB","diethylhexyl butamido triazone"]},
 
-  // ── Botanicals & Extracts ─────────────────────────────────────
+  // -- Botanicals & Extracts -------------------------------------
   "green tea extract":           {score:0, note:"Potent antioxidant and anti-inflammatory",                         aliases:["camellia sinensis leaf extract","epigallocatechin gallate","EGCG"]},
   "chamomile extract":           {score:0, note:"Soothing and anti-inflammatory",                                   aliases:["matricaria recutita flower extract","anthemis nobilis flower extract"]},
   "licorice root extract":       {score:0, note:"Brightening and anti-inflammatory",                                aliases:["glycyrrhiza glabra root extract","glycyrrhizin"]},
@@ -375,7 +375,7 @@ const INGDB = {
   "witch hazel":                 {score:0, irritant:true, note:"Astringent — can disrupt barrier with prolonged use",aliases:["hamamelis virginiana leaf extract","hamamelis virginiana water"]},
   "sodium lauryl sulfate":       {score:0, irritant:true, note:"Strong detergent — strips skin barrier",           aliases:["SLS"]},
 
-  // ── Clays & Minerals ──────────────────────────────────────────
+  // -- Clays & Minerals ------------------------------------------
   "kaolin":                      {score:0, note:"Gentle clay — absorbs oil without clogging",                       aliases:["kaolin clay","china clay"]},
   "bentonite":                   {score:0, note:"Oil-absorbing purifying clay",                                     aliases:["bentonite clay"]},
   "montmorillonite":             {score:0, note:"Purifying clay",                                                   aliases:[]},
@@ -384,7 +384,7 @@ const INGDB = {
   "mica":                        {score:0, note:"Shimmer mineral — non-clogging",                                   aliases:[]},
   "silica":                      {score:0, note:"Mattifying and oil absorbing",                                     aliases:["amorphous silica"]},
 
-  // ── Preservatives ─────────────────────────────────────────────
+  // -- Preservatives ---------------------------------------------
   "phenoxyethanol":              {score:0, note:"Common broad-spectrum preservative",                               aliases:[]},
   "ethylhexylglycerin":          {score:0, note:"Gentle preservative booster",                                     aliases:[]},
   "sodium benzoate":             {score:0, note:"Preservative — safe in normal concentrations",                     aliases:[]},
@@ -400,11 +400,11 @@ const INGDB = {
   "imidazolidinyl urea":         {score:0, irritant:true, note:"Formaldehyde-releasing preservative",               aliases:[]},
   "quaternium-15":               {score:0, irritant:true, note:"Formaldehyde-releasing preservative — high sensitization rate",aliases:[]},
 
-  // ── pH adjusters ─────────────────────────────────────────────
+  // -- pH adjusters ---------------------------------------------
   "sodium hydroxide":            {score:0, note:"pH balancer — makes the formula work on your skin",               aliases:["lye","caustic soda"]},
   "potassium hydroxide":         {score:0, note:"pH balancer",                                                      aliases:[]},
 
-  // ── Thickeners & Texture ──────────────────────────────────────
+  // -- Thickeners & Texture --------------------------------------
   "xanthan gum":                 {score:0, note:"Natural thickener — makes formula spreadable",                    aliases:[]},
   "carbomer":                    {score:0, note:"Gel former — non-clogging",                                        aliases:["carbopol","acrylates/c10-30 alkyl acrylate crosspolymer"]},
   "hydroxyethylcellulose":       {score:0, note:"Plant-derived thickener",                                          aliases:["HEC"]},
@@ -414,7 +414,7 @@ const INGDB = {
   "polyacrylate crosspolymer":   {score:0, note:"Gel thickener — non-clogging",                                    aliases:["polyacrylate crosspolymer-6"]},
   "polyethylene":                {score:1, note:"Low risk texture agent",                                           aliases:[]},
 
-  // ── Emulsifiers ───────────────────────────────────────────────
+  // -- Emulsifiers -----------------------------------------------
   "polysorbate 20":              {score:0, note:"Gentle emulsifier — keeps oil and water mixed",                    aliases:[]},
   "polysorbate 80":              {score:0, note:"Gentle emulsifier",                                                aliases:[]},
   "lecithin":                    {score:0, note:"Natural emulsifier — skin-identical",                              aliases:["soy lecithin","sunflower lecithin","phosphatidylcholine"]},
@@ -426,7 +426,7 @@ const INGDB = {
   "behentrimonium methosulfate": {score:0, note:"Gentle conditioning emulsifier",                                   aliases:["BTMS","BTMS-50"]},
   "glyceryl stearate":           {score:1, note:"Common emulsifier — low clogging risk",                           aliases:[]},
 
-  // ── Additional high-clogging esters & oils (4-5) ─────────────
+  // -- Additional high-clogging esters & oils (4-5) -------------
   "lauryl alcohol":              {score:4, note:"Fatty alcohol derived from coconut — clogs pores",                aliases:[]},
   "myristyl alcohol":            {score:2, note:"Fatty alcohol — moderate to high clogging risk",                  aliases:[]},
   "octyl stearate":              {score:4, note:"Heavy ester — high pore-clogging risk",                           aliases:["ethylhexyl stearate"]},
@@ -463,7 +463,7 @@ const INGDB = {
   "hexadecyl alcohol":           {score:3, note:"Another name for cetyl alcohol — moderate pore risk",             aliases:[]},
   "undecylenoyl glycine":        {score:0, note:"Antimicrobial — non-clogging",                                    aliases:[]},
 
-  // ── More moderate comedogenic ingredients (2-3) ──────────────
+  // -- More moderate comedogenic ingredients (2-3) --------------
   "rose hip seed oil":           {score:1, note:"Low clogging — high linoleic acid",                               aliases:["rosa canina seed oil","rosa moschata seed oil"]},
   "macadamia oil":               {score:2, note:"Moderate risk — high oleic acid content",                         aliases:["macadamia integrifolia seed oil","macadamia ternifolia seed oil"]},
   "neem oil":                    {score:2, note:"Moderate pore-clogging risk",                                     aliases:["azadirachta indica seed oil"]},
@@ -486,7 +486,7 @@ const INGDB = {
   "hemp oil":                    {score:0, note:"Non-clogging — very high linoleic acid",                          aliases:["cannabis sativa seed oil","hemp seed oil"]},
   "vitamin f":                   {score:0, note:"Essential fatty acids — linoleic and alpha-linolenic acid",       aliases:["linoleic acid","alpha-linolenic acid"]},
 
-  // ── Waxes ─────────────────────────────────────────────────────
+  // -- Waxes -----------------------------------------------------
   "paraffin wax":                {score:1, note:"Mineral wax — low to moderate clogging risk",                     aliases:["paraffin","cera microcristallina","microcrystalline wax"]},
   "microcrystalline wax":        {score:2, note:"Moderate pore-clogging mineral wax",                              aliases:["cera microcristallina"]},
   "ozokerite":                   {score:2, note:"Mineral wax — moderate clogging risk",                            aliases:["ozokerite wax","ceresin"]},
@@ -496,7 +496,7 @@ const INGDB = {
   "spermaceti":                  {score:3, note:"Whale-derived wax — moderate to high clogging",                   aliases:[]},
   "synthetic wax":               {score:2, note:"Moderate clogging risk",                                          aliases:[]},
 
-  // ── Makeup-specific ingredients ───────────────────────────────
+  // -- Makeup-specific ingredients -------------------------------
   "bismuth oxychloride":         {score:2, irritant:true, note:"Shimmery mineral in makeup — can cause itching and pore congestion", aliases:[]},
   "talc":                        {score:1, note:"Mineral powder — low clogging but can block pores if heavy",      aliases:[]},
   "zinc stearate":               {score:2, note:"Found in makeup — moderate pore-clogging risk",                   aliases:[]},
@@ -505,7 +505,7 @@ const INGDB = {
   "red 40":                      {score:0, note:"Synthetic dye — non-clogging",                                    aliases:["allura red","fd&c red 40"]},
   "fd&c yellow":                 {score:0, note:"Synthetic dye — non-clogging",                                    aliases:["fd&c yellow 5","fd&c yellow 6"]},
 
-  // ── More irritants & sensitizers ─────────────────────────────
+  // -- More irritants & sensitizers -----------------------------
   "methylisothiazolinone":       {score:0, irritant:true, note:"Preservative — extremely high allergen rate, now restricted in EU leave-on products", aliases:["MIT","methylisothiazolinone"]},
   "methylchloroisothiazolinone": {score:0, irritant:true, note:"Preservative — one of the most sensitizing ingredients, banned in EU leave-ons",     aliases:["CMIT","MCI/MI"]},
   "iodopropynyl butylcarbamate": {score:0, irritant:true, note:"Preservative — skin sensitizer, restricted in products for children",                aliases:["IPBC"]},
@@ -536,7 +536,7 @@ const INGDB = {
   "toluene":                     {score:0, irritant:true, note:"Solvent found in some nail products — toxic and irritating",                          aliases:[]},
   "formaldehyde releasers":      {score:0, irritant:true, note:"Preservatives that slowly release formaldehyde — sensitizers",                       aliases:["dmdm hydantoin","imidazolidinyl urea","diazolidinyl urea"]},
 
-  // ── Score corrections — raising previously lenient entries ───
+  // -- Score corrections — raising previously lenient entries ---
   "cetyl alcohol":               {score:2, note:"Common emollient — moderately pore-clogging, especially for acne-prone skin", aliases:[]},
   "cetearyl alcohol":            {score:2, note:"Blend of cetyl/stearyl alcohol — moderately pore-clogging",                  aliases:[]},
   "stearyl alcohol":             {score:2, note:"Fatty alcohol — may clog pores for some",                                    aliases:[]},
@@ -549,7 +549,7 @@ const INGDB = {
   "triethanolamine":             {score:2, note:"pH adjuster — moderate clogging risk, also a potential irritant",            aliases:["TEA","trolamine"]},
 };
 
-// ── ProductImg — image with graceful branded fallback ─────────
+// -- ProductImg — image with graceful branded fallback ---------
 function ProductImg({ src, alt, style = {}, brand = "" }) {
   const [errored, setErrored] = React.useState(false);
   const initials = (brand || alt || "?").slice(0, 2).toUpperCase();
@@ -585,7 +585,7 @@ function ProductImg({ src, alt, style = {}, brand = "" }) {
   );
 }
 
-// ── Helpers ─────────────────────────────────────────────────── ───────────────────────────────────────────────────
+// -- Helpers --------------------------------------------------- ---------------------------------------------------
 function poreStyle(score) {
   if (score === 0) return {color:T.sage,  label:"Clear",   sub:"Won't clog pores"};
   if (score === 1) return {color:T.sage,  label:"Minimal", sub:"Very low risk"};
@@ -595,7 +595,7 @@ function poreStyle(score) {
   return               {color:T.rose,  label:"Avoid",   sub:"Clogs pores"};
 }
 
-// ── PoreScoreBadge ────────────────────────────────────────────
+// -- PoreScoreBadge --------------------------------------------
 // Animated score badge — counts up from 0 to the real score on mount.
 // size: "sm" (feed cards) | "md" (default) | "lg" (product modal hero)
 function PoreScoreBadge({ score, size="md", instant=false }) {
@@ -665,7 +665,7 @@ function PoreScoreBadge({ score, size="md", instant=false }) {
 }
 
 
-// ── FeedSkeleton ──────────────────────────────────────────────
+// -- FeedSkeleton ----------------------------------------------
 function FeedSkeleton() {
   return (
     <div style={{padding:"0 1rem"}}>
@@ -744,9 +744,9 @@ function communityColor(r) {
   return T.rose;
 }
 
-// ── Image URL validator — must point to a real image host, not just any URL ──
+// -- Image URL validator — must point to a real image host, not just any URL --
 // Rejects placeholders, camera emojis, and non-image URLs.
-// ── Image validation ──────────────────────────────────────────
+// -- Image validation ------------------------------------------
 // Tests if an image URL actually loads rather than checking URL format.
 // Uses a cache to avoid re-testing the same URL repeatedly.
 const _imgValidCache = {};
@@ -787,8 +787,8 @@ function AdminImageStatus({ p }) {
 }
 // ASINs now live in Firestore (asin field). If the product doc has a buyUrl
 // or asin already set, those take priority. Falls back to Amazon search.
-// ── Amazon affiliate tag — replace YOUR_TAG with your actual Associates tag ──
-const AMAZON_AFFILIATE_TAG = ""; // e.g. "ralliapp-20"
+// -- Amazon affiliate tag — replace YOUR_TAG with your actual Associates tag --
+const AMAZON_AFFILIATE_TAG = "ralliapp-20"; // e.g. "ralliapp-20"
 
 function amazonUrl(productName, brand, barcode, asin, existingBuyUrl) {
   const tag = AMAZON_AFFILIATE_TAG ? `&tag=${AMAZON_AFFILIATE_TAG}` : "";
@@ -874,8 +874,8 @@ function timeAgo(ts) {
   return `${Math.floor(h/24)}d ago`;
 }
 
-// ── Firebase helpers ──────────────────────────────────────────
-// ── Firestore image cache — saves found images for all users forever ──
+// -- Firebase helpers ------------------------------------------
+// -- Firestore image cache — saves found images for all users forever --
 async function getCachedImage(key) {
   try {
     const snap = await getDoc(doc(db, "productImages", key));
@@ -889,7 +889,7 @@ function imgCacheKey(brand, name) {
   return `${(brand||"").toLowerCase().replace(/\s+/g,"_")}|${(name||"").toLowerCase().replace(/\s+/g,"_")}`.slice(0,200);
 }
 
-// ── Multi-source product image resolver ──────────────────────
+// -- Multi-source product image resolver ----------------------
 // Tries: Firestore cache → Sephora API → Ulta API → OBF → null
 async function resolveProductImage(brand, name, barcode) {
   const key = imgCacheKey(brand, name);
@@ -950,7 +950,7 @@ async function getProductCache() {
   return _productCache;
 }
 
-// ── Track outbound buy clicks ──────────────────────────────────
+// -- Track outbound buy clicks ----------------------------------
 async function trackProductClick(productId, productName) {
   if (!productId && !productName) return;
   try {
@@ -972,7 +972,7 @@ async function trackProductClick(productId, productName) {
   } catch {}
 }
 
-// ── Live product search: Firestore cache first, then OBF ──────
+// -- Live product search: Firestore cache first, then OBF ------
 async function searchProducts(searchTerm) {
   const q = searchTerm.toLowerCase().trim();
   if (!q) return [];
@@ -1107,7 +1107,7 @@ async function searchProductsExternal(searchTerm, existingKeys=new Set()) {
   return [];
 }
 
-// ── Account deletion ─────────────────────────────────────────
+// -- Account deletion -----------------------------------------
 async function deleteUserAccount(user) {
   const uid = user.uid;
   try {
@@ -1140,7 +1140,7 @@ async function deleteUserAccount(user) {
   }
 }
 
-// ── Notification helpers ──────────────────────────────────────
+// -- Notification helpers --------------------------------------
 async function addNotification(toUid, fromUid, fromName, fromPhoto, type, payload={}) {
   try {
     await addDoc(collection(db,"notifications"), {
@@ -1210,7 +1210,7 @@ async function getOrCreateProfile(user) {
   }
 }
 
-// ── Product catalog (single source of truth) ─────────────────
+// -- Product catalog (single source of truth) -----------------
 // Each product lives at products/{barcode} or products/{generated-id}
 // Scans reference productId. No more string matching.
 
@@ -1375,7 +1375,7 @@ async function getUserPosts(uid) {
   } catch { return []; }
 }
 
-// ── Barcode lookup — tries multiple sources ───────────────────
+// -- Barcode lookup — tries multiple sources -------------------
 async function lookupBarcode(barcode) {
   // Source 1: Open Beauty Facts
   try {
@@ -1447,7 +1447,7 @@ async function extractFromPhoto(b64, mime, mode="auto") {
   return text;
 }
 
-// ── BarcodeScanner ────────────────────────────────────────────
+// -- BarcodeScanner --------------------------------------------
 function BarcodeScanner({onDetected, onError}) {
   const videoRef = useRef(null);
   const [status, setStatus] = useState("loading");
@@ -1492,7 +1492,7 @@ function BarcodeScanner({onDetected, onError}) {
   );
 }
 
-// ── PlaceholderCard — styled fallback when no image ─────────
+// -- PlaceholderCard — styled fallback when no image ---------
 function PlaceholderCard({name, brand}) {
   const words = ((brand||name||"?").trim()).split(" ").filter(Boolean);
   const initials = words.length >= 2
@@ -1515,7 +1515,7 @@ function PlaceholderCard({name, brand}) {
   );
 }
 
-// ── ProductImage ─────────────────────────────────────────────
+// -- ProductImage ---------------------------------------------
 // In-memory image cache (session-level, fast)
 const IMG_CACHE = new Map();
 
@@ -1564,7 +1564,7 @@ function ProductImage({src, name, brand, barcode, size="full"}) {
   return <img src={imgSrc} alt={name||""} style={{...dim,objectFit:"contain",padding:"8px",background:"#ffffff",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={handleError}/>;
 }
 
-// ── Avatar ────────────────────────────────────────────────────
+// -- Avatar ----------------------------------------------------
 function Avatar({photoURL, name, size=36}) {
   if (!photoURL) return (
     <div style={{width:size,height:size,borderRadius:"50%",background:T.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.35,fontWeight:"700",color:T.accent,fontFamily:"'Inter',sans-serif",flexShrink:0}}>{initials(name)}</div>
@@ -1576,7 +1576,7 @@ function Avatar({photoURL, name, size=36}) {
   );
 }
 
-// ── CardReveal ─────────────────────────────────────────────
+// -- CardReveal ---------------------------------------------
 function CardReveal({children, delay=0}) {
   const ref = React.useRef(null);
   React.useEffect(()=>{
@@ -1591,9 +1591,9 @@ function CardReveal({children, delay=0}) {
 }
 
 
-// ── PostCard ──────────────────────────────────────────────────
+// -- PostCard --------------------------------------------------
 
-// ── ShareProductModal — pick a follower to send a product to ──
+// -- ShareProductModal — pick a follower to send a product to --
 function ShareProductModal({ user, product, onClose }) {
   const [following, setFollowing] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
@@ -1852,7 +1852,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
   };
   const caption = captionMap[post.postType] || null;
 
-  // ── Context line: why this post is showing ──────────────────
+  // -- Context line: why this post is showing ------------------
   const contextLine = (() => {
     if (post._context) return post._context;
     const type = post.postType;
@@ -1882,7 +1882,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
 
       <div style={{transform:`translateX(${swipeX}px)`,transition:swipeX===0?"transform 0.2s ease":"none",position:"relative",zIndex:1,padding:"0.75rem 1rem"}}>
 
-        {/* ── Single unified card ── */}
+        {/* -- Single unified card -- */}
         <div style={{background:T.surface,borderRadius:"1.1rem",border:`1px solid ${T.border}`,overflow:"hidden",boxShadow:"0 1px 6px rgba(28,28,26,0.05)",marginBottom:"0.5rem"}}>
 
           {/* Card header */}
@@ -2001,7 +2001,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
   );
 }
 
-// ── StarRating ────────────────────────────────────────────────
+// -- StarRating ------------------------------------------------
 function StarRating({max, value, onChange, label}) {
   return (
     <div>
@@ -2019,7 +2019,7 @@ function StarRating({max, value, onChange, label}) {
 }
 
 
-// ── KeyActivesSection — extracted to fix Rules of Hooks (no useState inside IIFE) ──
+// -- KeyActivesSection — extracted to fix Rules of Hooks (no useState inside IIFE) --
 function KeyActivesSection({ ingredients }) {
   const [activeDetail, setActiveDetail] = React.useState(null);
   if (!ingredients) return null;
@@ -2104,7 +2104,7 @@ return (
 }
 
 
-// ── IngredientDetailSheet ─────────────────────────────────────
+// -- IngredientDetailSheet -------------------------------------
 function IngredientDetailSheet({ ing, onClose }) {
   const ingKey = (ing.name || "").toLowerCase().replace(/\s*\(.*?\)/g, "").trim();
   const dbEntry = INGDB[ingKey] || (() => {
@@ -2155,7 +2155,7 @@ function IngredientDetailSheet({ ing, onClose }) {
   );
 }
 
-// ── ProductModal ──────────────────────────────────────────────
+// -- ProductModal ----------------------------------------------
 function ProductModal({product, onClose, user, profile, onUpdateProfile, onUserTap}) {
   if (!product) return null;
   return ReactDOM.createPortal(
@@ -2312,7 +2312,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
     return {poreCloggers:[], irritants:[]};
   })();
 
-  // ── Pore score SVG dial values
+  // -- Pore score SVG dial values
   const DIAL_R = 28;
   const DIAL_CIRC = 2 * Math.PI * DIAL_R;
   const dialFill = Math.min(liveScore / 5, 1);
@@ -2320,7 +2320,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
   const scoreLabel = ["Clear","Minimal","Low","High","High","Avoid"][liveScore] || "Clear";
   const scoreSubtext = ["Won't clog pores","Very unlikely to clog","May affect some skin","Likely to clog pores","High clog risk","Avoid — clogs pores"][liveScore] || "";
 
-  // ── Community stars
+  // -- Community stars
   const commStars = product.communityRating ? (() => {
     const s = product.communityRating / 2;
     return { full:Math.floor(s), half:s-Math.floor(s)>=0.5, empty:5-Math.floor(s)-(s-Math.floor(s)>=0.5?1:0), label:product.communityRating>=9?"Loved":product.communityRating>=7?"Liked":product.communityRating>=5?"Mixed":"Low" };
@@ -2329,19 +2329,16 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
   const buyUrl = product.buyUrl || amazonUrl(product.productName||product.name||"", product.brand||"", product.barcode||product.code||"");
 
   return (
-    <>
-    {shareOpen && ReactDOM.createPortal(
-      <ShareProductModal user={user||{uid:""}} product={product} onClose={()=>setShareOpen(false)}/>,
-      document.body
-    )}
     <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9500,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}}>
+      {/* Share modal - rendered at top of fixed container with highest z-index */}
+      {shareOpen&&<div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:19000}}><ShareProductModal user={user||{uid:""}} product={product} onClose={()=>setShareOpen(false)}/></div>}
       {/* Backdrop */}
       <div onClick={()=>{setSelectedIngredient(null);onClose();}} style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(28,28,26,0.45)",backdropFilter:"blur(4px)",cursor:"pointer"}}/>
 
       {/* Sheet */}
       <div ref={modalRef} style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1.25rem",paddingBottom:"calc(2.5rem + env(safe-area-inset-bottom))",boxShadow:"0 -8px 40px rgba(28,28,26,0.15)",maxHeight:"92vh",overflowY:selectedIngredient?"hidden":"auto",zIndex:1}} className="fu">
 
-        {/* ── Handle + share/close ── */}
+        {/* -- Handle + share/close -- */}
         <div style={{display:"flex",alignItems:"center",justifyContent:"center",marginBottom:"1rem",position:"relative"}}>
           <div style={{width:"36px",height:"4px",background:T.border,borderRadius:"999px"}}/>
           <button onClick={()=>setShareOpen(true)} style={{position:"absolute",left:0,top:"50%",transform:"translateY(-50%)",background:T.surfaceAlt,border:"none",borderRadius:"50%",width:"28px",height:"28px",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:T.textMid}}>
@@ -2349,18 +2346,18 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
           </button>
           <button onClick={onClose} style={{position:"absolute",right:0,top:"50%",transform:"translateY(-50%)",background:T.surfaceAlt,border:"none",borderRadius:"50%",width:"28px",height:"28px",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:"0.9rem",color:T.textMid}}>✕</button>
         </div>
-        {/* ── 1. Product image ── */}
+        {/* -- 1. Product image -- */}
         <div style={{width:"100%",height:"190px",background:`linear-gradient(135deg,${T.iceBlue}40,${T.surfaceAlt})`,borderRadius:"1rem",overflow:"hidden",marginBottom:"1.1rem",display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${T.iceBlue}66`}}>
           <ProductImage src={product.image} name={product.productName} brand={product.brand} barcode={product.barcode}/>
         </div>
 
-        {/* ── 2. Brand pill + Name ── */}
+        {/* -- 2. Brand pill + Name -- */}
         <div style={{marginBottom:"1rem"}}>
           {product.brand&&<div style={{display:"inline-block",fontSize:"0.6rem",color:T.navy,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:"0.35rem",fontFamily:"'Inter',sans-serif",background:T.iceBlue+"55",padding:"0.2rem 0.6rem",borderRadius:"999px",border:`1px solid ${T.iceBlue}`}}>{product.brand}</div>}
           <div style={{fontSize:"1.45rem",fontWeight:"800",color:T.navy,fontFamily:"'Inter',sans-serif",lineHeight:1.15,letterSpacing:"-0.03em"}}>{product.productName}</div>
         </div>
 
-        {/* ── 3. Score row: dial + label + community ── */}
+        {/* -- 3. Score row: dial + label + community -- */}
         <div style={{display:"flex",alignItems:"center",gap:"1rem",paddingBottom:"1rem",borderBottom:`1px solid ${T.border}`}}>
           <div style={{position:"relative",width:72,height:72,flexShrink:0}}>
             <svg viewBox="0 0 68 68" width="72" height="72">
@@ -2392,7 +2389,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
           </div>
         </div>
 
-        {/* ── 4. Attribute rows ── */}
+        {/* -- 4. Attribute rows -- */}
         <div style={{marginBottom:"0.5rem"}}>
           <div style={{display:"flex",alignItems:"center",gap:"0.65rem",padding:"0.6rem 0",borderBottom:`0.5px solid ${T.border}`}}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="1.5" style={{flexShrink:0}}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -2440,7 +2437,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
           )}
         </div>
 
-        {/* ── 5. Action buttons — pill toggle style ── */}
+        {/* -- 5. Action buttons — pill toggle style -- */}
         {user&&(
           <div style={{display:"flex",gap:"0.4rem",paddingTop:"0.75rem",paddingBottom:"1rem",borderBottom:`1px solid ${T.border}`,marginBottom:"1rem"}}>
             {[
@@ -2456,7 +2453,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
           </div>
         )}
 
-        {/* ── 6. Shop + Share ── */}
+        {/* -- 6. Shop + Share -- */}
         <div style={{display:"flex",gap:"0.5rem",marginBottom:"1rem"}}>
           <a href={buyUrl} target="_blank" rel="noopener noreferrer"
             onClick={()=>trackProductClick(product._productId||product.id||null,product.productName||product.name||"")}
@@ -2470,7 +2467,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
           </button>
         </div>
 
-        {/* ── 7. Why this score? (collapsed by default) ── */}
+        {/* -- 7. Why this score? (collapsed by default) -- */}
         {product.ingredients&&liveScore!==null&&(()=>{
           const cloggers=modalCloggers.slice(0,5);
           const irritants=modalIrritants.slice(0,3);
@@ -2555,7 +2552,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
           );
         })()}
 
-        {/* ── 8. Rate this product ── */}
+        {/* -- 8. Rate this product -- */}
         {user&&(
           <div style={{paddingTop:"0.75rem",paddingBottom:"1rem",borderTop:`1px solid ${T.border}`,borderBottom:`1px solid ${T.border}`,marginBottom:"1rem"}}>
             <div style={{fontSize:"0.6rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",fontWeight:"700",marginBottom:"0.6rem",fontFamily:"'Inter',sans-serif"}}>
@@ -2582,7 +2579,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
           </div>
         )}
 
-        {/* ── 9. Key Actives + Full Ingredient List ── */}
+        {/* -- 9. Key Actives + Full Ingredient List -- */}
         {product.ingredients&&product.ingredients.trim()&&(
           <div style={{marginBottom:"1rem",position:"relative"}}>
             <div style={{display:"flex",alignItems:"center",gap:"0.4rem",marginBottom:"0.25rem"}}>
@@ -2613,7 +2610,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
           </div>
         )}
 
-        {/* ── 10. Report wrong ingredients (subtle, at the bottom) ── */}
+        {/* -- 10. Report wrong ingredients (subtle, at the bottom) -- */}
         {user&&product.ingredients&&(()=>{
           const lowConfidence=(product.ingredients||"").split(",").length<8;
           async function submitReport(){
@@ -2645,13 +2642,13 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
   );
 }
 
-// ── AuthPage ──────────────────────────────────────────────────
-// ── Onboarding Flow ───────────────────────────────────────────
+// -- AuthPage --------------------------------------------------
+// -- Onboarding Flow -------------------------------------------
 function OnboardingFlow({user, profile, onComplete}) {
   const [step, setStep] = useState(0);
   const [skinTypes, setSkinTypes] = useState([]);
   const [concerns, setConcerns] = useState([]);
-  const [displayName, setDisplayName] = useState(user?.displayName||"");
+  const [displayName, setDisplayName] = useState("");
   const [pronoun, setPronoun] = useState("");
   const [saving, setSaving] = useState(false);
   const [followed, setFollowed] = useState(new Set());
@@ -2829,7 +2826,7 @@ function OnboardingFlow({user, profile, onComplete}) {
             onChange={e=>setDisplayName(e.target.value)}
             placeholder="Your name"
             autoFocus
-            style={{width:"100%",padding:"0.85rem 1rem",borderRadius:"0.85rem",border:`1.5px solid ${T.border}`,fontSize:"1rem",color:T.text,background:"rgba(255,255,255,0.08)",outline:"none",fontFamily:"'Inter',sans-serif",color:"#fff",caretColor:"#fff"}}
+            style={{width:"100%",padding:"0.85rem 1rem",borderRadius:"0.85rem",border:`1.5px solid ${T.border}`,fontSize:"1rem",color:"#fff",background:"rgba(255,255,255,0.08)",outline:"none",fontFamily:"'Inter',sans-serif"}}
             onFocus={e=>{e.target.style.borderColor=T.sage;}}
             onBlur={e=>{e.target.style.borderColor=T.border;}}
           />
@@ -3020,8 +3017,8 @@ function AuthPage() {
   );
 }
 
-// ── UserPage ──────────────────────────────────────────────────
-// ── FollowListItem — loads a user by UID and renders them tappable ──
+// -- UserPage --------------------------------------------------
+// -- FollowListItem — loads a user by UID and renders them tappable --
 function FollowListItem({ uid, onTap }) {
   const [u, setU] = React.useState(null);
   React.useEffect(() => {
@@ -3168,9 +3165,9 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
   );
 }
 
-// ── ScanPage ──────────────────────────────────────────────────
+// -- ScanPage --------------------------------------------------
 
-// ── Add Missing Product Modal ─────────────────────────────────
+// -- Add Missing Product Modal ---------------------------------
 function AddProductModal({onClose, onAdded, user, prefillBarcode="", prefillName=""}) {
   const [productName, setProductName] = useState(prefillName);
   const [brand, setBrand]             = useState("");
@@ -3242,8 +3239,6 @@ function AddProductModal({onClose, onAdded, user, prefillBarcode="", prefillName
         )}
       </div>
     </div>
-    </div>
-    </>
   );
 }
 
@@ -3635,7 +3630,7 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
 
       <div style={{background:T.surface,borderRadius:"1.25rem",border:`1px solid ${T.border}`,padding:"1.25rem",boxShadow:"0 4px 24px rgba(28,23,20,0.06),0 1px 4px rgba(28,23,20,0.04)"}}>
 
-        {/* ── Four check options ── */}
+        {/* -- Four check options -- */}
         {cameraMode==="processing" ? (
           <div style={{textAlign:"center",padding:"1.5rem 1rem"}}>
             {photoPreview&&<img src={photoPreview} alt="" style={{width:"100%",maxHeight:"200px",objectFit:"cover",borderRadius:"0.75rem",marginBottom:"1rem",opacity:0.85}}/>}
@@ -3940,9 +3935,9 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
   );
 }
 
-// ── FeedPage ──────────────────────────────────────────────────
+// -- FeedPage --------------------------------------------------
 
-// ── NetworkGroupCard — shown when 2+ people you follow use the same product ──
+// -- NetworkGroupCard — shown when 2+ people you follow use the same product --
 function NetworkGroupCard({productName, brand, productImage, poreScore, users, onProductTap, onUserTap, currentUid}) {
   const [shareOpen, setShareOpen] = useState(false);
   const ps = poreStyle(poreScore??0);
@@ -3996,7 +3991,7 @@ function NetworkGroupCard({productName, brand, productImage, poreScore, users, o
 }
 
 
-// ── TrendingSection — extracted from FeedPage IIFE to fix Rules of Hooks ──
+// -- TrendingSection — extracted from FeedPage IIFE to fix Rules of Hooks --
 function TrendingSection({ openProductFromPost, trendingList }) {
   const [trendData, setTrendData] = React.useState([]);
   const [trendReady, setTrendReady] = React.useState(false);
@@ -4212,7 +4207,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
     loadFriendRoutines();
   },[refreshKey,user?.uid]);
 
-  // ── Mock community posts — show a lively feed out of the box ──
+  // -- Mock community posts — show a lively feed out of the box --
   const MOCK_POSTS = [
     {id:"mock_01",uid:"seed_u01",displayName:"Cassidy Monroe",photoURL:"https://i.pravatar.cc/150?img=47",productName:"CeraVe Moisturizing Cream",brand:"CeraVe",poreScore:3,productImage:"",communityRating:9,postType:"loved",ingredients:"water, glycerin, cetearyl alcohol, ceramide np, ceramide ap, ceramide eop, cholesterol, sodium hyaluronate, niacinamide, panthenol, allantoin",flaggedIngredients:[],likes:["seed_u02","seed_u03","seed_u04"],comments:[{uid:"seed_u02",displayName:"Jenna Caldwell",photoURL:"https://i.pravatar.cc/150?img=49",text:"been using this for 3 years, never switching 💙"}],createdAt:{seconds:Math.floor(Date.now()/1000)-3600}},
     {id:"mock_02",uid:"seed_u02",displayName:"Jenna Caldwell",photoURL:"https://i.pravatar.cc/150?img=49",productName:"The Ordinary Niacinamide 10%",brand:"The Ordinary",poreScore:0,productImage:"",communityRating:8,postType:"loved",ingredients:"aqua, niacinamide, pentylene glycol, zinc pca, sodium hyaluronate, tamarindus indica seed gum",flaggedIngredients:[],likes:["seed_u01","seed_u04","seed_u05"],comments:[{uid:"seed_u03",displayName:"Leila Ramos",photoURL:"https://i.pravatar.cc/150?img=32",text:"does this help with hormonal acne?"},{uid:"seed_u01",displayName:"Cassidy Monroe",photoURL:"https://i.pravatar.cc/150?img=47",text:"yes!! my chin breakouts are so much better"}],createdAt:{seconds:Math.floor(Date.now()/1000)-7200}},
@@ -4607,7 +4602,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
         )}
       </div>
 
-      {/* ── Feed Tab Bar ─────────────────────────────────────── */}
+      {/* -- Feed Tab Bar --------------------------------------- */}
       {(()=>{
         const FEED_TABS=[{id:"forYou",label:"For You"},{id:"following",label:"Following"}];
         const tabIdx=FEED_TABS.findIndex(t=>t.id===tab);
@@ -4642,7 +4637,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
               </div>
             );
 
-            // ── Discover card ──────────────────────────────────────
+            // -- Discover card --------------------------------------
             const DiscoverCard = ({label="Suggested for you"}) => (
               <div style={{marginBottom:"0.85rem"}}>
                 <div style={{fontSize:"0.6rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.5rem",fontFamily:"'Inter',sans-serif"}}>{label}</div>
@@ -4650,10 +4645,10 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
               </div>
             );
 
-            // ── Recs card ── (rendered above the tip, not here)
+            // -- Recs card -- (rendered above the tip, not here)
             const RecsCard = () => null;
 
-            // ── FOR YOU TAB ────────────────────────────────────────
+            // -- FOR YOU TAB ----------------------------------------
             if (tab==="forYou") {
               const seen = new Set();
               const realDeduped = posts.filter(p=>{ const k=p.productName?.toLowerCase()||p.id; if(seen.has(k))return false; seen.add(k); return true; });
@@ -4691,7 +4686,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
                     </div>
                   )}
 
-                  {/* ── Trending This Week ── */}
+                  {/* -- Trending This Week -- */}
                   <TrendingSection openProductFromPost={openProductFromPost} trendingList={trendingList} />
 
                   {/* Clean product feed */}
@@ -4715,7 +4710,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
               );
             }
 
-            // ── FOLLOWING TAB ──────────────────────────────────────
+            // -- FOLLOWING TAB --------------------------------------
             if (!hasFriendPosts) return (
               <div style={{paddingBottom:"1rem"}}>
                 <div style={{textAlign:"center",padding:"2rem 1rem 1.25rem"}}>
@@ -4735,7 +4730,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
               </div>
             );
 
-            // ── Has real friend posts ──────────────────────────────
+            // -- Has real friend posts ------------------------------
             const allFollowingPosts = realPosts.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
             const seedPad = allFollowingPosts.length < 4
               ? MOCK_POSTS.filter(m=>!allFollowingPosts.some(p=>p.productName?.toLowerCase()===m.productName?.toLowerCase())).slice(0, 5-allFollowingPosts.length)
@@ -4773,7 +4768,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
   );
 }
 
-// ── ProfilePage ───────────────────────────────────────────────
+// -- ProfilePage -----------------------------------------------
 // Fetches product image: UPCItemDB → Open Beauty Facts → placeholder
 function ListItemImage({name, color}) {
   const [img, setImg] = useState(null);
@@ -4990,7 +4985,7 @@ const FOUNDERS = [
   {email:"morganrichard777@gmail.com",  name:"Morgan Richard",   initial:"Mo"},
 ];
 
-// ── Avatar Crop / Position Modal ─────────────────────────────
+// -- Avatar Crop / Position Modal -----------------------------
 function AvatarCropModal({photoURL, initialOffsetX=50, initialOffsetY=50, initialScale=1, onSave, onClose}) {
   const [ox, setOx] = useState(initialOffsetX);
   const [oy, setOy] = useState(initialOffsetY);
@@ -5131,7 +5126,7 @@ function FounderByline({onUserTap}) {
   );
 }
 
-// ── RoutineScore ─────────────────────────────────────────────────────────────
+// -- RoutineScore -------------------------------------------------------------
 function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
   const [expanded, setExpanded] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -5380,7 +5375,7 @@ function FounderLinks({onUserTap, inStory=false}) {
   );
 }
 
-// ── Delete Account Modal ─────────────────────────────────────
+// -- Delete Account Modal -------------------------------------
 function DeleteAccountModal({ user, onClose, onDeleted }) {
   const [step, setStep] = React.useState("confirm"); // confirm | typing | deleting | done
   const [typed, setTyped] = React.useState("");
@@ -5472,7 +5467,7 @@ function DeleteAccountModal({ user, onClose, onDeleted }) {
   );
 }
 
-// ── PeopleFinder — Find Friends tab in Profile ───────────────
+// -- PeopleFinder — Find Friends tab in Profile ---------------
 function PeopleFinder({ user, profile, onUpdate, onUserTap }) {
   const [search, setSearch]       = useState("");
   const [results, setResults]     = useState([]);
@@ -5853,7 +5848,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
         </div>
       , document.body)}
 
-      {/* ── Profile Header ── */}
+      {/* -- Profile Header -- */}
       <div style={{marginBottom:"1.25rem",paddingTop:"0.5rem"}}>
 
         {/* No photo prompt */}
@@ -6193,7 +6188,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
 }
 
 
-// ── INGDB enriched for glossary ───────────────────────────────
+// -- INGDB enriched for glossary -------------------------------
 const INGDB_META = {
   // Pore-cloggers
   "coconut oil":         {category:"Oil",      benefit:"Moisturizing",      concern:"Can clog pores"},
@@ -6264,7 +6259,7 @@ const INGDB_META = {
   "phenoxyethanol":      {category:"Irritant", benefit:"Widely used gentle preservative", concern:"Generally safe — can irritate at high concentrations"},
   "retinyl palmitate":   {category:"Irritant", benefit:"Mild retinoid activity", concern:"May cause irritation — some photocarcinogenicity concerns"},
 
-  // ── Additional Oils ───────────────────────────────────────────
+  // -- Additional Oils -------------------------------------------
   "macadamia oil":       {category:"Oil",      benefit:"Rich in palmitoleic acid — skin-compatible", concern:"Moderate pore-clogging risk"},
   "neem oil":            {category:"Oil",      benefit:"Antimicrobial, acne-fighting", concern:"Moderate pore-clogging risk"},
   "rice bran oil":       {category:"Oil",      benefit:"Rich in antioxidants and vitamin E", concern:"Moderate risk — mixed fatty acid profile"},
@@ -6303,7 +6298,7 @@ const INGDB_META = {
   "palm oil":            {category:"Oil",      benefit:"Emollient, rich lather", concern:"Clogs pores and triggers breakouts"},
   "coconut oil":         {category:"Oil",      benefit:"Antimicrobial, moisturizing", concern:"High pore-clogging risk — especially for acne-prone skin"},
 
-  // ── Waxes & Butters ───────────────────────────────────────────
+  // -- Waxes & Butters -------------------------------------------
   "mango butter":        {category:"Butter",   benefit:"Nourishing, skin-softening", concern:"Moderate pore-clogging risk"},
   "beeswax":             {category:"Wax",      benefit:"Natural occlusive, protective", concern:"Moderate to high pore-clogging risk"},
   "carnauba wax":        {category:"Wax",      benefit:"Vegan wax, protective", concern:"Very unlikely to cause issues"},
@@ -6315,7 +6310,7 @@ const INGDB_META = {
   "lanolin":             {category:"Emollient",benefit:"Barrier repair, deeply conditioning", concern:"Moderately pore-clogging"},
   "acetylated lanolin":  {category:"Emollient",benefit:"Skin softening", concern:"High pore-clogging risk"},
 
-  // ── Fatty Alcohols & Esters ───────────────────────────────────
+  // -- Fatty Alcohols & Esters -----------------------------------
   "cetyl alcohol":       {category:"Emollient",benefit:"Smooths skin texture, thickens formula", concern:"Moderately pore-clogging — risky for acne-prone skin"},
   "cetearyl alcohol":    {category:"Emollient",benefit:"Emollient and emulsifier", concern:"Moderately pore-clogging"},
   "stearyl alcohol":     {category:"Emollient",benefit:"Skin softener, formula stabilizer", concern:"May clog pores for some"},
@@ -6334,7 +6329,7 @@ const INGDB_META = {
   "steareth-2":          {category:"Emulsifier",benefit:"Keeps formula stable", concern:"Moderate pore-clogging risk"},
   "caprylic/capric triglyceride":{category:"Emollient",benefit:"Lightweight MCT — skin-compatible", concern:"Very unlikely to cause issues"},
 
-  // ── Makeup-specific ───────────────────────────────────────────
+  // -- Makeup-specific -------------------------------------------
   "bismuth oxychloride": {category:"Mineral",  benefit:"Gives a pearly shimmer finish", concern:"Can cause itching and pore congestion"},
   "talc":                {category:"Mineral",  benefit:"Oil-absorbing, silky texture", concern:"Can block pores in heavy amounts"},
   "zinc stearate":       {category:"Mineral",  benefit:"Adhesion, silky feel in makeup", concern:"Moderate pore-clogging risk"},
@@ -6343,7 +6338,7 @@ const INGDB_META = {
   "iron oxides":         {category:"Mineral",  benefit:"Natural colorants — non-reactive", concern:"None known"},
   "silica":              {category:"Mineral",  benefit:"Mattifying, oil-absorbing", concern:"None known"},
 
-  // ── Preservatives (more) ──────────────────────────────────────
+  // -- Preservatives (more) --------------------------------------
   "methylisothiazolinone":{category:"Irritant",benefit:"Highly effective preservative", concern:"Potent allergen — banned in EU leave-on products"},
   "methylchloroisothiazolinone":{category:"Irritant",benefit:"Preservative", concern:"One of the most sensitizing — banned in EU leave-ons"},
   "iodopropynyl butylcarbamate":{category:"Irritant",benefit:"Antifungal preservative", concern:"Skin sensitizer — restricted in children's products"},
@@ -6356,7 +6351,7 @@ const INGDB_META = {
   "ethylparaben":        {category:"Irritant", benefit:"Preservative", concern:"Paraben — potential hormone disruptor"},
   "phenoxyethanol":      {category:"Preservative",benefit:"Widely used gentle preservative", concern:"Generally safe — can irritate at high concentrations"},
 
-  // ── Fragrance allergens (more) ────────────────────────────────
+  // -- Fragrance allergens (more) --------------------------------
   "hydroxycitronellal":  {category:"Irritant", benefit:"Floral fragrance note", concern:"EU-listed allergen — can cause contact allergy"},
   "isoeugenol":          {category:"Irritant", benefit:"Spice fragrance", concern:"Frequently causes contact allergy"},
   "benzyl salicylate":   {category:"Irritant", benefit:"Fragrance fixative", concern:"EU-listed allergen"},
@@ -6372,18 +6367,18 @@ const INGDB_META = {
   "camphor":             {category:"Irritant", benefit:"Cooling sensation", concern:"Skin irritant and sensitizer"},
   "oxybenzone":          {category:"Irritant", benefit:"Chemical UVA filter", concern:"Potential hormone disruptor — reef-damaging"},
 
-  // ── Essential oils (more) ─────────────────────────────────────
+  // -- Essential oils (more) -------------------------------------
   "eucalyptus oil":      {category:"Irritant", benefit:"Antimicrobial, cooling", concern:"Can cause irritation and sensitization"},
   "bergamot oil":        {category:"Irritant", benefit:"Fresh citrus scent", concern:"Photosensitizing — contains EU allergens"},
   "clove oil":           {category:"Irritant", benefit:"Antimicrobial", concern:"High eugenol content — potent irritant"},
   "cinnamon oil":        {category:"Irritant", benefit:"Warming, antimicrobial", concern:"Potent sensitizer — cinnamal content"},
 
-  // ── Surfactants (more) ────────────────────────────────────────
+  // -- Surfactants (more) ----------------------------------------
   "ammonium lauryl sulfate":{category:"Irritant",benefit:"Creates lather", concern:"Harsh — strips skin barrier similar to SLS"},
   "cocamide DEA":        {category:"Irritant", benefit:"Foam booster, thickener", concern:"Potential carcinogen and skin sensitizer"},
   "sodium C14-16 olefin sulfonate":{category:"Surfactant",benefit:"Cleansing, lather", concern:"Can irritate sensitive skin"},
 
-  // ── Silicones ─────────────────────────────────────────────────
+  // -- Silicones -------------------------------------------------
   "cyclopentasiloxane":  {category:"Silicone", benefit:"Lightweight, volatile — evaporates cleanly", concern:"Very unlikely to cause issues"},
   "cyclomethicone":      {category:"Silicone", benefit:"Lightweight, silky feel", concern:"Very unlikely to cause issues"},
   "cyclohexasiloxane":   {category:"Silicone", benefit:"Lightweight silicone base", concern:"Very unlikely to cause issues"},
@@ -6391,14 +6386,14 @@ const INGDB_META = {
   "amodimethicone":      {category:"Silicone", benefit:"Conditioning, lightweight", concern:"None known"},
   "trimethylsiloxysilicate":{category:"Silicone",benefit:"Long-wear film former", concern:"Very unlikely to cause issues"},
 
-  // ── Sunscreen filters (more) ──────────────────────────────────
+  // -- Sunscreen filters (more) ----------------------------------
   "octocrylene":         {category:"Sunscreen",benefit:"Stabilizes avobenzone, UVB filter", concern:"Low pore risk — may sensitize some"},
   "octinoxate":          {category:"Sunscreen",benefit:"UVB filter", concern:"Potential hormone disruptor — reef-harmful"},
   "octisalate":          {category:"Sunscreen",benefit:"UVB filter", concern:"Also acts as fragrance — low risk"},
   "avobenzone":          {category:"Sunscreen",benefit:"Broad UVA protection", concern:"None known — unstable without stabilizer"},
   "homosalate":          {category:"Sunscreen",benefit:"UVB filter", concern:"Potential hormone disruptor at high concentrations"},
 
-  // ── Humectants & hydration ────────────────────────────────────
+  // -- Humectants & hydration ------------------------------------
   "sodium hyaluronate":  {category:"Hydration",benefit:"Smaller HA molecule — penetrates deeper", concern:"None known"},
   "butylene glycol":     {category:"Hydration",benefit:"Humectant, helps absorption", concern:"Very unlikely to cause issues"},
   "pentylene glycol":    {category:"Hydration",benefit:"Gentle humectant with mild antimicrobial effect", concern:"None known"},
@@ -6409,7 +6404,7 @@ const INGDB_META = {
   "beta glucan":         {category:"Hydration",benefit:"Soothing humectant from oats", concern:"None known"},
   "trehalose":           {category:"Hydration",benefit:"Protective sugar humectant", concern:"None known"},
 
-  // ── Actives (more) ───────────────────────────────────────────
+  // -- Actives (more) -------------------------------------------
   "retinal":             {category:"Active",   benefit:"11x more potent than retinol", concern:"None known — less irritating than tretinoin"},
   "tretinoin":           {category:"Active",   benefit:"Gold standard prescription retinoid", concern:"Prescription only — can cause purging and irritation"},
   "mandelic acid":       {category:"Exfoliant",benefit:"Gentle AHA — great for sensitive and acne-prone skin", concern:"None known"},
@@ -6429,12 +6424,12 @@ const INGDB_META = {
   "gluconolactone":      {category:"Exfoliant",benefit:"Gentle PHA — also an antioxidant", concern:"None known"},
   "malic acid":          {category:"Exfoliant",benefit:"Mild AHA from fruit", concern:"None known"},
 
-  // ── Peptides ──────────────────────────────────────────────────
+  // -- Peptides --------------------------------------------------
   "palmitoyl pentapeptide-4":{category:"Peptide",benefit:"Matrixyl — boosts collagen production", concern:"None known"},
   "acetyl hexapeptide-3":{category:"Peptide",  benefit:"Argireline — relaxes expression lines", concern:"None known"},
   "palmitoyl tripeptide-1":{category:"Peptide",benefit:"Collagen-boosting", concern:"None known"},
 
-  // ── Barrier & Soothing ────────────────────────────────────────
+  // -- Barrier & Soothing ----------------------------------------
   "ceramide np":         {category:"Lipid",    benefit:"Key skin barrier ceramide", concern:"None known"},
   "ceramide ap":         {category:"Lipid",    benefit:"Key skin barrier ceramide", concern:"None known"},
   "ceramide eop":        {category:"Lipid",    benefit:"Key skin barrier ceramide", concern:"None known"},
@@ -6448,7 +6443,7 @@ const INGDB_META = {
   "aloe vera":           {category:"Soother",  benefit:"Soothing and deeply hydrating", concern:"None known"},
 };
 
-// ── Pore Clog Score Explainer ─────────────────────────────────────
+// -- Pore Clog Score Explainer -------------------------------------
 function PoreScoreInfo({ score, inline=false }) {
   const [open, setOpen] = React.useState(false);
   const ps = poreStyle(score ?? 0);
@@ -6510,7 +6505,7 @@ function PoreScoreInfo({ score, inline=false }) {
   );
 }
 
-// ── Trending Page ─────────────────────────────────────────────
+// -- Trending Page ---------------------------------------------
 function TrendingPage({user, profile, onProductTap}) {
   const [trending, setTrending] = useState([]);
   const [loading, setLoading]   = useState(true);
@@ -6614,7 +6609,7 @@ function TrendingPage({user, profile, onProductTap}) {
 }
 
 
-// ── Shop Page — browse best non-pore-clogging products by type ─
+// -- Shop Page — browse best non-pore-clogging products by type -
 // When you get your Amazon tag, replace all instances of "YOURTAG-20" with your actual tag
 const AMZN = (asin) => `https://www.amazon.com/dp/${asin}`;
 
@@ -6758,7 +6753,7 @@ const CAT_EMOJI = {"face-wash":"🫧","moisturizer":"💧","serum":"✨","exfoli
 const CAT_LABEL = {"face-wash":"Face Wash","moisturizer":"Moisturizer","serum":"Serum","exfoliant":"Exfoliant","spf":"SPF","eye":"Eye Cream","body":"Body Care","acne":"Acne Treatment","toner":"Toner","lip":"Lip Care","mask":"Face Mask","hair":"Hair & Scalp","makeup":"Makeup","other":"Other"};
 const CAT_ORDER = ["face-wash","moisturizer","serum","exfoliant","spf","eye","body","acne","toner","lip","mask","hair","makeup","other"];
 
-// ── Explore page recommended products carousel ────────────────
+// -- Explore page recommended products carousel ----------------
 function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productImageMap={}}) {
   const skinType = Array.isArray(profile?.skinType) ? profile.skinType : profile?.skinType ? [profile.skinType] : [];
   const concerns = profile?.concerns || [];
@@ -6820,7 +6815,7 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
   );
 }
 
-// ── Our Story popup (shown for first 5 logins) ─────────────────
+// -- Our Story popup (shown for first 5 logins) -----------------
 function OurStoryPopup({onClose, onUserTap}) {
   return (
     <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"1.5rem"}}
@@ -6853,8 +6848,8 @@ function OurStoryPopup({onClose, onUserTap}) {
 }
 
 
-// ── What We're Loving — admin-curated picks ───────────────────
-// ── Founder Picks — editorial 2-col grid ────────────────────
+// -- What We're Loving — admin-curated picks -------------------
+// -- Founder Picks — editorial 2-col grid --------------------
 // Firestore collection: founder_picks
 // Fields: productName, brand, image, poreScore, buyUrl, ingredients,
 //         founderName ("McKenzie" | "Morgan"), founderPhoto, note, order
@@ -7055,7 +7050,7 @@ function FounderPicksSection({onTap, friendScans={}}) {
   );
 }
 
-// ── Admin: manage founder picks ───────────────────────────────
+// -- Admin: manage founder picks -------------------------------
 function AdminFounderPicks() {
   const [picks, setPicks]       = useState([]);
   const [products, setProducts] = useState([]);
@@ -7210,7 +7205,7 @@ function WhatWereLovingSection({onTap, friendScans={}}) {
   return <FounderPicksSection onTap={onTap} friendScans={friendScans}/>;
 }
 
-// ── FriendsUsingSection — "What Your Friends Are Using" on Explore ──
+// -- FriendsUsingSection — "What Your Friends Are Using" on Explore --
 const MOCK_FRIEND_PRODUCTS = [];
 
 function FriendsUsingSection({ friendScans, products, onTap, profile }) {
@@ -7786,7 +7781,7 @@ function ShopCard({p, onTap, currentUid}) {
 }
 
 
-// ── Ingredient Glossary ───────────────────────────────────────
+// -- Ingredient Glossary ---------------------------------------
 function GlossaryPage() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);
@@ -7982,9 +7977,9 @@ function GlossaryPage() {
   );
 }
 
-// ── Notifications Page ────────────────────────────────────────
+// -- Notifications Page ----------------------------------------
 
-// ── NotifDropdown — compact bell panel ────────────────────────
+// -- NotifDropdown — compact bell panel ------------------------
 function NotifDropdown({user, onUserTap}) {
   const [notifs, setNotifs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -8128,7 +8123,7 @@ function NotificationsPage({user, onUserTap}) {
 }
 
 
-// ── Admin Dashboard ───────────────────────────────────────────
+// -- Admin Dashboard -------------------------------------------
 // Set your Firebase UID here to enable the admin tab
 const ADMIN_UIDS = []; // add your UID here once you see it in Profile
 const ADMIN_EMAILS = ["mckenzierichard77@gmail.com", "morganrichard777@gmail.com"];
@@ -8137,7 +8132,7 @@ function isAdmin(user) {
 }
 
 
-// ── Product catalog CRUD ──────────────────────────────────────
+// -- Product catalog CRUD --------------------------------------
 // All products live in products/{barcode} — single source of truth
 
 async function getShopProducts() {
@@ -8348,15 +8343,15 @@ async function getAdminStats() {
   };
 }
 
-// ── Admin: Manage Products (set imageUrl per product) ─────────
+// -- Admin: Manage Products (set imageUrl per product) ---------
 function obfImageUrl(barcode, rev=1) {
   if (!barcode) return null;
   const b = String(barcode).replace(/\D/g,"").padStart(13,"0");
   return `https://images.openbeautyfacts.org/images/products/${b.slice(0,3)}/${b.slice(3,6)}/${b.slice(6,9)}/${b.slice(9)}/front_en.${rev}.400.jpg`;
 }
 
-// ── Auto-fix Database ─────────────────────────────────────────
-// ── Inline image picker for admin triage/edit ─────────────────
+// -- Auto-fix Database -----------------------------------------
+// -- Inline image picker for admin triage/edit -----------------
 function ImagePicker({ brand, productName, currentImg, onSelect }) {
   const [query, setQuery] = React.useState(`${brand||""} ${productName||""}`.trim());
   const [results, setResults] = React.useState([]);
@@ -8434,7 +8429,7 @@ function ImagePicker({ brand, productName, currentImg, onSelect }) {
   );
 }
 
-// ── Shared image-fetch helpers (used by AutoFixDatabase + AdminCleanup triage) ──
+// -- Shared image-fetch helpers (used by AutoFixDatabase + AdminCleanup triage) --
 
 function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, afDone, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog }) {
   const running = afRunning ?? false;
@@ -8712,7 +8707,7 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
 }
 
 function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog, autoOpenTriage=false}) {
-  // ── Product list state ──
+  // -- Product list state --
   const [products, setProducts] = useState([]);
   const [loading, setLoading]   = useState(true);
   const [editing, setEditing]   = useState(null);
@@ -8725,7 +8720,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
   const [filter, setFilter]     = useState("pending");
   const [activeCat, setActiveCat] = useState(null);
 
-  // ── Toolbar state (Add, Triage, Import, Seed) ──
+  // -- Toolbar state (Add, Triage, Import, Seed) --
   const [seeding, setSeeding] = useState(false);
   const [showSeedConfirm, setShowSeedConfirm] = useState(false);
   const [showImporter, setShowImporter]     = useState(false);
@@ -9030,7 +9025,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
     await seedFromCurated();
   }
 
-  // ── Open Beauty Facts importer ─────────────────────────────
+  // -- Open Beauty Facts importer -----------------------------
     const OBF_CATS = [
     {id:"moisturizers",      label:"Moisturizers"},
     {id:"face-creams",       label:"Face Creams"},
@@ -9381,7 +9376,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
 
   return (
     <div>
-      {/* ── Auto-fix panel — always visible at top ── */}
+      {/* -- Auto-fix panel — always visible at top -- */}
       <AutoFixDatabase
         products={products}
         onRefresh={load}
@@ -9391,7 +9386,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
         setAfProducts={setAfProducts} afAddLog={afAddLog}
       />
 
-      {/* ── Toolbar ── */}
+      {/* -- Toolbar -- */}
       <div style={{marginBottom:"0.65rem",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"0.5rem",flexWrap:"wrap"}}>
         <div style={{fontSize:"0.68rem",color:T.textLight,flexShrink:0}}>{products.length} total · {allCats.length} categories</div>
         <div style={{display:"flex",gap:"0.4rem",flexWrap:"wrap"}}>
@@ -9419,7 +9414,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
         </div>
       </div>
 
-      {/* ── Add Product Form ── */}
+      {/* -- Add Product Form -- */}
       {showAddForm&&(
         <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",padding:"1rem",marginBottom:"0.85rem"}}>
           <div style={{fontSize:"0.82rem",fontWeight:"700",color:T.text,marginBottom:"0.75rem",fontFamily:"'Inter',sans-serif"}}>Add Product</div>
@@ -9470,7 +9465,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
       )}
 
 
-      {/* ── Category pills ── */}
+      {/* -- Category pills -- */}
       {allCats.length>0&&(
         <div style={{display:"flex",gap:"0.4rem",overflowX:"auto",paddingBottom:"0.4rem",marginBottom:"0.75rem",scrollbarWidth:"none"}}>
           <button onClick={()=>setActiveCat(null)} style={{flexShrink:0,padding:"0.28rem 0.7rem",borderRadius:"999px",border:`1px solid ${!activeCat?T.navy:T.border}`,background:!activeCat?T.navy:"transparent",color:!activeCat?"#fff":T.textMid,fontSize:"0.68rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"}}>
@@ -9485,7 +9480,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
         </div>
       )}
 
-      {/* ── Status filter tabs ── */}
+      {/* -- Status filter tabs -- */}
       <div style={{display:"flex",gap:"0.35rem",marginBottom:"0.65rem",overflowX:"auto",scrollbarWidth:"none"}}>
         {TABS.map(({id,label,color})=>(
           <button key={id} onClick={()=>setFilter(id)}
@@ -9496,7 +9491,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
         ))}
       </div>
 
-      {/* ── Search ── */}
+      {/* -- Search -- */}
       <div style={{position:"relative",marginBottom:"0.65rem"}}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" style={{position:"absolute",left:"0.65rem",top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by name, brand or barcode…"
@@ -9513,7 +9508,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
         </div>
       )}
 
-      {/* ── Product list ── */}
+      {/* -- Product list -- */}
       <div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}>
         {sortedFiltered.map(p=>{
           const stale = needsReverification(p);
@@ -9663,7 +9658,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
         )}
       </div>
 
-      {/* ── Triage Modal ── */}
+      {/* -- Triage Modal -- */}
       {triageMode&&(
         <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:400,background:"rgba(0,0,0,0.88)",backdropFilter:"blur(6px)",display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
           <div style={{background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",width:"100%",maxWidth:"520px",boxShadow:"0 -8px 40px rgba(0,0,0,0.25)",height:"88vh",overflowY:"auto"}}>
@@ -9848,7 +9843,7 @@ function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning
         </div>
       )}
 
-      {/* ── Re-seed password confirmation modal ── */}
+      {/* -- Re-seed password confirmation modal -- */}
       {showSeedConfirm&&(
         <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(28,28,26,0.65)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}}>
           <div style={{background:T.surface,borderRadius:"1.25rem",padding:"1.5rem",width:"100%",maxWidth:"360px",boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}}>
@@ -10090,7 +10085,7 @@ function AdminShopManager() {
 }
 
 
-// ── Admin: What We're Loving manager ─────────────────────────
+// -- Admin: What We're Loving manager -------------------------
 function AdminWWLManager() {
   const [picks, setPicks]       = useState([]);
   const [products, setProducts] = useState([]);
@@ -10205,10 +10200,10 @@ function AdminWWLManager() {
 
 
 
-// ── Admin: AI Nightly Triage Bot ──────────────────────────────
+// -- Admin: AI Nightly Triage Bot ------------------------------
 
 
-// ── Admin: AutoFix only (used in Clean Up tab) ────────────────
+// -- Admin: AutoFix only (used in Clean Up tab) ----------------
 function AdminAutoFixOnly({afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog}) {
   const [products, setProducts] = React.useState([]);
   React.useEffect(() => {
@@ -10222,9 +10217,9 @@ function AdminAutoFixOnly({afRunning, afLog, afDone, afProducts, setAfRunning, s
   }} onOpenTriage={() => {}} afRunning={afRunning} afLog={afLog} afDone={afDone} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog}/>;
 }
 
-// ── Admin: Clean Up (Ingredients Auto-fetch + Manual Image Triage + Fill Ingredients) ──
+// -- Admin: Clean Up (Ingredients Auto-fetch + Manual Image Triage + Fill Ingredients) --
 
-// ── One-time Amazon URL fixer ──────────────────────────────────
+// -- One-time Amazon URL fixer ----------------------------------
 function FixAmazonUrls({ products, onFixed }) {
   const [fixing, setFixing] = React.useState(false);
   const [done, setDone] = React.useState(false);
@@ -10316,7 +10311,7 @@ async function tryClaudeCandidates(p) {
   } catch(e) { console.error("[ImagePicker] Error:", e); return []; }
 }
 
-// ── AdminImagePicker ─────────────────────────────────────────
+// -- AdminImagePicker -----------------------------------------
 function AdminImagePicker({products, setProducts, onBack}) {
   const noImg = products.filter(p => !hasValidImage(p));
   const [idx, setIdx] = React.useState(0);
@@ -10456,10 +10451,10 @@ function AdminImagePicker({products, setProducts, onBack}) {
 }
 
 
-// ── AdminProductHub ───────────────────────────────────────────
+// -- AdminProductHub -------------------------------------------
 // Simple, focused product management — stats → fix ingredients → fix images → approve
 
-// ── AdminProductEditInline ────────────────────────────────────
+// -- AdminProductEditInline ------------------------------------
 function AdminProductEditInline({product, onSave, onBack}) {
   const [name, setName] = React.useState(product.productName||"");
   const [brand, setBrand] = React.useState(product.brand||"");
@@ -10628,10 +10623,10 @@ function AdminProductHub() {
 
   if (loading) return <div style={{textAlign:"center",padding:"3rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Loading…</div>;
 
-  // ── Image Picker view ──
+  // -- Image Picker view --
   if (view === "images") return <AdminImagePicker products={products} setProducts={setProducts} onBack={()=>setView("home")}/>;
 
-  // ── Approve view ──
+  // -- Approve view --
   if (view === "approve") {
     const queue = products.filter(needsApproval);
     return (
@@ -10662,7 +10657,7 @@ function AdminProductHub() {
     );
   }
 
-  // ── Edit view ──
+  // -- Edit view --
   if (view === "edit" && editProduct) {
     return <AdminProductEditInline product={editProduct} onSave={async (updates) => {
       try {
@@ -10674,7 +10669,7 @@ function AdminProductHub() {
     }} onBack={()=>setView("home")}/>;
   }
 
-  // ── Requests view ──
+  // -- Requests view --
   if (view === "requests") return (
     <div>
       <button onClick={()=>setView("home")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
@@ -10682,7 +10677,7 @@ function AdminProductHub() {
     </div>
   );
 
-  // ── Reports view ──
+  // -- Reports view --
   if (view === "reports") return (
     <div>
       <button onClick={()=>setView("home")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
@@ -10690,7 +10685,7 @@ function AdminProductHub() {
     </div>
   );
 
-  // ── Home view ──
+  // -- Home view --
   return (
     <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
 
@@ -10869,7 +10864,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
     let imgAdded = 0, ingAdded = 0;
     const total = queue.length;
 
-    // ── Step 1: OBF sweep for ingredients (free, no AI) ──
+    // -- Step 1: OBF sweep for ingredients (free, no AI) --
     setTriageStatus(`Step 1/2: Fetching ingredients from Open Beauty Facts for ${queue.filter(p=>!hasIng(p)).length} products…`);
     const needIng = queue.filter(p => !hasIng(p));
 
@@ -10906,7 +10901,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
 
     if (stopRef.current) { setTriageStatus(`Stopped. ${ingAdded} ingredients + ${imgAdded} images added.`); setTriageRunning(false); return; }
 
-    // ── Step 2: Direct image search (OBF → Sephora → ULTA → Amazon) ──
+    // -- Step 2: Direct image search (OBF → Sephora → ULTA → Amazon) --
     const needImg = products.filter(p => !hasImg(p)); // re-check after OBF step may have updated
     setTriageStatus(`Step 2/2: Finding images for ${needImg.length} products… (${ingAdded} ingredients already added)`);
 
@@ -10943,7 +10938,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
   return (
     <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
 
-      {/* ── What to do next banner ── */}
+      {/* -- What to do next banner -- */}
       <div style={{background:`linear-gradient(135deg,${T.accent}18,${T.accent}08)`,border:`1px solid ${T.accent}33`,borderRadius:"1rem",padding:"0.85rem 1rem",display:"flex",alignItems:"center",gap:"0.75rem"}}>
         <div style={{fontSize:"1.5rem",flexShrink:0}}>{recommendation.icon}</div>
         <div style={{flex:1}}>
@@ -10958,7 +10953,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
         )}
       </div>
 
-      {/* ── Stats row ── */}
+      {/* -- Stats row -- */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0.5rem"}}>
         {[
           {label:"Have image",  val:withImg, color:T.sage,  pct:Math.round(withImg/Math.max(total,1)*100)},
@@ -10975,7 +10970,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
         ))}
       </div>
 
-      {/* ── Manual image triage button ── */}
+      {/* -- Manual image triage button -- */}
       {noImg > 0 && (
         <button onClick={()=>setSection("products")}
           style={{background:T.surface,borderRadius:"0.85rem",padding:"0.75rem 1rem",border:`1.5px solid ${T.accent}33`,cursor:"pointer",textAlign:"left",width:"100%",display:"flex",alignItems:"center",gap:"0.75rem"}}>
@@ -10988,12 +10983,12 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
         </button>
       )}
 
-      {/* ── Fix Amazon URLs (one-time cleanup) ── */}
+      {/* -- Fix Amazon URLs (one-time cleanup) -- */}
       {products.some(p => (p.adminImage||"").includes("media-amazon") || (p.adminImage||"").includes("ssl-images-amazon")) && (
         <FixAmazonUrls products={products} onFixed={loadProducts}/>
       )}
 
-      {/* ── Quick action buttons ── */}
+      {/* -- Quick action buttons -- */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
         <button onClick={()=>setSection("imagepicker")}
           style={{padding:"0.7rem",background:T.navy,border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
@@ -11012,7 +11007,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
         </button>
       </div>
 
-      {/* ── Product grid ── */}
+      {/* -- Product grid -- */}
       <div style={{background:T.surface,borderRadius:"1rem",border:`1px solid ${T.border}`,overflow:"hidden"}}>
         <div style={{padding:"0.65rem 0.85rem",borderBottom:`1px solid ${T.border}`,fontSize:"0.62rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.07em",fontFamily:"'Inter',sans-serif"}}>
           All products · image status
@@ -11062,7 +11057,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
 }
 
 
-// ── Admin: Explore Top 100 Auto-manager ───────────────────────
+// -- Admin: Explore Top 100 Auto-manager -----------------------
 function AdminExploreTop100() {
   const [products, setProducts] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
@@ -11254,7 +11249,7 @@ function AdminExploreTop100() {
 }
 
 
-// ── Admin: Image Review (swipe-style) ─────────────────────────
+// -- Admin: Image Review (swipe-style) -------------------------
 function AdminImageReview() {
   const [products, setProducts] = React.useState([]);
   const [idx, setIdx] = React.useState(0);
@@ -11524,7 +11519,7 @@ function AdminIngredientFiller() {
     setLoading(false);
   }
 
-  // ── Source 1: OBF by barcode ──────────────────────────────────
+  // -- Source 1: OBF by barcode ----------------------------------
   async function tryOBFBarcode(p) {
     if (!p.barcode || /^seed_/.test(p.barcode)) return null;
     try {
@@ -11538,7 +11533,7 @@ function AdminIngredientFiller() {
     return null;
   }
 
-  // ── Source 2: OBF by name ─────────────────────────────────────
+  // -- Source 2: OBF by name -------------------------------------
   async function tryOBFName(p) {
     try {
       const q = encodeURIComponent(`${p.brand||""} ${p.productName||""}`.trim());
@@ -11554,7 +11549,7 @@ function AdminIngredientFiller() {
     return null;
   }
 
-  // ── Source 3: Sephora ─────────────────────────────────────────
+  // -- Source 3: Sephora -----------------------------------------
   async function trySephora(p) {
     try {
       const q = encodeURIComponent(`${p.brand||""} ${p.productName||""}`.trim());
@@ -11576,7 +11571,7 @@ function AdminIngredientFiller() {
     return null;
   }
 
-  // ── Source 4: ULTA ────────────────────────────────────────────
+  // -- Source 4: ULTA --------------------------------------------
   async function tryUlta(p) {
     try {
       const q = encodeURIComponent(`${p.brand||""} ${p.productName||""}`.trim());
@@ -11597,7 +11592,7 @@ function AdminIngredientFiller() {
     return null;
   }
 
-  // ── Source 5: Amazon scrape ───────────────────────────────────
+  // -- Source 5: Amazon scrape -----------------------------------
   async function tryAmazon(p) {
     try {
       const q = encodeURIComponent(`${p.brand||""} ${p.productName||""} skincare ingredients`);
@@ -11611,7 +11606,7 @@ function AdminIngredientFiller() {
     return null;
   }
 
-  // ── Source 6: AI (haiku) — last resort ───────────────────────
+  // -- Source 6: AI (haiku) — last resort -----------------------
   async function tryAI(p) {
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -11638,7 +11633,7 @@ function AdminIngredientFiller() {
     return null;
   }
 
-  // ── Waterfall: try all sources in order ──────────────────────
+  // -- Waterfall: try all sources in order ----------------------
   async function findIngredients(p) {
     const result =
       await tryOBFBarcode(p) ||
@@ -11708,7 +11703,7 @@ function AdminIngredientFiller() {
     setAutoRunning(false);
   }
 
-  // ── Manual filler (existing) ──────────────────────────────────
+  // -- Manual filler (existing) ----------------------------------
   async function saveDraft(pid) {
     const text = (drafts[pid]||"").trim();
     if (!text) return;
@@ -11759,7 +11754,7 @@ function AdminIngredientFiller() {
   return (
     <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
 
-      {/* ── Auto-fill card ── */}
+      {/* -- Auto-fill card -- */}
       <div style={{background:"linear-gradient(135deg,#0F172A,#1a2744)",borderRadius:"1rem",padding:"1rem",border:`1px solid ${T.accent}33`}}>
         <div style={{fontSize:"0.82rem",fontWeight:"700",color:"#fff",fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>🧪 Auto-fill Ingredients</div>
         <div style={{fontSize:"0.62rem",color:"rgba(255,255,255,0.45)",marginBottom:"0.75rem"}}>
@@ -11810,7 +11805,7 @@ function AdminIngredientFiller() {
         )}
       </div>
 
-      {/* ── Manual filler ── */}
+      {/* -- Manual filler -- */}
       <div style={{display:"flex",gap:"0.5rem",alignItems:"center"}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…"
           style={{flex:1,padding:"0.5rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",background:T.bg,color:T.text,outline:"none",fontFamily:"'Inter',sans-serif"}}/>
@@ -11868,7 +11863,7 @@ function AdminIngredientFiller() {
 }
 
 
-// ── AdminIngredientReports — review user-submitted corrections + run full audit ──
+// -- AdminIngredientReports — review user-submitted corrections + run full audit --
 function AdminIngredientReports() {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -12357,7 +12352,7 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
   );
 }
 
-// ── Admin: Product Requests Tab ────────────────────────────────
+// -- Admin: Product Requests Tab --------------------------------
 function AdminRequestsTab() {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading]   = useState(true);
@@ -12424,7 +12419,7 @@ function AdminRequestsTab() {
   );
 }
 
-// ── Contacts-based follow suggestions ─────────────────────────
+// -- Contacts-based follow suggestions -------------------------
 function ContactSuggestions({currentUid, currentProfile, onFollow, onUserTap}) {
   const [suggestions, setSuggestions] = useState([]);
   const [followed, setFollowed] = useState(new Set());
@@ -12476,7 +12471,7 @@ function ContactSuggestions({currentUid, currentProfile, onFollow, onUserTap}) {
   );
 }
 
-// ── Following list ─────────────────────────────────────────────
+// -- Following list ---------------------------------------------
 function FollowingList({uids, currentUid, onUserTap, onUnfollow}) {
   const [users, setUsers] = useState([]);
   const [unfollowed, setUnfollowed] = useState(new Set());
@@ -12511,8 +12506,8 @@ function FollowingList({uids, currentUid, onUserTap, onUnfollow}) {
   );
 }
 
-// ── Bottom Nav ────────────────────────────────────────────────
-// ── Daily rotating brand message ─────────────────────────────
+// -- Bottom Nav ------------------------------------------------
+// -- Daily rotating brand message -----------------------------
 const DAILY_MESSAGES = [
   "Real people. Real skin. Real insights.",
   "Know what's really in your routine.",
@@ -12558,7 +12553,7 @@ function getWeekIndex() {
 }
 
 // Brand taglines — shown under the brand name
-// ── Brand blurbs — why each brand is pore-safe ───────────────
+// -- Brand blurbs — why each brand is pore-safe ---------------
 const BRAND_BLURBS = {
   "cerave":            {blurb:"Every formula built around ceramides, hyaluronic acid, and niacinamide. Developed with dermatologists and free of pore-clogging fillers — the gold standard for acne-prone skin.", founder:"Founded by dermatologists who wanted effective skincare accessible to everyone."},
   "la roche-posay":    {blurb:"French pharmacy staple backed by 90,000+ dermatologists. Their Effaclar line is one of the most clinically studied for acne and congestion — minimal ingredients, maximum results.", founder:"Born from a natural thermal spring in France, trusted by dermatologists for sensitive skin."},
@@ -12606,7 +12601,7 @@ function getBrandTagline(brand) {
   return legacy[key] || "Community-verified skincare.";
 }
 
-// ── Brand of the Week ─────────────────────────────────────────
+// -- Brand of the Week -----------------------------------------
 function BrandOfTheWeek({onBrandTap}) {
   const [brandData, setBrandData] = useState(null); // {name, safeCount, totalCount, pct, products}
   const [editorial, setEditorial] = useState(null); // manual override from admin
@@ -12732,8 +12727,8 @@ function BrandOfTheWeek({onBrandTap}) {
   );
 }
 
-// ── Brand of the Week Admin Picker ───────────────────────────
-// ── Editorial Calendar ────────────────────────────────────────
+// -- Brand of the Week Admin Picker ---------------------------
+// -- Editorial Calendar ----------------------------------------
 function EditorialCalendar() {
   const [brands, setBrands]       = useState([]);
   const [entries, setEntries]     = useState([]); // [{id, type, value, tagline, scheduledFor, setAt}]
@@ -13020,7 +13015,7 @@ function PageHero({pageTitle, pageIcon, fixed, rightAction}) {
 }
 
 // Brand board icons — thin stroke, exact shapes from the spec
-// ── Firestore helpers for messaging ──────────────────────────
+// -- Firestore helpers for messaging --------------------------
 function convId(uid1, uid2) {
   return [uid1, uid2].sort().join("_");
 }
@@ -13051,7 +13046,7 @@ async function sendMessage(fromUid, toUid, msg) {
   }).catch(() => {});
 }
 
-// ── MessagesPage ──────────────────────────────────────────────
+// -- MessagesPage ----------------------------------------------
 function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, chatCloseRef }) {
   const [convos, setConvos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -13311,7 +13306,7 @@ function ConvoRow({ convoId, otherUid, lastMessage, lastAt, unread, onOpen, curr
   );
 }
 
-// ── ChatView ──────────────────────────────────────────────────
+// -- ChatView --------------------------------------------------
 function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
@@ -13550,7 +13545,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
   );
 }
 
-// ── ProductPickerModal — lets user pick a product to share ────
+// -- ProductPickerModal — lets user pick a product to share ----
 function ProductPickerModal({ user, onSelect, onClose }) {
   const [q, setQ] = useState("");
   const [allProducts, setAllProducts] = useState([]);
@@ -13701,7 +13696,7 @@ function BottomNav({tab, onChange, unreadCount=0, msgUnread=0, currentUid="", is
   );
 }
 
-// ── Root App ──────────────────────────────────────────────────
+// -- Root App --------------------------------------------------
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = {error:null, info:null}; }
   static getDerivedStateFromError(e) { return {error:e}; }
@@ -13748,7 +13743,7 @@ if (typeof document !== "undefined") {
   const appleLink = document.createElement('link'); appleLink.rel = 'apple-touch-icon'; appleLink.href = iconSvg; document.head.appendChild(appleLink);
 }
 
-// ── Debug Panel — admin-only floating log viewer ─────────────
+// -- Debug Panel — admin-only floating log viewer -------------
 const debugLogs = { entries: [], listeners: [] };
 function debugLog(type, msg, data) {
   const entry = { type, msg, data, ts: Date.now() };
@@ -13904,7 +13899,7 @@ export default function App() {
 }
 
 function AppInner() {
-  // ── Global autofix runner state (persists across all navigation) ──
+  // -- Global autofix runner state (persists across all navigation) --
   const [afRunning, setAfRunning]   = useState(false);
   const [afLog, setAfLog]           = useState([]);
   const [afDone, setAfDone]         = useState(false);
