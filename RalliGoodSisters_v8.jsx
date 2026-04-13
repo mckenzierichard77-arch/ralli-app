@@ -1705,7 +1705,7 @@ function ShareProductModal({ user, product, onClose }) {
   );
 
   return ReactDOM.createPortal(
-    <div style={{ position:"fixed",top:0,left:0,right:0,bottom:0, zIndex:9000, background:"rgba(0,0,0,0.45)", display:"flex", flexDirection:"column", justifyContent:"flex-end", alignItems:"center" }} onClick={onClose}>
+    <div style={{ position:"fixed",top:0,left:0,right:0,bottom:0, zIndex:19000, background:"rgba(0,0,0,0.45)", display:"flex", flexDirection:"column", justifyContent:"flex-end", alignItems:"center" }} onClick={onClose}>
       <div style={{ width:"100%", maxWidth:"480px", background:T.surface, borderRadius:"1.25rem 1.25rem 0 0", padding:"1rem 1rem calc(1rem + env(safe-area-inset-bottom))", maxHeight:"65vh", display:"flex", flexDirection:"column" }} onClick={e => e.stopPropagation()}>
         {/* Handle */}
         <div style={{ width:"36px", height:"4px", borderRadius:"2px", background:T.border, margin:"0 auto 0.9rem" }}/>
@@ -2329,6 +2329,11 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
   const buyUrl = product.buyUrl || amazonUrl(product.productName||product.name||"", product.brand||"", product.barcode||product.code||"");
 
   return (
+    <>
+    {shareOpen && ReactDOM.createPortal(
+      <ShareProductModal user={user||{uid:""}} product={product} onClose={()=>setShareOpen(false)}/>,
+      document.body
+    )}
     <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9500,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}}>
       {/* Backdrop */}
       <div onClick={()=>{setSelectedIngredient(null);onClose();}} style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(28,28,26,0.45)",backdropFilter:"blur(4px)",cursor:"pointer"}}/>
@@ -2344,8 +2349,6 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
           </button>
           <button onClick={onClose} style={{position:"absolute",right:0,top:"50%",transform:"translateY(-50%)",background:T.surfaceAlt,border:"none",borderRadius:"50%",width:"28px",height:"28px",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:"0.9rem",color:T.textMid}}>✕</button>
         </div>
-        {shareOpen&&<ShareProductModal user={user||{uid:""}} product={product} onClose={()=>setShareOpen(false)}/>}
-
         {/* ── 1. Product image ── */}
         <div style={{width:"100%",height:"190px",background:`linear-gradient(135deg,${T.iceBlue}40,${T.surfaceAlt})`,borderRadius:"1rem",overflow:"hidden",marginBottom:"1.1rem",display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${T.iceBlue}66`}}>
           <ProductImage src={product.image} name={product.productName} brand={product.brand} barcode={product.barcode}/>
@@ -3239,7 +3242,9 @@ function AddProductModal({onClose, onAdded, user, prefillBarcode="", prefillName
         )}
       </div>
     </div>
-  , document.body);
+    </div>
+    </>
+  );
 }
 
 
