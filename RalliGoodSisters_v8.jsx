@@ -10348,13 +10348,20 @@ function AdminImagePicker({products, setProducts, onBack}) {
         <div style={{fontSize:"0.7rem",color:T.textLight,marginTop:"3px",fontFamily:"'Inter',sans-serif"}}>{product.category} · pore score {product.poreScore??0}/5</div>
       </div>
 
-      {/* Search button */}
+      {/* Search buttons */}
       {!loading && candidates.length === 0 && !saved && (
-        <button onClick={search}
-          style={{width:"100%",padding:"0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.85rem",cursor:"pointer",fontWeight:"600",fontSize:"0.9rem",fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem"}}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          Find images with AI
-        </button>
+        <div style={{display:"flex",flexDirection:"column",gap:"0.5rem",marginBottom:"0.75rem"}}>
+          <button onClick={search}
+            style={{width:"100%",padding:"0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.85rem",cursor:"pointer",fontWeight:"600",fontSize:"0.9rem",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem"}}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Find images with AI
+          </button>
+          <a href={`https://www.google.com/search?q=${encodeURIComponent((product.brand||"")+" "+(product.productName||"")+" product")}&tbm=isch`} target="_blank" rel="noopener noreferrer"
+            style={{width:"100%",padding:"0.75rem",background:"none",border:`1.5px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",fontWeight:"600",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem",color:T.text,textDecoration:"none",boxSizing:"border-box"}}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            Google it → copy image URL and paste below
+          </a>
+        </div>
       )}
 
       {loading && (
