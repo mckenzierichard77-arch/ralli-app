@@ -22,7 +22,6 @@ const firebaseApp = initializeApp({
 });
 const auth     = getAuth(firebaseApp);
 const db       = getFirestore(firebaseApp);
-const gProvider = new GoogleAuthProvider();
 
 // -- Product images now live in Firestore (adminImage field on each product doc) --
 
@@ -10519,10 +10518,16 @@ function AdminProductEditInline({product, onSave, onBack}) {
       <label style={lbl}>Buy URL</label>
       <input value={buyUrl} onChange={e=>setBuyUrl(e.target.value)} placeholder="https://..." style={inp}/>
 
-      <label style={lbl}>
-        Ingredients
-        {liveScore!=null && <span style={{marginLeft:"0.5rem",color:ps.color,fontWeight:"600"}}> · Pore score: {liveScore}/5 ({ps.label})</span>}
-      </label>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.3rem"}}>
+        <label style={{...lbl,marginBottom:0}}>
+          Ingredients
+          {liveScore!=null && <span style={{marginLeft:"0.5rem",color:ps.color,fontWeight:"600"}}> · {liveScore}/5 ({ps.label})</span>}
+        </label>
+        <a href={`https://www.google.com/search?q=${encodeURIComponent((brand||name)+" ingredients INCI")}`} target="_blank" rel="noopener noreferrer"
+          style={{fontSize:"0.68rem",color:T.accent,textDecoration:"none",fontFamily:"'Inter',sans-serif",fontWeight:"600",flexShrink:0}}>
+          Google it →
+        </a>
+      </div>
       <textarea value={ingredients} onChange={e=>setIngredients(e.target.value)} rows={5}
         placeholder="Water, Glycerin, Niacinamide…"
         style={{...inp,resize:"vertical",lineHeight:1.6,marginBottom:"0.75rem"}}/>
