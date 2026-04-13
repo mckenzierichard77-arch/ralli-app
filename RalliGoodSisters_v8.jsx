@@ -1649,7 +1649,8 @@ function ShareProductModal({ user, product, onClose }) {
   }, [searchQ]);
 
   async function shareToUser(toUser) {
-    if (!user?.uid || !toUser?.uid) { alert("Could not send — please try again"); return; }
+    if (!user?.uid) { alert("Please sign in to share products"); return; }
+    if (!toUser?.uid) { alert("Could not find that user — please try again"); return; }
     try {
       let productName = product.productName || product.name || "Product";
       let brand = product.brand || "";
@@ -2343,7 +2344,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
           </button>
           <button onClick={onClose} style={{position:"absolute",right:0,top:"50%",transform:"translateY(-50%)",background:T.surfaceAlt,border:"none",borderRadius:"50%",width:"28px",height:"28px",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:"0.9rem",color:T.textMid}}>✕</button>
         </div>
-        {shareOpen&&user&&<ShareProductModal user={user} product={product} onClose={()=>setShareOpen(false)}/>}
+        {shareOpen&&<ShareProductModal user={user||{uid:""}} product={product} onClose={()=>setShareOpen(false)}/>}
 
         {/* ── 1. Product image ── */}
         <div style={{width:"100%",height:"190px",background:`linear-gradient(135deg,${T.iceBlue}40,${T.surfaceAlt})`,borderRadius:"1rem",overflow:"hidden",marginBottom:"1.1rem",display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${T.iceBlue}66`}}>
