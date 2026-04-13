@@ -1192,7 +1192,7 @@ async function getOrCreateProfile(user) {
     const snap = await getDoc(ref);
     if (snap.exists()) return snap.data();
     const profile = {
-      uid:user.uid, displayName:user.displayName||"Skincare Lover",
+      uid:user.uid, displayName:user.displayName||user.email?.split("@")[0]||"",
       email:user.email, photoURL:user.photoURL||"",
       skinType:[], bio:"", createdAt:serverTimestamp(),
       following:[], followers:[], productHistory:[],
@@ -1202,7 +1202,7 @@ async function getOrCreateProfile(user) {
     return profile;
   } catch {
     return {
-      uid:user.uid, displayName:user.displayName||user.email?.split("@")[0]||"Skincare Lover",
+      uid:user.uid, displayName:user.displayName||user.email?.split("@")[0]||"",
       email:user.email, photoURL:"", skinType:[], bio:"",
       following:[], followers:[], productHistory:[],
       isNew: true,
@@ -2647,6 +2647,7 @@ function OnboardingFlow({user, profile, onComplete}) {
   const [step, setStep] = useState(0);
   const [skinTypes, setSkinTypes] = useState([]);
   const [concerns, setConcerns] = useState([]);
+  const [displayName, setDisplayName] = useState(user?.displayName||"");
   const [pronoun, setPronoun] = useState("");
   const [saving, setSaving] = useState(false);
   const [followed, setFollowed] = useState(new Set());
@@ -2665,14 +2666,16 @@ function OnboardingFlow({user, profile, onComplete}) {
     if (suggestedUsers.length) return;
     setLoadingSuggested(true);
     try {
-      const snap = await getDocs(query(collection(db,"users"), limit(20)));
+      const snap = await getDocs(query(collection(db,"users"), limit(50)));
       const all = snap.docs.map(d=>({uid:d.id,...d.data()})).filter(u=>u.uid!==user.uid && u.displayName);
-      // Prefer users with matching skin types, then by follower count
+      // Prioritise: founders first, then skin-type matches, then follower count
+      const FOUNDER_EMAILS = ["mckenzierichard77@gmail.com","morganrichard777@gmail.com"];
       const scored = all.map(u=>{
         const uSkins = Array.isArray(u.skinType)?u.skinType:[u.skinType].filter(Boolean);
         const overlap = skinTypes.filter(s=>uSkins.includes(s)).length;
-        return {...u, _score: overlap*10 + (u.followers?.length||0)};
-      }).sort((a,b)=>b._score-a._score).slice(0,6);
+        const isFounder = FOUNDER_EMAILS.includes(u.email);
+        return {...u, _score: (isFounder?1000:0) + overlap*10 + (u.followers?.length||0)};
+      }).sort((a,b)=>b._score-a._score).slice(0,8);
       setSuggestedUsers(scored);
     } catch(e) { console.error(e); }
     setLoadingSuggested(false);
@@ -2687,7 +2690,7 @@ function OnboardingFlow({user, profile, onComplete}) {
 
   async function finish() {
     setSaving(true);
-    await onComplete({skinType: skinTypes, concerns});
+    await onComplete({skinType: skinTypes, concerns, displayName: displayName.trim()||undefined});
   }
 
   const FollowStep = (
@@ -2813,8 +2816,31 @@ function OnboardingFlow({user, profile, onComplete}) {
       cta: concerns.length > 0 ? "Next →" : "Skip",
     },
     {
-      title: "Follow people with your skin type",
-      subtitle: "Your feed comes alive when you follow others — see what's working for skin like yours.",
+      title: "What's your name?",
+      subtitle: "This is how you'll appear to others on Ralli.",
+      content: (
+        <div style={{marginTop:"1.5rem"}}>
+          <input
+            value={displayName}
+            onChange={e=>setDisplayName(e.target.value)}
+            placeholder="Your name"
+            autoFocus
+            style={{width:"100%",padding:"0.85rem 1rem",borderRadius:"0.85rem",border:`1.5px solid ${T.border}`,fontSize:"1rem",color:T.text,background:"rgba(255,255,255,0.08)",outline:"none",fontFamily:"'Inter',sans-serif",color:"#fff",caretColor:"#fff"}}
+            onFocus={e=>{e.target.style.borderColor=T.sage;}}
+            onBlur={e=>{e.target.style.borderColor=T.border;}}
+          />
+          {displayName.trim().length > 0 && (
+            <div style={{textAlign:"center",fontSize:"0.7rem",color:T.sage,fontWeight:"600",marginTop:"0.75rem"}}>
+              ✓ Hi {displayName.trim()}!
+            </div>
+          )}
+        </div>
+      ),
+      cta: displayName.trim().length > 0 ? "Next →" : "Skip →",
+    },
+    {
+      title: "Follow people on Ralli",
+      subtitle: "Start with the GoodSisters founders and people who share your skin type.",
       content: FollowStep,
       cta: saving ? "Saving…" : followed.size >= 1 ? "Let's go 🎉" : "Skip for now →",
       isLast: true,
@@ -3720,7 +3746,7 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
                   const ps = poreStyle(res.avgScore||0);
                   return (
                     <button key={p.code||i} onClick={()=>selectProduct(p)}
-                      style={{width:"100%",display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.65rem 0.5rem",background:"none",border:"none",borderBottom:i<searchRes.length-1?`1px solid ${T.border}`:"none",cursor:"pointer",textAlign:"left",transition:"background 0.1s"}}
+                      style={{width:"100%",display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.65rem 0.5rem",background:p._cached?"rgba(44,122,92,0.03)":"none",border:"none",borderBottom:i<searchRes.length-1?`1px solid ${T.border}`:"none",cursor:"pointer",textAlign:"left",transition:"background 0.1s"}}
                       onMouseEnter={e=>e.currentTarget.style.background=T.surfaceAlt}
                       onMouseLeave={e=>e.currentTarget.style.background="none"}>
                       <div style={{width:"44px",height:"44px",borderRadius:"0.65rem",flexShrink:0,overflow:"hidden",background:T.surfaceAlt}}>
@@ -5101,13 +5127,13 @@ function FounderByline({onUserTap}) {
 
 // ── RoutineScore ─────────────────────────────────────────────────────────────
 function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
-  const [analysis, setAnalysis] = useState(null);
   const [expanded, setExpanded] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    if (!routine.length) { setAnalysis(null); return; }
+  // Use useMemo for instant recalculation — no async needed since shopProducts is already loaded
+  const analysis = React.useMemo(() => {
+    if (!routine.length) return null;
     // Look up each routine product's ingredients from shopProducts
     const results = routine.map(name => {
       const product = shopProducts.find(p =>
@@ -5126,7 +5152,7 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
     });
 
     const withData = results.filter(r => r.hasData);
-    if (!withData.length) { setAnalysis({ results, overall: null }); return; }
+    if (!withData.length) return { results, overall: null };
 
     // Overall routine score: avg poreScore, penalized for overlap
     const avg = withData.reduce((s,r) => s + (r.poreScore||0), 0) / withData.length;
@@ -5146,7 +5172,7 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
     const gradeColor = overall >= 7 ? T.sage : overall >= 5 ? T.amber : T.rose;
     const label = overall >= 8 ? "Skin-safe routine" : overall >= 6 ? "Mostly clear" : overall >= 4 ? "Some concern" : "High risk";
 
-    setAnalysis({ results, overall: Math.round(overall * 10) / 10, grade, gradeColor, label, overlaps, withData: withData.length });
+    return { results, overall: Math.round(overall * 10) / 10, grade, gradeColor, label, overlaps, withData: withData.length };
   }, [routine, shopProducts]);
 
   async function handleShare() {
@@ -13363,12 +13389,19 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
 
   async function sendProduct(product) {
     setShowProductPicker(false);
+    const ing = product.ingredients || "";
+    const liveScore = ing.trim().length > 10
+      ? (() => { try { const r = analyzeIngredients(ing); return r.avgScore!=null ? Math.round(r.avgScore) : null; } catch { return null; } })()
+      : null;
     await sendMessage(user.uid, other.uid, {
       type: "product",
-      productName: product.productName || product.name,
-      brand: product.brand,
-      productImage: product.productImage || product.image,
-      poreScore: product.poreScore,
+      productName: product.productName || product.name || "",
+      brand: product.brand || "",
+      productImage: product.adminImage || product.productImage || product.image || "",
+      poreScore: liveScore ?? product.poreScore ?? null,
+      hasScore: true,
+      ingredients: ing,
+      buyUrl: product.buyUrl || "",
     });
   }
 
