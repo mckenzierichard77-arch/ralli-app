@@ -2454,7 +2454,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
         )}
 
         {/* -- 6. Shop + Share -- */}
-        <div style={{display:"flex",gap:"0.5rem",marginBottom:"1rem"}}>
+        <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.4rem"}}>
           <a href={buyUrl} target="_blank" rel="noopener noreferrer"
             onClick={()=>trackProductClick(product._productId||product.id||null,product.productName||product.name||"")}
             style={{flex:1,padding:"0.75rem",background:T.navy,color:"#FFFFFF",borderRadius:"0.75rem",fontSize:"0.88rem",fontWeight:"700",textAlign:"center",textDecoration:"none",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.4rem"}}>
@@ -2465,6 +2465,10 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
             Share
           </button>
+        </div>
+
+        <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.85rem",textAlign:"center"}}>
+          Affiliate link — Ralli may earn a commission on purchases
         </div>
 
         {/* -- 7. Why this score? (collapsed by default) -- */}
@@ -2670,11 +2674,14 @@ function OnboardingFlow({user, profile, onComplete}) {
       const snap = await getDocs(query(collection(db,"users"), limit(50)));
       const all = snap.docs.map(d=>({uid:d.id,...d.data()})).filter(u=>u.uid!==user.uid && u.displayName);
       // Prioritise: founders first, then skin-type matches, then follower count
+      const FOUNDER_NAMES = ["McKenzie","Morgan","McKenzie Richard","Morgan Richard"];
       const FOUNDER_EMAILS = ["mckenzierichard77@gmail.com","morganrichard777@gmail.com"];
       const scored = all.map(u=>{
         const uSkins = Array.isArray(u.skinType)?u.skinType:[u.skinType].filter(Boolean);
         const overlap = skinTypes.filter(s=>uSkins.includes(s)).length;
-        const isFounder = FOUNDER_EMAILS.includes(u.email);
+        const isFounder = FOUNDER_EMAILS.includes(u.email) || 
+          FOUNDER_NAMES.some(n => (u.displayName||"").includes(n)) ||
+          u.isAdmin === true;
         return {...u, _score: (isFounder?1000:0) + overlap*10 + (u.followers?.length||0)};
       }).sort((a,b)=>b._score-a._score).slice(0,8);
       setSuggestedUsers(scored);
@@ -2770,16 +2777,15 @@ function OnboardingFlow({user, profile, onComplete}) {
     },
     {
       title: "What's your skin type?",
-      subtitle: "Select all that apply — we'll personalise your recommendations.",
+      subtitle: "Select all that apply — we'll personalize your recommendations.",
       content: (
         <div style={{marginTop:"1.5rem"}}>
           <div style={{display:"flex",flexWrap:"wrap",gap:"0.5rem",justifyContent:"center",marginBottom:"1rem"}}>
             {skinTypeOptions.map(t=>{
               const on = skinTypes.includes(t);
-              const icons = {Normal:"🌿",Dry:"🏜️",Oily:"💧",Combination:"☯️",Sensitive:"🌸","Acne-prone":"🎯"};
               return <button key={t} onClick={()=>toggle(skinTypes,setSkinTypes,t)}
-                style={{padding:"0.6rem 1rem",borderRadius:"999px",fontSize:"0.82rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",background:on?T.accent:T.surface,color:on?"#FFFFFF":T.textMid,border:`1.5px solid ${on?T.accent:T.border}`,transition:"all 0.15s",fontWeight:on?"600":"400",display:"flex",alignItems:"center",gap:"0.3rem"}}>
-                <span>{icons[t]||""}</span>{t}
+                style={{padding:"0.6rem 1.1rem",borderRadius:"999px",fontSize:"0.82rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",background:on?"#fff":T.surface,color:on?T.navy:T.textMid,border:`1.5px solid ${on?"#fff":T.border+"66"}`,transition:"all 0.15s",fontWeight:on?"700":"400"}}>
+                {t}
               </button>;
             })}
           </div>
@@ -2800,10 +2806,9 @@ function OnboardingFlow({user, profile, onComplete}) {
           <div style={{display:"flex",flexWrap:"wrap",gap:"0.5rem",justifyContent:"center",marginBottom:"1rem"}}>
             {concernOptions.map(c=>{
               const on = concerns.includes(c);
-              const icons = {Acne:"🎯",Blackheads:"🔬",Redness:"🌹","Dark spots":"🌑","Anti-aging":"⏳",Dullness:"✨","Large pores":"🔍",Dryness:"💧"};
               return <button key={c} onClick={()=>toggle(concerns,setConcerns,c)}
-                style={{padding:"0.6rem 1rem",borderRadius:"999px",fontSize:"0.82rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",background:on?T.accent:T.surface,color:on?"#FFFFFF":T.textMid,border:`1.5px solid ${on?T.accent:T.border}`,transition:"all 0.15s",fontWeight:on?"600":"400",display:"flex",alignItems:"center",gap:"0.3rem"}}>
-                <span>{icons[c]||""}</span>{c}
+                style={{padding:"0.6rem 1.1rem",borderRadius:"999px",fontSize:"0.82rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",background:on?"#fff":T.surface,color:on?T.navy:T.textMid,border:`1.5px solid ${on?"#fff":T.border+"66"}`,transition:"all 0.15s",fontWeight:on?"700":"400"}}>
+                {c}
               </button>;
             })}
           </div>
@@ -2817,22 +2822,21 @@ function OnboardingFlow({user, profile, onComplete}) {
       cta: concerns.length > 0 ? "Next →" : "Skip",
     },
     {
-      title: "What's your name?",
-      subtitle: "This is how you'll appear to others on Ralli.",
+      title: displayName.trim() ? `Hi, ${displayName.trim()}!` : "What's your name?",
+      subtitle: displayName.trim() ? "We pulled this from your account. Change it if you'd like." : "This is how you'll appear to others on Ralli.",
       content: (
         <div style={{marginTop:"1.5rem"}}>
           <input
             value={displayName}
             onChange={e=>setDisplayName(e.target.value)}
             placeholder="Your name"
-            autoFocus
             style={{width:"100%",padding:"0.85rem 1rem",borderRadius:"0.85rem",border:`1.5px solid ${T.border}`,fontSize:"1rem",color:"#fff",background:"rgba(255,255,255,0.08)",outline:"none",fontFamily:"'Inter',sans-serif"}}
             onFocus={e=>{e.target.style.borderColor=T.sage;}}
             onBlur={e=>{e.target.style.borderColor=T.border;}}
           />
           {displayName.trim().length > 0 && (
             <div style={{textAlign:"center",fontSize:"0.7rem",color:T.sage,fontWeight:"600",marginTop:"0.75rem"}}>
-              ✓ Hi {displayName.trim()}!
+              ✓ Looking good!
             </div>
           )}
         </div>
@@ -3899,7 +3903,10 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
       />}
 
       {/* Glossary entry card */}
-      <button onClick={()=>setShowGlossary(true)}
+              <div style={{textAlign:"center",padding:"1rem 0.5rem 0.5rem",fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.6}}>
+          Ralli is for informational purposes only and is not a substitute for professional dermatological advice.
+        </div>
+        <button onClick={()=>setShowGlossary(true)}
         style={{width:"100%",marginTop:"1rem",padding:"0.85rem 1rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",cursor:"pointer",textAlign:"left",display:"flex",alignItems:"center",gap:"0.85rem",transition:"all 0.15s",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}
         onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.transform="translateY(-1px)";}}
         onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.transform="none";}}>
