@@ -2671,15 +2671,13 @@ function OnboardingFlow({user, profile, onComplete}) {
     if (suggestedUsers.length) return;
     setLoadingSuggested(true);
     try {
-      // Fetch founders by email directly first
       const FOUNDER_EMAILS = ["mckenzierichard77@gmail.com","morganrichard777@gmail.com"];
-      const founderSnap = await getDocs(query(collection(db,"users"), where("email","in",FOUNDER_EMAILS)));
-      const founders = founderSnap.docs.map(d=>({uid:d.id,...d.data()})).filter(u=>u.uid!==user.uid && u.displayName);
+      // Fetch all users, filter client-side — no index needed
+      const snap = await getDocs(collection(db,"users"));
+      const all = snap.docs.map(d=>({uid:d.id,...d.data()})).filter(u=>u.uid!==user.uid && u.displayName);
 
-      // Then fetch other users for skin-type matching
-      const snap = await getDocs(query(collection(db,"users"), limit(50)));
-      const others = snap.docs.map(d=>({uid:d.id,...d.data()}))
-        .filter(u => u.uid!==user.uid && u.displayName && !FOUNDER_EMAILS.includes(u.email));
+      const founders = all.filter(u => FOUNDER_EMAILS.includes(u.email||""));
+      const others = all.filter(u => !FOUNDER_EMAILS.includes(u.email||""));
 
       const scored = others.map(u=>{
         const uSkins = Array.isArray(u.skinType)?u.skinType:[u.skinType].filter(Boolean);
@@ -2687,8 +2685,10 @@ function OnboardingFlow({user, profile, onComplete}) {
         return {...u, _score: overlap*10 + (u.followers?.length||0)};
       }).sort((a,b)=>b._score-a._score).slice(0,6);
 
-      setSuggestedUsers([...founders, ...scored]);
-    } catch(e) { console.error(e); }
+      const suggestions = [...founders, ...scored].slice(0,8);
+      console.log("[follow] founders found:", founders.length, "others:", scored.length);
+      setSuggestedUsers(suggestions);
+    } catch(e) { console.error("[follow] error:", e); }
     setLoadingSuggested(false);
   }
 
