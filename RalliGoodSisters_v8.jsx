@@ -2712,9 +2712,11 @@ function OnboardingFlow({user, profile, onComplete}) {
         const uSkins = Array.isArray(u.skinType)?u.skinType:[u.skinType].filter(Boolean);
         const overlap = skinTypes.filter(s=>uSkins.includes(s)).length;
         return {...u, _score: overlap*10 + (u.followers?.length||0)};
-      }).sort((a,b)=>b._score-a._score).slice(0,6);
+      // Only surface users with a real profile (photo or followers) to avoid test/placeholder accounts
+      }).filter(u => u.photoURL || (u.followers?.length||0) > 0)
+        .sort((a,b)=>b._score-a._score).slice(0,3);
 
-      const suggestions = [...founders, ...founderPlaceholders, ...scored].slice(0,8);
+      const suggestions = [...founders, ...founderPlaceholders, ...scored].slice(0,5);
       console.log("[follow] suggestions:", suggestions.length, "founders:", founders.length);
       setSuggestedUsers(suggestions);
     } catch(e) { console.error("[follow] error:", e); }
