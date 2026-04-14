@@ -2707,8 +2707,15 @@ function OnboardingFlow({user, profile, onComplete}) {
   // Trigger loadSuggested when we reach the follow step
   // Steps: 0=intro, 1=skintype, 2=concerns, 3=name, 4=follow
   React.useEffect(() => {
-    if (step === 4) loadSuggested(); // step 4 = follow step
+    console.log("[onboarding] step changed to:", step);
+    if (step >= 4) loadSuggested();
   }, [step]);
+
+  // Also preload on mount in case user skips to follow step
+  React.useEffect(() => {
+    console.log("[onboarding] mounted, preloading suggestions");
+    loadSuggested();
+  }, []);
 
   const FollowStep = (
     <div style={{marginTop:"1rem"}}>
