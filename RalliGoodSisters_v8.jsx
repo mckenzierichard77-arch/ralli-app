@@ -22,6 +22,7 @@ const firebaseApp = initializeApp({
 });
 const auth     = getAuth(firebaseApp);
 const db       = getFirestore(firebaseApp);
+const gProvider = new GoogleAuthProvider();
 
 // -- Product images now live in Firestore (adminImage field on each product doc) --
 
@@ -5220,7 +5221,9 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
         <div style={{fontSize:"0.65rem",fontWeight:"700",color:T.textLight,fontFamily:"'Inter',sans-serif",textTransform:"uppercase",letterSpacing:"0.06em"}}>Routine</div>
         {grade
           ? <div style={{fontSize:"0.95rem",fontWeight:"800",color:gradeColor,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{grade}</div>
-          : <div style={{fontSize:"0.75rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Analyzing…</div>
+          : routine.length === 0
+            ? <div style={{fontSize:"0.75rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Add products</div>
+            : <div style={{fontSize:"0.75rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>—</div>
         }
         {analysis?.overall!=null&&<div style={{fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{analysis.overall}/10</div>}
         {analysis?.label&&<div style={{fontSize:"0.65rem",color:T.textMid,fontFamily:"'Inter',sans-serif",borderLeft:`1px solid ${T.border}`,paddingLeft:"0.5rem"}}>{analysis.label}</div>}
@@ -5235,7 +5238,7 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
         <div style={{flex:1}}>
           <div style={{fontSize:"0.7rem",color:T.textLight,fontFamily:"'Inter',sans-serif",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"2px"}}>Routine Score</div>
           <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>
-            {analysis ? analysis.label : "Analyzing…"}
+            {analysis ? analysis.label : routine.length === 0 ? "Add products to your routine" : "Loading…"}
           </div>
           {analysis?.overlaps?.length > 0 && (
             <div style={{fontSize:"0.72rem",color:T.amber,marginTop:"3px",fontFamily:"'Inter',sans-serif"}}>
@@ -5752,6 +5755,8 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
 
   useEffect(()=>{
     reloadPosts();
+    // Load from cache first for instant display, then fetch full list
+    getProductCache().then(cached => { if (cached.length) setShopProducts(cached); });
     getShopProducts().then(p=>setShopProducts(p));
   },[]);
 
@@ -10633,26 +10638,62 @@ function AdminProductHub() {
 
   // -- Approve view --
   if (view === "approve") {
+    const GOOD_BRANDS = ["CeraVe","The Ordinary","La Roche-Posay","EltaMD","Paula's Choice","Cetaphil","Neutrogena","COSRX","Vanicream","Glow Recipe","Tatcha","Drunk Elephant","First Aid Beauty","SkinCeuticals","Tower28","Merit","Clearstem","Colorescience","Skinceuticals"];
     const queue = products.filter(needsApproval);
+    const goodQueue = queue.filter(p => GOOD_BRANDS.some(b => (p.brand||"").toLowerCase().includes(b.toLowerCase())));
+    const otherQueue = queue.filter(p => !GOOD_BRANDS.some(b => (p.brand||"").toLowerCase().includes(b.toLowerCase())));
+
+    async function approveAll(list) {
+      for (const p of list) await approveProduct(p);
+    }
+    async function hideAll(list) {
+      for (const p of list) await hideProduct(p);
+    }
+
     return (
       <div>
         <button onClick={()=>setView("home")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
-        <div style={{fontSize:"0.75rem",color:T.textLight,marginBottom:"1rem",fontFamily:"'Inter',sans-serif"}}>{queue.length} products ready to approve</div>
+
+        {/* Bulk actions */}
+        {goodQueue.length > 0 && (
+          <div style={{background:T.sage+"12",border:`1px solid ${T.sage}33`,borderRadius:"0.85rem",padding:"0.85rem 1rem",marginBottom:"0.75rem"}}>
+            <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.sage,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>✓ {goodQueue.length} known brands ready</div>
+            <div style={{fontSize:"0.68rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.6rem"}}>CeraVe, The Ordinary, EltaMD, COSRX and others from your seed</div>
+            <button onClick={()=>approveAll(goodQueue)}
+              style={{width:"100%",padding:"0.6rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.65rem",cursor:"pointer",fontWeight:"600",fontSize:"0.82rem",fontFamily:"'Inter',sans-serif"}}>
+              Approve all {goodQueue.length} known brands →
+            </button>
+          </div>
+        )}
+        {otherQueue.length > 0 && (
+          <div style={{background:T.rose+"10",border:`1px solid ${T.rose}33`,borderRadius:"0.85rem",padding:"0.85rem 1rem",marginBottom:"0.75rem"}}>
+            <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.rose,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>⚠ {otherQueue.length} unknown brands — review individually</div>
+            <div style={{fontSize:"0.68rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.6rem"}}>These may be low-quality OBF products. Hide ones you don't want.</div>
+            <button onClick={()=>hideAll(otherQueue)}
+              style={{width:"100%",padding:"0.6rem",background:"none",color:T.rose,border:`1px solid ${T.rose}`,borderRadius:"0.65rem",cursor:"pointer",fontWeight:"600",fontSize:"0.82rem",fontFamily:"'Inter',sans-serif"}}>
+              Hide all {otherQueue.length} unknown brands →
+            </button>
+          </div>
+        )}
+
+        {/* Individual list */}
+        <div style={{fontSize:"0.65rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.07em",fontFamily:"'Inter',sans-serif",marginBottom:"0.5rem",marginTop:"0.25rem"}}>Or review individually</div>
         {queue.length === 0 && <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>All done! ✓</div>}
         {queue.map(p => {
           const img = p.adminImage || p.image || "";
+          const isGood = GOOD_BRANDS.some(b => (p.brand||"").toLowerCase().includes(b.toLowerCase()));
           return (
-            <div key={p.id} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",padding:"0.75rem",marginBottom:"0.6rem",display:"flex",alignItems:"center",gap:"0.75rem"}}>
+            <div key={p.id} style={{background:T.surface,border:`1px solid ${isGood?T.sage+"33":T.border}`,borderRadius:"0.85rem",padding:"0.75rem",marginBottom:"0.6rem",display:"flex",alignItems:"center",gap:"0.75rem"}}>
               <div style={{width:44,height:44,borderRadius:"0.55rem",overflow:"hidden",background:T.surfaceAlt,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
                 {img ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/> : <span style={{fontSize:"0.6rem",color:T.textLight}}>no img</span>}
               </div>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:"0.65rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",fontFamily:"'Inter',sans-serif"}}>{p.brand}</div>
+                <div style={{fontSize:"0.65rem",color:isGood?T.sage:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",fontFamily:"'Inter',sans-serif"}}>{p.brand}</div>
                 <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
                 <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px",fontFamily:"'Inter',sans-serif"}}>{p.category} · pore {p.poreScore??0}/5</div>
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:"0.35rem",flexShrink:0}}>
-                <button onClick={()=>approveProduct(p)} style={{padding:"0.35rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"999px",cursor:"pointer",fontSize:"0.72rem",fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>✓ Approve</button>
+                <button onClick={()=>approveProduct(p)} style={{padding:"0.35rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"999px",cursor:"pointer",fontSize:"0.72rem",fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>✓</button>
                 <button onClick={()=>hideProduct(p)} style={{padding:"0.35rem 0.85rem",background:"none",color:T.textLight,border:`1px solid ${T.border}`,borderRadius:"999px",cursor:"pointer",fontSize:"0.72rem",fontFamily:"'Inter',sans-serif"}}>Hide</button>
               </div>
             </div>
