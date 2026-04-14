@@ -2704,6 +2704,12 @@ function OnboardingFlow({user, profile, onComplete}) {
     await onComplete({skinType: skinTypes, concerns, displayName: displayName.trim()||undefined});
   }
 
+  // Trigger loadSuggested when we reach the follow step
+  // Steps: 0=intro, 1=skintype, 2=concerns, 3=name, 4=follow
+  React.useEffect(() => {
+    if (step === 4) loadSuggested(); // step 4 = follow step
+  }, [step]);
+
   const FollowStep = (
     <div style={{marginTop:"1rem"}}>
       {loadingSuggested ? (
