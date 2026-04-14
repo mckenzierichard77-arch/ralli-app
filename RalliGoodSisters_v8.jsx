@@ -2663,6 +2663,7 @@ function OnboardingFlow({user, profile, onComplete}) {
   const [followed, setFollowed] = useState(new Set());
   const [suggestedUsers, setSuggestedUsers] = useState([]);
   const [loadingSuggested, setLoadingSuggested] = useState(false);
+  const [contactsGranted, setContactsGranted] = useState(false);
 
   const skinTypeOptions = ["Normal","Dry","Oily","Combination","Sensitive","Acne-prone"];
   const concernOptions  = ["Acne","Blackheads","Redness","Dark spots","Anti-aging","Dullness","Large pores","Dryness"];
@@ -2708,13 +2709,48 @@ function OnboardingFlow({user, profile, onComplete}) {
       const others = all.filter(u =>
         !FOUNDER_UIDS.includes(u.uid) && !FOUNDER_EMAILS.includes(u.email||"")
       );
-      const scored = others.map(u=>{
-        const uSkins = Array.isArray(u.skinType)?u.skinType:[u.skinType].filter(Boolean);
-        const overlap = skinTypes.filter(s=>uSkins.includes(s)).length;
-        return {...u, _score: overlap*10 + (u.followers?.length||0)};
-      // Only surface users with a real profile (photo or followers) to avoid test/placeholder accounts
-      }).filter(u => u.photoURL || (u.followers?.length||0) > 0)
-        .sort((a,b)=>b._score-a._score).slice(0,3);
+
+      // --- Phone Contacts API ---
+      // Try to fetch device contacts and match against Firestore user emails/phones
+      let contactEmails = new Set();
+      let contactPhones = new Set();
+      if ("contacts" in navigator && "ContactsManager" in window) {
+        try {
+          const props = ["email","tel"];
+          const contacts = await navigator.contacts.select(props, {multiple:true});
+          setContactsGranted(true);
+          contacts.forEach(c => {
+            (c.email||[]).forEach(e => contactEmails.add(e.toLowerCase().trim()));
+            (c.tel||[]).forEach(p => contactPhones.add(p.replace(/\D/g,"")));
+          });
+        } catch(e) {
+          // User denied or API unavailable — silent fallback
+          console.log("[contacts] not available or denied:", e.message);
+        }
+      }
+
+      // Tag Firestore users who match a contact
+      const taggedOthers = others.map(u => {
+        const emailMatch = u.email && contactEmails.has(u.email.toLowerCase().trim());
+        const phoneMatch = u.phone && contactPhones.has(u.phone.replace(/\D/g,""));
+        return {...u, _isContact: emailMatch || phoneMatch};
+      });
+
+      // Contacts first, then skin-type scored real profiles
+      const contactMatches = taggedOthers.filter(u => u._isContact)
+        .sort((a,b) => (b.followers?.length||0) - (a.followers?.length||0));
+
+      const skinScored = taggedOthers
+        .filter(u => !u._isContact && (u.photoURL || (u.followers?.length||0) > 0))
+        .map(u => {
+          const uSkins = Array.isArray(u.skinType)?u.skinType:[u.skinType].filter(Boolean);
+          const overlap = skinTypes.filter(s=>uSkins.includes(s)).length;
+          return {...u, _score: overlap*10 + (u.followers?.length||0)};
+        })
+        .sort((a,b)=>b._score-a._score)
+        .slice(0, Math.max(0, 3 - contactMatches.length));
+
+      const scored = [...contactMatches, ...skinScored];
 
       const suggestions = [...founders, ...founderPlaceholders, ...scored].slice(0,5);
       console.log("[follow] suggestions:", suggestions.length, "founders:", founders.length);
@@ -2748,8 +2784,51 @@ function OnboardingFlow({user, profile, onComplete}) {
     loadSuggested();
   }, []);
 
+  // Handler to re-trigger contacts permission and merge new matches into suggestions
+  async function handleFindContacts() {
+    if (!("contacts" in navigator && "ContactsManager" in window)) return;
+    setLoadingSuggested(true);
+    try {
+      const props = ["email","tel"];
+      const contacts = await navigator.contacts.select(props, {multiple:true});
+      setContactsGranted(true);
+      const contactEmails = new Set();
+      const contactPhones = new Set();
+      contacts.forEach(c => {
+        (c.email||[]).forEach(e => contactEmails.add(e.toLowerCase().trim()));
+        (c.tel||[]).forEach(p => contactPhones.add(p.replace(/\D/g,"")));
+      });
+      // Re-tag existing suggestions and fetch any newly matched users
+      const snap = await getDocs(collection(db,"users"));
+      const all = snap.docs.map(d=>({uid:d.id,...d.data()}))
+        .filter(u => u.uid !== user.uid && u.displayName);
+      const FOUNDER_UIDS = ["rNOrHLZzbXOAh58uB1tv6OXoWEq2","jXGCJEHLl8c0CGPBlU9963qFvb83"];
+      const newContacts = all
+        .filter(u => !FOUNDER_UIDS.includes(u.uid))
+        .filter(u => {
+          const emailMatch = u.email && contactEmails.has(u.email.toLowerCase().trim());
+          const phoneMatch = u.phone && contactPhones.has(u.phone.replace(/\D/g,""));
+          return emailMatch || phoneMatch;
+        })
+        .map(u => ({...u, _isContact:true}));
+      setSuggestedUsers(prev => {
+        const founders = prev.filter(u => FOUNDER_UIDS.includes(u.uid) || u._isFounder);
+        const existingUids = new Set(prev.map(u=>u.uid));
+        const merged = [...founders, ...newContacts.filter(u=>!existingUids.has(u.uid)), ...prev.filter(u=>!FOUNDER_UIDS.includes(u.uid)&&!u._isFounder)];
+        return merged.slice(0,8);
+      });
+    } catch(e) { console.log("[contacts] re-request denied:", e.message); }
+    setLoadingSuggested(false);
+  }
+
   const FollowStep = (
     <div style={{marginTop:"1rem"}}>
+      {"contacts" in navigator && "ContactsManager" in window && !contactsGranted && (
+        <button onClick={handleFindContacts}
+          style={{width:"100%",padding:"0.6rem 1rem",marginBottom:"0.75rem",background:T.surfaceAlt,border:`1.5px solid ${T.border}`,borderRadius:"0.85rem",fontSize:"0.78rem",fontWeight:"600",color:T.text,cursor:"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem"}}>
+          <span>📇</span> Find people from your contacts
+        </button>
+      )}
       {loadingSuggested ? (
         <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.82rem"}}>Finding people for you…</div>
       ) : suggestedUsers.length === 0 ? (
@@ -2760,15 +2839,26 @@ function OnboardingFlow({user, profile, onComplete}) {
             const uSkins = Array.isArray(u.skinType)?u.skinType:[u.skinType].filter(Boolean);
             const skinMatch = skinTypes.filter(s=>uSkins.includes(s));
             const isFollowed = followed.has(u.uid);
+            const isFounder = u._isFounder || ["rNOrHLZzbXOAh58uB1tv6OXoWEq2","jXGCJEHLl8c0CGPBlU9963qFvb83"].includes(u.uid);
             return (
               <div key={u.uid} style={{display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.7rem 0.85rem",background:T.surface,borderRadius:"0.85rem",border:`1px solid ${isFollowed?T.sage+"44":T.border}`,transition:"border-color 0.2s"}}>
                 <Avatar photoURL={u.photoURL} name={u.displayName} size={40}/>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName}</div>
+                  <div style={{display:"flex",alignItems:"center",gap:"0.4rem",flexWrap:"wrap"}}>
+                    <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName}</div>
+                    {isFounder && (
+                      <span style={{fontSize:"0.58rem",fontWeight:"700",color:"#fff",background:"#111827",borderRadius:"999px",padding:"0.1rem 0.45rem",letterSpacing:"0.03em",fontFamily:"'Inter',sans-serif",flexShrink:0}}>Founder</span>
+                    )}
+                    {u._isContact && !isFounder && (
+                      <span style={{fontSize:"0.58rem",fontWeight:"700",color:T.sage,background:T.sage+"18",borderRadius:"999px",padding:"0.1rem 0.45rem",letterSpacing:"0.03em",fontFamily:"'Inter',sans-serif",flexShrink:0}}>In your contacts</span>
+                    )}
+                  </div>
                   <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>
-                    {skinMatch.length > 0
-                      ? <span style={{color:T.sage,fontWeight:"600"}}>✓ {skinMatch.join(", ")} skin</span>
-                      : <span>{u.followers?.length||0} followers</span>
+                    {isFounder
+                      ? <span style={{color:T.textLight}}>GoodSisters co-founder</span>
+                      : skinMatch.length > 0
+                        ? <span style={{color:T.sage,fontWeight:"600"}}>✓ {skinMatch.join(", ")} skin</span>
+                        : <span>{u.followers?.length||0} followers</span>
                     }
                   </div>
                 </div>
@@ -2779,9 +2869,6 @@ function OnboardingFlow({user, profile, onComplete}) {
               </div>
             );
           })}
-          <div style={{textAlign:"center",fontSize:"0.68rem",color:T.textLight,marginTop:"0.25rem"}}>
-            {followed.size} of 3 recommended · you can always follow more from the Feed
-          </div>
         </div>
       )}
     </div>
