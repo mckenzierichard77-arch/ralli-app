@@ -2671,20 +2671,23 @@ function OnboardingFlow({user, profile, onComplete}) {
     if (suggestedUsers.length) return;
     setLoadingSuggested(true);
     try {
-      const snap = await getDocs(query(collection(db,"users"), limit(50)));
-      const all = snap.docs.map(d=>({uid:d.id,...d.data()})).filter(u=>u.uid!==user.uid && u.displayName);
-      // Prioritise: founders first, then skin-type matches, then follower count
-      const FOUNDER_NAMES = ["McKenzie","Morgan","McKenzie Richard","Morgan Richard"];
+      // Fetch founders by email directly first
       const FOUNDER_EMAILS = ["mckenzierichard77@gmail.com","morganrichard777@gmail.com"];
-      const scored = all.map(u=>{
+      const founderSnap = await getDocs(query(collection(db,"users"), where("email","in",FOUNDER_EMAILS)));
+      const founders = founderSnap.docs.map(d=>({uid:d.id,...d.data()})).filter(u=>u.uid!==user.uid && u.displayName);
+
+      // Then fetch other users for skin-type matching
+      const snap = await getDocs(query(collection(db,"users"), limit(50)));
+      const others = snap.docs.map(d=>({uid:d.id,...d.data()}))
+        .filter(u => u.uid!==user.uid && u.displayName && !FOUNDER_EMAILS.includes(u.email));
+
+      const scored = others.map(u=>{
         const uSkins = Array.isArray(u.skinType)?u.skinType:[u.skinType].filter(Boolean);
         const overlap = skinTypes.filter(s=>uSkins.includes(s)).length;
-        const isFounder = FOUNDER_EMAILS.includes(u.email) || 
-          FOUNDER_NAMES.some(n => (u.displayName||"").includes(n)) ||
-          u.isAdmin === true;
-        return {...u, _score: (isFounder?1000:0) + overlap*10 + (u.followers?.length||0)};
-      }).sort((a,b)=>b._score-a._score).slice(0,8);
-      setSuggestedUsers(scored);
+        return {...u, _score: overlap*10 + (u.followers?.length||0)};
+      }).sort((a,b)=>b._score-a._score).slice(0,6);
+
+      setSuggestedUsers([...founders, ...scored]);
     } catch(e) { console.error(e); }
     setLoadingSuggested(false);
   }
@@ -13969,7 +13972,11 @@ function AppInner() {
   const [profile, setProfile]   = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [tab, setTab]           = useState(()=>{
-    try { return sessionStorage.getItem('ralli_tab')||'feed'; } catch { return 'feed'; }
+    try { 
+      const saved = sessionStorage.getItem('ralli_tab');
+      // Never restore to profile on fresh load — always start on feed
+      return (saved && saved !== 'profile') ? saved : 'feed';
+    } catch { return 'feed'; }
   });
   const [tabDir, setTabDir]     = useState("tab-fade");
   const prevTabRef              = React.useRef("feed");
