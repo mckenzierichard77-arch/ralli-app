@@ -2676,22 +2676,46 @@ function OnboardingFlow({user, profile, onComplete}) {
     if (suggestedUsers.length) return;
     setLoadingSuggested(true);
     try {
+      // Hardcoded founder UIDs — always show regardless of query results
+      const FOUNDER_UIDS = [
+        "rNOrHLZzbXOAh58uB1tv6OXoWEq2", // Morgan
+        "jXGCJEHLl8c0CGPBlU9963qFvb83",  // McKenzie
+      ];
       const FOUNDER_EMAILS = ["mckenzierichard77@gmail.com","morganrichard777@gmail.com"];
-      // Fetch all users, filter client-side — no index needed
+
+      // Fetch all users
       const snap = await getDocs(collection(db,"users"));
-      const all = snap.docs.map(d=>({uid:d.id,...d.data()})).filter(u=>u.uid!==user.uid && u.displayName);
+      const all = snap.docs.map(d=>({uid:d.id,...d.data()}))
+        .filter(u => u.uid !== user.uid && u.displayName);
 
-      const founders = all.filter(u => FOUNDER_EMAILS.includes(u.email||""));
-      const others = all.filter(u => !FOUNDER_EMAILS.includes(u.email||""));
+      // Match founders by UID or email
+      const founders = all.filter(u =>
+        FOUNDER_UIDS.includes(u.uid) || FOUNDER_EMAILS.includes(u.email||"")
+      );
 
+      // If still no founders found, create placeholder cards from known data
+      const founderPlaceholders = [];
+      const FOUNDER_DEFAULTS = [
+        {uid:"rNOrHLZzbXOAh58uB1tv6OXoWEq2", displayName:"Morgan Richard", photoURL:"", skinType:["Acne-prone","Sensitive"]},
+        {uid:"jXGCJEHLl8c0CGPBlU9963qFvb83", displayName:"McKenzie Richard", photoURL:"", skinType:["Acne-prone"]},
+      ];
+      for (const f of FOUNDER_DEFAULTS) {
+        if (f.uid !== user.uid && !founders.find(u=>u.uid===f.uid)) {
+          founderPlaceholders.push({...f, _isFounder:true});
+        }
+      }
+
+      const others = all.filter(u =>
+        !FOUNDER_UIDS.includes(u.uid) && !FOUNDER_EMAILS.includes(u.email||"")
+      );
       const scored = others.map(u=>{
         const uSkins = Array.isArray(u.skinType)?u.skinType:[u.skinType].filter(Boolean);
         const overlap = skinTypes.filter(s=>uSkins.includes(s)).length;
         return {...u, _score: overlap*10 + (u.followers?.length||0)};
       }).sort((a,b)=>b._score-a._score).slice(0,6);
 
-      const suggestions = [...founders, ...scored].slice(0,8);
-      console.log("[follow] founders found:", founders.length, "others:", scored.length);
+      const suggestions = [...founders, ...founderPlaceholders, ...scored].slice(0,8);
+      console.log("[follow] suggestions:", suggestions.length, "founders:", founders.length);
       setSuggestedUsers(suggestions);
     } catch(e) { console.error("[follow] error:", e); }
     setLoadingSuggested(false);
