@@ -2614,6 +2614,11 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
           </div>
         )}
 
+        {/* -- Health + affiliate disclaimer -- */}
+        <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",textAlign:"center",padding:"0.75rem 0 0.25rem",lineHeight:1.6}}>
+          For informational purposes only — not a substitute for professional dermatological advice.{product.buyUrl&&<span> Ralli earns a commission on purchases made through our links.</span>}
+        </div>
+
         {/* -- 10. Report wrong ingredients (subtle, at the bottom) -- */}
         {user&&product.ingredients&&(()=>{
           const lowConfidence=(product.ingredients||"").split(",").length<8;
@@ -5160,10 +5165,15 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
     if (!routine.length) return null;
     // Look up each routine product's ingredients from shopProducts
     const results = routine.map(name => {
-      const product = shopProducts.find(p =>
-        p.productName?.toLowerCase() === name.toLowerCase() ||
-        p.productName?.toLowerCase().includes(name.toLowerCase())
-      );
+      const nameLow = name.toLowerCase().trim();
+      const product = shopProducts.find(p => p.productName?.toLowerCase() === nameLow)
+        || shopProducts.find(p => (p.productName||"").toLowerCase().includes(nameLow))
+        || shopProducts.find(p => nameLow.includes((p.productName||"").toLowerCase()))
+        || shopProducts.find(p => {
+          const pWords = (p.productName||"").toLowerCase().split(" ").filter(w=>w.length>3);
+          const nWords = nameLow.split(" ").filter(w=>w.length>3);
+          return pWords.length > 0 && pWords.filter(w=>nWords.includes(w)).length >= Math.min(2,pWords.length);
+        });
       if (!product?.ingredients) return { name, score: null, poreScore: null, flagged: [], irritants: [] };
       const res = analyzeIngredients(product.ingredients);
       return {
@@ -7696,11 +7706,20 @@ function ShopPage({user, profile, onUpdateProfile}) {
           onUpdateProfile={onUpdateProfile}
         />
       )}
+      <ShopDisclaimer/>
       </div>
     </div>
   );
 }
 
+
+function ShopDisclaimer() {
+  return (
+    <div style={{fontSize:"0.6rem",color:"#9AACBC",fontFamily:"'Inter',sans-serif",textAlign:"center",padding:"1rem 1.5rem 0.5rem",lineHeight:1.6}}>
+      Ralli is for informational purposes only and is not a substitute for professional dermatological advice. We earn a commission on purchases made through our links.
+    </div>
+  );
+}
 
 function ShopImageCell({p}) {
   const [status, setStatus] = useState("loading"); // loading | loaded | failed
