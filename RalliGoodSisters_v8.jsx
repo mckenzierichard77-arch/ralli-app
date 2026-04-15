@@ -2740,8 +2740,9 @@ function OnboardingFlow({user, profile, onComplete}) {
       const contactMatches = taggedOthers.filter(u => u._isContact)
         .sort((a,b) => (b.followers?.length||0) - (a.followers?.length||0));
 
+      const DEFAULT_NAMES = new Set(["skincare lover","user","ralli user","new user"]);
       const skinScored = taggedOthers
-        .filter(u => !u._isContact && (u.photoURL || (u.followers?.length||0) > 0))
+        .filter(u => !u._isContact && (u.photoURL || (u.followers?.length||0) > 0) && !DEFAULT_NAMES.has((u.displayName||"").toLowerCase()))
         .map(u => {
           const uSkins = Array.isArray(u.skinType)?u.skinType:[u.skinType].filter(Boolean);
           const overlap = skinTypes.filter(s=>uSkins.includes(s)).length;
@@ -2847,7 +2848,7 @@ function OnboardingFlow({user, profile, onComplete}) {
                   <div style={{display:"flex",alignItems:"center",gap:"0.4rem",flexWrap:"wrap"}}>
                     <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName}</div>
                     {isFounder && (
-                      <span style={{fontSize:"0.58rem",fontWeight:"700",color:"#fff",background:"#111827",borderRadius:"999px",padding:"0.1rem 0.45rem",letterSpacing:"0.03em",fontFamily:"'Inter',sans-serif",flexShrink:0}}>Founder</span>
+                      <span style={{fontSize:"0.58rem",fontWeight:"700",color:"#fff",background:"#111827",borderRadius:"999px",padding:"0.1rem 0.45rem",letterSpacing:"0.03em",fontFamily:"'Inter',sans-serif",flexShrink:0}}>Ralli Founder</span>
                     )}
                     {u._isContact && !isFounder && (
                       <span style={{fontSize:"0.58rem",fontWeight:"700",color:T.sage,background:T.sage+"18",borderRadius:"999px",padding:"0.1rem 0.45rem",letterSpacing:"0.03em",fontFamily:"'Inter',sans-serif",flexShrink:0}}>In your contacts</span>
@@ -13228,14 +13229,16 @@ async function sendMessage(fromUid, toUid, msg) {
   const ts = serverTimestamp();
   // Clean undefined values — Firestore rejects them
   const cleanMsg = Object.fromEntries(Object.entries({ ...msg, fromUid, createdAt: ts }).filter(([,v]) => v !== undefined));
+  // Message write is the critical op — surface errors from this only
   await addDoc(msgRef, cleanMsg);
-  await setDoc(convRef, {
+  // Conversation metadata — best effort, don't surface errors to user
+  setDoc(convRef, {
     participants: [fromUid, toUid],
     lastMessage: msg.type === "text" ? msg.text : msg.type === "product" ? `📦 ${msg.productName}` : "📷 Photo",
     lastAt: ts,
     [`unread_${toUid}`]: increment(1),
     [`unread_${fromUid}`]: 0,
-  }, { merge: true });
+  }, { merge: true }).catch(e => console.warn("[sendMessage] conv meta failed:", e.message));
   // In-app notification for recipient
   addDoc(collection(db, "notifications"), {
     toUid,
