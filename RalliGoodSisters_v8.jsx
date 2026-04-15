@@ -11,6 +11,9 @@ import {
   collection, query, where, orderBy, limit, getDocs, addDoc, serverTimestamp,
   onSnapshot, getCountFromServer
 } from "firebase/firestore";
+import {
+  getStorage, ref as storageRef, uploadBytes, getDownloadURL
+} from "firebase/storage";
 
 const firebaseApp = initializeApp({
   apiKey:            import.meta.env?.VITE_FIREBASE_API_KEY            || "AIzaSyCPPl-cpHpA714AgE_mJI3MDj6nSVlSJRg",
@@ -20,8 +23,9 @@ const firebaseApp = initializeApp({
   messagingSenderId: import.meta.env?.VITE_FIREBASE_MESSAGING_SENDER_ID|| "75912486030",
   appId:             import.meta.env?.VITE_FIREBASE_APP_ID             || "1:75912486030:web:ff8eebbc6f93fcf4307ddf",
 });
-const auth     = getAuth(firebaseApp);
-const db       = getFirestore(firebaseApp);
+const auth      = getAuth(firebaseApp);
+const db        = getFirestore(firebaseApp);
+const storage   = getStorage(firebaseApp);
 const gProvider = new GoogleAuthProvider();
 
 // -- Product images now live in Firestore (adminImage field on each product doc) --
@@ -11014,13 +11018,275 @@ function AdminProductHub() {
   );
 }
 
+// -- Admin: Bulk Image Upload to Firebase Storage ---------------
+// Accepts a CSV (columns: productName, brand, imageUrl) or direct file uploads.
+// For each row: fetches the image → uploads to Firebase Storage → writes permanent URL to Firestore.
+function AdminBulkImageUpload({ onBack }) {
+  const [mode, setMode] = React.useState("csv"); // "csv" | "files"
+  const [csvText, setCsvText] = React.useState("");
+  const [files, setFiles] = React.useState([]);
+  const [products, setProducts] = React.useState([]);
+  const [log, setLog] = React.useState([]);
+  const [running, setRunning] = React.useState(false);
+  const [done, setDone] = React.useState(false);
+  const [parsed, setParsed] = React.useState([]); // [{productName, brand, imageUrl}]
+  const fileInputRef = React.useRef(null);
+  const stopRef = React.useRef(false);
+
+  React.useEffect(() => {
+    getDocs(collection(db, "products")).then(snap => {
+      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, []);
+
+  function addLog(msg, type = "info") {
+    setLog(prev => [...prev, { msg, type, t: Date.now() }]);
+  }
+
+  // Parse CSV: header row (productName,brand,imageUrl) then data rows
+  function parseCsv(text) {
+    const lines = text.trim().split("\n").filter(Boolean);
+    if (lines.length < 2) return [];
+    const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g,""));
+    return lines.slice(1).map(line => {
+      // Handle quoted fields
+      const cols = [];
+      let cur = "", inQ = false;
+      for (const ch of line) {
+        if (ch === '"') { inQ = !inQ; }
+        else if (ch === "," && !inQ) { cols.push(cur.trim()); cur = ""; }
+        else cur += ch;
+      }
+      cols.push(cur.trim());
+      const row = {};
+      headers.forEach((h, i) => { row[h] = cols[i] || ""; });
+      return { productName: row.productname || row.product || row.name || "", brand: row.brand || "", imageUrl: row.imageurl || row.image || row.url || "" };
+    }).filter(r => r.productName && r.imageUrl);
+  }
+
+  function handleCsvPreview() {
+    const rows = parseCsv(csvText);
+    setParsed(rows);
+    addLog(`Parsed ${rows.length} rows from CSV`, "info");
+  }
+
+  function handleFileSelect(e) {
+    const selected = Array.from(e.target.files).filter(f => f.type.startsWith("image/"));
+    setFiles(selected);
+    setParsed(selected.map(f => ({
+      productName: f.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " "),
+      brand: "",
+      imageUrl: "",
+      file: f,
+    })));
+    addLog(`Selected ${selected.length} image files`, "info");
+  }
+
+  // Upload a single image blob to Firebase Storage, return permanent URL
+  async function uploadToStorage(blob, productId, mime) {
+    const path = `products/${productId}/image.${mime.split("/")[1] || "jpg"}`;
+    const ref = storageRef(storage, path);
+    await uploadBytes(ref, blob, { contentType: mime });
+    return await getDownloadURL(ref);
+  }
+
+  // Fetch image from URL via allorigins proxy (CORS-safe)
+  async function fetchImageBlob(url) {
+    // Try direct first
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (r.ok) {
+        const blob = await r.blob();
+        if (blob.size > 1000) return { blob, mime: blob.type || "image/jpeg" };
+      }
+    } catch {}
+    // Fallback: allorigins proxy
+    const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+    const r = await fetch(proxied, { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    if (blob.size < 1000) throw new Error("Image too small — likely a placeholder");
+    return { blob, mime: blob.type || "image/jpeg" };
+  }
+
+  // Match a parsed row to a Firestore product by name + brand
+  function matchProduct(row) {
+    const nameLow = row.productName.toLowerCase().trim();
+    const brandLow = (row.brand || "").toLowerCase().trim();
+    // Exact name match first
+    let match = products.find(p => p.productName?.toLowerCase().trim() === nameLow && (!brandLow || (p.brand||"").toLowerCase().includes(brandLow)));
+    if (!match) match = products.find(p => p.productName?.toLowerCase().includes(nameLow) || nameLow.includes(p.productName?.toLowerCase()||"zzz"));
+    return match || null;
+  }
+
+  async function runUpload() {
+    if (!parsed.length) { addLog("Nothing to upload — parse CSV or select files first", "warn"); return; }
+    setRunning(true);
+    setDone(false);
+    stopRef.current = false;
+    let ok = 0, skipped = 0, failed = 0;
+
+    for (let i = 0; i < parsed.length; i++) {
+      if (stopRef.current) { addLog("Stopped by user", "warn"); break; }
+      const row = parsed[i];
+      addLog(`[${i+1}/${parsed.length}] "${row.productName}"…`, "info");
+
+      // Match to Firestore product
+      const product = matchProduct(row);
+      if (!product) {
+        addLog(`  ✗ No matching product found in database`, "warn");
+        skipped++;
+        continue;
+      }
+
+      try {
+        let blob, mime;
+        if (row.file) {
+          // Direct file upload
+          blob = row.file;
+          mime = row.file.type || "image/jpeg";
+        } else {
+          // Fetch from URL
+          const result = await fetchImageBlob(row.imageUrl);
+          blob = result.blob;
+          mime = result.mime;
+        }
+
+        // Upload to Firebase Storage
+        const permanentUrl = await uploadToStorage(blob, product.id, mime);
+
+        // Write back to Firestore
+        await updateDoc(doc(db, "products", product.id), {
+          adminImage: permanentUrl,
+          image: permanentUrl,
+          updatedAt: Date.now(),
+        });
+
+        addLog(`  ✓ Uploaded → ${permanentUrl.slice(0, 60)}…`, "ok");
+        ok++;
+      } catch(e) {
+        addLog(`  ✗ Failed: ${e.message}`, "error");
+        failed++;
+      }
+
+      // Small delay to avoid hammering Storage
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    addLog(`\nComplete: ${ok} uploaded · ${skipped} skipped (no match) · ${failed} failed`, ok > 0 ? "ok" : "warn");
+    setRunning(false);
+    setDone(true);
+  }
+
+  const logColors = { info: T.textMid, ok: T.sage, warn: T.amber, error: T.rose };
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+      <button onClick={onBack} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",padding:0}}>← Back to Cleanup</button>
+
+      <div style={{background:T.surface,borderRadius:"1rem",padding:"1rem",border:`1px solid ${T.border}`}}>
+        <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>📦 Bulk Image Upload</div>
+        <div style={{fontSize:"0.68rem",color:T.textLight,marginBottom:"0.85rem"}}>Upload images directly to Firebase Storage. Each image gets a permanent URL written back to Firestore — no more broken external links.</div>
+
+        {/* Mode toggle */}
+        <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.85rem"}}>
+          {[{id:"csv",label:"📋 CSV Import"},{id:"files",label:"🖼 Upload Files"}].map(m => (
+            <button key={m.id} onClick={()=>{ setMode(m.id); setParsed([]); setLog([]); }}
+              style={{padding:"0.4rem 0.85rem",background:mode===m.id?"#111827":T.surfaceAlt,color:mode===m.id?"#fff":T.text,border:`1px solid ${mode===m.id?"#111827":T.border}`,borderRadius:"999px",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {mode === "csv" && (
+          <div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}>
+            <div style={{fontSize:"0.65rem",color:T.textLight,marginBottom:"0.25rem"}}>
+              CSV format: <code style={{background:T.surfaceAlt,padding:"0.1rem 0.3rem",borderRadius:"4px",fontSize:"0.65rem"}}>productName,brand,imageUrl</code> — one product per row. Header row required.
+            </div>
+            <textarea
+              value={csvText}
+              onChange={e=>setCsvText(e.target.value)}
+              placeholder={"productName,brand,imageUrl\nCeraVe Moisturising Cream,CeraVe,https://example.com/cerave.jpg\nThe Ordinary Niacinamide,The Ordinary,https://example.com/niacinamide.jpg"}
+              rows={6}
+              style={{width:"100%",padding:"0.6rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.68rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box"}}
+            />
+            <button onClick={handleCsvPreview} disabled={!csvText.trim()}
+              style={{padding:"0.45rem 1rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",color:T.text,cursor:"pointer",fontFamily:"'Inter',sans-serif",alignSelf:"flex-start"}}>
+              Preview ({parseCsv(csvText).length} rows)
+            </button>
+          </div>
+        )}
+
+        {mode === "files" && (
+          <div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}>
+            <div style={{fontSize:"0.65rem",color:T.textLight,marginBottom:"0.25rem"}}>
+              Name your image files exactly as the product name (e.g. <code style={{background:T.surfaceAlt,padding:"0.1rem 0.3rem",borderRadius:"4px",fontSize:"0.65rem"}}>CeraVe Moisturising Cream.jpg</code>). The app will match by filename to the product database.
+            </div>
+            <button onClick={()=>fileInputRef.current?.click()}
+              style={{padding:"1.5rem",border:`2px dashed ${T.border}`,borderRadius:"0.85rem",background:T.surfaceAlt,cursor:"pointer",fontSize:"0.78rem",color:T.textMid,fontFamily:"'Inter',sans-serif",textAlign:"center"}}>
+              {files.length ? `✓ ${files.length} files selected — click to change` : "Click to select image files"}
+            </button>
+            <input ref={fileInputRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={handleFileSelect}/>
+          </div>
+        )}
+
+        {/* Parsed preview */}
+        {parsed.length > 0 && (
+          <div style={{marginTop:"0.75rem",background:T.surfaceAlt,borderRadius:"0.75rem",padding:"0.65rem",maxHeight:"160px",overflowY:"auto"}}>
+            <div style={{fontSize:"0.6rem",color:T.textLight,marginBottom:"0.4rem",textTransform:"uppercase",letterSpacing:"0.06em",fontFamily:"'Inter',sans-serif"}}>Preview — {parsed.length} items</div>
+            {parsed.map((r,i) => {
+              const match = matchProduct(r);
+              return (
+                <div key={i} style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.25rem 0",borderBottom:i<parsed.length-1?`1px solid ${T.border}`:"none"}}>
+                  <span style={{fontSize:"0.7rem",color:match?T.sage:T.rose,flexShrink:0}}>{match?"✓":"✗"}</span>
+                  <span style={{fontSize:"0.68rem",color:T.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.productName}{r.brand?` · ${r.brand}`:""}</span>
+                  {!match && <span style={{fontSize:"0.6rem",color:T.rose,flexShrink:0}}>no match</span>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Action buttons */}
+        <div style={{display:"flex",gap:"0.5rem",marginTop:"0.75rem"}}>
+          <button onClick={runUpload} disabled={running || !parsed.length}
+            style={{flex:1,padding:"0.6rem 1rem",background:running||!parsed.length?"#ccc":"#111827",color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:running||!parsed.length?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
+            {running ? `Uploading… (${log.filter(l=>l.type==="ok").length}/${parsed.length})` : `Upload ${parsed.length} images to Firebase Storage`}
+          </button>
+          {running && (
+            <button onClick={()=>stopRef.current=true}
+              style={{padding:"0.6rem 0.85rem",background:T.rose+"18",color:T.rose,border:`1px solid ${T.rose}33`,borderRadius:"0.75rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+              Stop
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Log output */}
+      {log.length > 0 && (
+        <div style={{background:"#0C1220",borderRadius:"0.85rem",padding:"0.75rem",maxHeight:"220px",overflowY:"auto",fontFamily:"monospace",fontSize:"0.65rem",lineHeight:1.6}}>
+          {log.map((l,i) => (
+            <div key={i} style={{color:logColors[l.type]||"#fff",whiteSpace:"pre-wrap"}}>{l.msg}</div>
+          ))}
+        </div>
+      )}
+
+      {done && (
+        <div style={{background:T.sage+"18",border:`1px solid ${T.sage}44`,borderRadius:"0.85rem",padding:"0.75rem 1rem",fontSize:"0.75rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif",textAlign:"center"}}>
+          ✓ Upload complete — images are now permanently stored in Firebase Storage
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog}) {
   const [products, setProducts] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [triageRunning, setTriageRunning] = React.useState(false);
   const [triageStatus, setTriageStatus] = React.useState("");
   const [lastRun, setLastRun] = React.useState(null);
-  const [section, setSection] = React.useState(null); // null | "fill" | "review"
+  const [section, setSection] = React.useState(null); // null | "fill" | "review" | "bulk"
   const stopRef = React.useRef(false);
 
   React.useEffect(() => { loadProducts(); }, []);
@@ -11135,6 +11401,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
   if (section === "review")  return <div><button onClick={()=>setSection(null)} style={{marginBottom:"0.75rem",background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back</button><AdminImageReview/></div>;
   if (section === "products") return <div><button onClick={()=>setSection(null)} style={{marginBottom:"0.75rem",background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back to Cleanup</button><AdminManageProducts afRunning={afRunning} afLog={afLog} afDone={afDone} afProducts={afProducts} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog} autoOpenTriage={true}/></div>;
   if (section === "imagepicker") return <AdminImagePicker products={products} setProducts={setProducts} onBack={()=>setSection(null)}/>;
+  if (section === "bulk") return <AdminBulkImageUpload onBack={()=>setSection(null)}/>;
 
 
   return (
@@ -11192,10 +11459,15 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
 
       {/* -- Quick action buttons -- */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
-        <button onClick={()=>setSection("imagepicker")}
+        <button onClick={()=>setSection("bulk")}
           style={{padding:"0.7rem",background:T.navy,border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
-          <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>🔍 AI Image Picker</div>
-          <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.6)",marginTop:"2px"}}>Claude finds images, you pick</div>
+          <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>☁️ Bulk Image Upload</div>
+          <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.6)",marginTop:"2px"}}>CSV or files → Firebase Storage</div>
+        </button>
+        <button onClick={()=>setSection("imagepicker")}
+          style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text}}>🔍 AI Image Picker</div>
+          <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"2px"}}>Claude finds images, you pick</div>
         </button>
         <button onClick={()=>setSection("fill")}
           style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
