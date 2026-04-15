@@ -12264,6 +12264,34 @@ function AdminBulkImageUpload({ onBack }) {
 function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog}) {
   const [products, setProducts] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
+
+  async function exportProductsCsv() {
+    const snap = await getDocs(collection(db, "products"));
+    const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const headers = ["productName","brand","imageUrl","ingredients","category","skinTypes","buyUrl","barcode","reason"];
+    function esc(v) {
+      v = (v == null ? "" : String(v)).replace(/\r?\n/g," ");
+      return (v.includes(",") || v.includes('"')) ? `"${v.replace(/"/g,'""')}"` : v;
+    }
+    const lines = [headers.join(",")];
+    rows.forEach(r => {
+      lines.push([
+        esc(r.productName), esc(r.brand),
+        esc(r.adminImage || r.image || ""),
+        esc(r.ingredients || ""),
+        esc(r.category || ""),
+        esc(Array.isArray(r.skinTypes) ? r.skinTypes.join(",") : r.skinTypes || ""),
+        esc(r.buyUrl || ""),
+        esc(r.barcode || ""),
+        esc(r.reason || ""),
+      ].join(","));
+    });
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "ralli_products.csv";
+    a.click();
+  }
   const [triageRunning, setTriageRunning] = React.useState(false);
   const [triageStatus, setTriageStatus] = React.useState("");
   const [lastRun, setLastRun] = React.useState(null);
@@ -12442,8 +12470,13 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
         <button onClick={()=>setSection("bulk")}
           style={{padding:"0.7rem",background:T.navy,border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
-          <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>☁️ Bulk Image Upload</div>
-          <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.6)",marginTop:"2px"}}>CSV or files → Firebase Storage</div>
+          <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>☁️ Bulk Upload</div>
+          <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.6)",marginTop:"2px"}}>CSV → Firebase Storage</div>
+        </button>
+        <button onClick={exportProductsCsv}
+          style={{padding:"0.7rem",background:T.sage,border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>⬇️ Export CSV</div>
+          <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.7)",marginTop:"2px"}}>Download all products</div>
         </button>
         <button onClick={()=>setSection("imagepicker")}
           style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
