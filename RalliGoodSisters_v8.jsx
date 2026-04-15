@@ -12261,6 +12261,307 @@ function AdminBulkImageUpload({ onBack }) {
   );
 }
 
+// ── AI Product Enrichment Pipeline ─────────────────────────────────────────
+// Paste product names + brands → Claude searches for ingredients + images automatically
+function AdminEnrichPipeline({ onBack }) {
+  const [input, setInput] = React.useState("");
+  const [queue, setQueue] = React.useState([]); // [{productName, brand, status, result}]
+  const [running, setRunning] = React.useState(false);
+  const [done, setDone] = React.useState(false);
+  const [progress, setProgress] = React.useState(0);
+  const stopRef = React.useRef(false);
+
+  // Parse pasted input — accepts:
+  //   "CeraVe Moisturizing Cream" (one per line)
+  //   "CeraVe Moisturizing Cream, CeraVe" (name, brand)
+  //   CSV with productName,brand columns
+  function parseInput(text) {
+    const lines = text.trim().split("\n").filter(Boolean);
+    if (!lines.length) return [];
+
+    // Detect CSV with header
+    const firstLower = lines[0].toLowerCase();
+    if (firstLower.includes("productname") || firstLower.includes("product_name")) {
+      const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s/g,""));
+      return lines.slice(1).map(line => {
+        const cols = [];
+        let cur = "", inQ = false;
+        for (const ch of line) {
+          if (ch === '"') { inQ = !inQ; }
+          else if (ch === "," && !inQ) { cols.push(cur.trim()); cur = ""; }
+          else cur += ch;
+        }
+        cols.push(cur.trim());
+        const r = {};
+        headers.forEach((h,i) => { r[h] = cols[i] || ""; });
+        return { productName: r.productname || r.product || r.name || "", brand: r.brand || "" };
+      }).filter(r => r.productName);
+    }
+
+    // Plain lines — "Product Name, Brand" or just "Product Name"
+    return lines.map(line => {
+      const parts = line.split(",");
+      return {
+        productName: parts[0].trim(),
+        brand: parts[1]?.trim() || ""
+      };
+    }).filter(r => r.productName);
+  }
+
+  function handlePreview() {
+    const parsed = parseInput(input);
+    setQueue(parsed.map(p => ({ ...p, status: "pending", result: null })));
+    setDone(false);
+    setProgress(0);
+  }
+
+  // Call Claude with web search to find product data
+  async function enrichProduct(productName, brand) {
+    const query = `${productName}${brand ? " by " + brand : ""} skincare full ingredient list INCI`;
+    const prompt = `Find the complete INCI ingredient list and a clean product image URL for this skincare product: "${productName}"${brand ? " by " + brand : ""}.
+
+Search the web and return ONLY a JSON object (no markdown, no explanation) with these fields:
+{
+  "ingredients": "full comma-separated INCI ingredient list or empty string if not found",
+  "imageUrl": "direct URL to a clean product image (from brand website, Sephora, ULTA, or INCI Decoder) or empty string if not found",
+  "category": "one of: Face Wash, Moisturiser, Serum, SPF, Toner, Eye Cream, Mask, Acne Treatment, Body, Hair, Lip",
+  "skinTypes": "comma-separated from: All, Oily, Dry, Sensitive, Combination, Normal, Acne-prone, Ageing, Dull, Hyperpigmentation",
+  "reason": "one sentence max 100 chars: key ingredient(s) — main benefit"
+}
+
+Rules:
+- ingredients: use the official INCI list from the brand website, Sephora, ULTA, or incidecoder.com
+- imageUrl: must be a direct image URL ending in .jpg, .png, or .webp from a reliable source
+- If you cannot find verified data, use empty string — do not fabricate
+- Return ONLY the JSON object`;
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1500,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+        messages: [{ role: "user", content: prompt }]
+      })
+    });
+
+    if (!res.ok) throw new Error(`API error ${res.status}`);
+    const data = await res.json();
+
+    // Extract text from response (may contain tool use blocks)
+    const textBlocks = (data.content || []).filter(b => b.type === "text");
+    const raw = textBlocks.map(b => b.text).join("");
+
+    // Parse JSON from response
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON in response");
+    return JSON.parse(jsonMatch[0]);
+  }
+
+  // Match product name to Firestore doc and update it
+  async function updateFirestore(productName, brand, data) {
+    // Find matching product
+    const snap = await getDocs(collection(db, "products"));
+    const nameLow = productName.toLowerCase().trim();
+    const brandLow = (brand || "").toLowerCase().trim();
+
+    let match = snap.docs.find(d => {
+      const p = d.data();
+      return p.productName?.toLowerCase().trim() === nameLow &&
+        (!brandLow || (p.brand || "").toLowerCase().includes(brandLow));
+    });
+    if (!match) match = snap.docs.find(d => {
+      const p = d.data();
+      return p.productName?.toLowerCase().includes(nameLow) ||
+        nameLow.includes((p.productName || "").toLowerCase());
+    });
+
+    if (!match) return { saved: false, reason: "No Firestore match" };
+
+    const updates = { updatedAt: Date.now() };
+    if (data.ingredients) {
+      updates.ingredients = data.ingredients;
+      try {
+        const a = analyzeIngredients(data.ingredients);
+        if (a?.avgScore != null) updates.poreScore = Math.round(a.avgScore);
+      } catch {}
+    }
+    if (data.category)  updates.category  = data.category;
+    if (data.skinTypes) updates.skinTypes  = data.skinTypes.split(",").map(s => s.trim()).filter(Boolean);
+    if (data.reason)    updates.reason     = data.reason;
+
+    // Fetch + upload image if found
+    if (data.imageUrl) {
+      try {
+        const imgRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(data.imageUrl)}`, { signal: AbortSignal.timeout(8000) });
+        if (imgRes.ok) {
+          const blob = await imgRes.blob();
+          if (blob.size > 2000) {
+            const ext = (blob.type || "image/jpeg").split("/")[1] || "jpg";
+            const ref = storageRef(storage, `products/${match.id}/image.${ext}`);
+            await uploadBytes(ref, blob, { contentType: blob.type });
+            const permanentUrl = await getDownloadURL(ref);
+            updates.adminImage = permanentUrl;
+            updates.image = permanentUrl;
+          }
+        }
+      } catch {}
+    }
+
+    await updateDoc(doc(db, "products", match.id), updates);
+    return { saved: true, updates };
+  }
+
+  async function runPipeline() {
+    if (!queue.length) return;
+    if (!ANTHROPIC_KEY) { alert("No Anthropic API key — set VITE_ANTHROPIC_KEY in Vercel"); return; }
+    setRunning(true); setDone(false); stopRef.current = false;
+    let completed = 0;
+
+    for (let i = 0; i < queue.length; i++) {
+      if (stopRef.current) {
+        setQueue(q => q.map((item, idx) => idx >= i ? { ...item, status: "stopped" } : item));
+        break;
+      }
+
+      const { productName, brand } = queue[i];
+      setQueue(q => q.map((item, idx) => idx === i ? { ...item, status: "searching" } : item));
+
+      try {
+        const data = await enrichProduct(productName, brand);
+        const { saved, updates, reason } = await updateFirestore(productName, brand, data);
+
+        const parts = [];
+        if (updates?.ingredients) parts.push("ingredients ✓");
+        if (updates?.adminImage)  parts.push("image ✓");
+        if (updates?.category)    parts.push("category ✓");
+
+        setQueue(q => q.map((item, idx) => idx === i ? {
+          ...item,
+          status: saved ? "done" : "skipped",
+          result: saved ? parts.join(", ") || "fields updated" : (reason || "no match")
+        } : item));
+        if (saved) completed++;
+      } catch(e) {
+        setQueue(q => q.map((item, idx) => idx === i ? { ...item, status: "error", result: e.message } : item));
+      }
+
+      setProgress(Math.round(((i + 1) / queue.length) * 100));
+      // Respect rate limits — 1.5s between calls
+      await new Promise(r => setTimeout(r, 1500));
+    }
+
+    setRunning(false);
+    setDone(true);
+  }
+
+  const statusColor = { pending: T.textLight, searching: T.amber, done: T.sage, error: T.rose, skipped: T.textLight, stopped: T.textLight };
+  const statusIcon  = { pending: "○", searching: "⟳", done: "✓", error: "✗", skipped: "—", stopped: "◼" };
+
+  const counts = queue.reduce((acc, q) => { acc[q.status] = (acc[q.status]||0)+1; return acc; }, {});
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+      <button onClick={onBack} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",padding:0}}>← Back to Cleanup</button>
+
+      <div style={{background:T.surface,borderRadius:"1rem",padding:"1rem",border:`1px solid ${T.border}`}}>
+        <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"0.15rem"}}>✨ AI Enrichment Pipeline</div>
+        <div style={{fontSize:"0.68rem",color:T.textLight,marginBottom:"0.85rem"}}>
+          Paste product names (one per line, optionally with brand after a comma). Claude searches the web for ingredients and images automatically — no manual Googling.
+        </div>
+
+        <textarea
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder={"CeraVe Moisturizing Cream, CeraVe\nNiacinamide 10% + Zinc 1%, The Ordinary\nUV Clear Broad-Spectrum SPF 46, EltaMD\n\nOr paste a CSV with productName,brand columns"}
+          rows={7}
+          style={{width:"100%",padding:"0.65rem",border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.72rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box",lineHeight:1.6}}
+        />
+
+        <div style={{display:"flex",gap:"0.5rem",marginTop:"0.6rem"}}>
+          <button onClick={handlePreview} disabled={!input.trim() || running}
+            style={{padding:"0.55rem 1rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",color:T.text,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+            Preview ({parseInput(input).length} products)
+          </button>
+        </div>
+      </div>
+
+      {queue.length > 0 && (
+        <div style={{background:T.surface,borderRadius:"1rem",border:`1px solid ${T.border}`,overflow:"hidden"}}>
+          {/* Header */}
+          <div style={{padding:"0.75rem 1rem",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div style={{fontSize:"0.78rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>
+              {queue.length} products queued
+              {running && <span style={{color:T.amber,marginLeft:"0.5rem",fontSize:"0.68rem"}}> — enriching…</span>}
+            </div>
+            <div style={{display:"flex",gap:"0.5rem",alignItems:"center"}}>
+              {counts.done > 0 && <span style={{fontSize:"0.65rem",color:T.sage,fontFamily:"'Inter',sans-serif"}}>✓ {counts.done} done</span>}
+              {counts.error > 0 && <span style={{fontSize:"0.65rem",color:T.rose,fontFamily:"'Inter',sans-serif"}}>✗ {counts.error} failed</span>}
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          {running && (
+            <div style={{height:"3px",background:T.surfaceAlt}}>
+              <div style={{height:"100%",background:T.amber,width:`${progress}%`,transition:"width 0.3s"}}/>
+            </div>
+          )}
+
+          {/* Queue list */}
+          <div style={{maxHeight:"280px",overflowY:"auto"}}>
+            {queue.map((item, i) => (
+              <div key={i} style={{display:"flex",alignItems:"center",gap:"0.6rem",padding:"0.5rem 1rem",borderBottom:`1px solid ${T.border}`,background:i%2===0?T.surface:T.surfaceAlt+"60"}}>
+                <span style={{fontSize:"0.8rem",color:statusColor[item.status],flexShrink:0,width:"14px",animation:item.status==="searching"?"spin 1s linear infinite":undefined}}>{statusIcon[item.status]}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:"0.72rem",fontWeight:"600",color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.productName}</div>
+                  {item.brand && <div style={{fontSize:"0.6rem",color:T.textLight}}>{item.brand}</div>}
+                </div>
+                {item.result && (
+                  <div style={{fontSize:"0.6rem",color:statusColor[item.status],flexShrink:0,textAlign:"right",maxWidth:"140px"}}>{item.result}</div>
+                )}
+                {item.status === "searching" && (
+                  <div style={{fontSize:"0.6rem",color:T.amber,flexShrink:0}}>searching…</div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Action buttons */}
+          <div style={{padding:"0.75rem 1rem",borderTop:`1px solid ${T.border}`,display:"flex",gap:"0.5rem"}}>
+            <button onClick={runPipeline} disabled={running || done}
+              style={{flex:1,padding:"0.65rem",background:running||done?"#ccc":"#7C3AED",color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:running||done?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
+              {running ? `Enriching ${queue.findIndex(q=>q.status==="searching")+1} of ${queue.length}…` : done ? "✓ Complete — run again to re-enrich" : `✨ Enrich ${queue.length} products`}
+            </button>
+            {running && (
+              <button onClick={()=>stopRef.current=true}
+                style={{padding:"0.65rem 0.85rem",background:T.rose+"18",color:T.rose,border:`1px solid ${T.rose}33`,borderRadius:"0.75rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                Stop
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {done && (
+        <div style={{background:T.sage+"18",border:`1px solid ${T.sage}44`,borderRadius:"0.85rem",padding:"0.85rem 1rem",fontSize:"0.75rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif",textAlign:"center"}}>
+          ✓ Pipeline complete — {counts.done || 0} products enriched, {counts.error || 0} failed, {counts.skipped || 0} skipped
+        </div>
+      )}
+
+      <div style={{background:T.surfaceAlt,borderRadius:"0.75rem",padding:"0.75rem 1rem",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.6}}>
+        <b style={{color:T.textMid}}>How it works:</b> For each product, Claude searches the web for the official INCI ingredient list and a clean image. Ingredients are written to Firestore and pore scores are recalculated automatically. Images are uploaded to Firebase Storage for permanent URLs. Rate: ~1 product per 2 seconds.
+      </div>
+    </div>
+  );
+}
+
+
 function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog}) {
   const [products, setProducts] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
@@ -12411,6 +12712,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
   if (section === "products") return <div><button onClick={()=>setSection(null)} style={{marginBottom:"0.75rem",background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back to Cleanup</button><AdminManageProducts afRunning={afRunning} afLog={afLog} afDone={afDone} afProducts={afProducts} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog} autoOpenTriage={true}/></div>;
   if (section === "imagepicker") return <AdminImagePicker products={products} setProducts={setProducts} onBack={()=>setSection(null)}/>;
   if (section === "bulk") return <AdminBulkImageUpload onBack={()=>setSection(null)}/>;
+  if (section === "enrich") return <AdminEnrichPipeline onBack={()=>setSection(null)}/>;
 
 
   return (
@@ -12477,6 +12779,11 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
           style={{padding:"0.7rem",background:T.sage,border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
           <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>⬇️ Export CSV</div>
           <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.7)",marginTop:"2px"}}>Download all products</div>
+        </button>
+        <button onClick={()=>setSection("enrich")}
+          style={{padding:"0.7rem",background:"#7C3AED",border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>✨ AI Enrich</div>
+          <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.7)",marginTop:"2px"}}>Auto-fill ingredients + images</div>
         </button>
         <button onClick={()=>setSection("imagepicker")}
           style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
