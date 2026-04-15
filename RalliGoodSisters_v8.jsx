@@ -13584,7 +13584,7 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
 
       {/* Tab switcher — Row 1: main sections */}
       <div style={{display:"flex",gap:"0.3rem",marginBottom:"0.3rem",background:T.surfaceAlt,padding:"0.25rem",borderRadius:"0.6rem"}}>
-        {[["overview","📊 Overview"],["products","🏪 Products"],["content","✏️ Content"]].map(([id,lbl])=>(
+        {[["overview","📊 Overview"],["products","🏪 Products"],["content","✏️ Content"],["cleanup","🧹 Cleanup"]].map(([id,lbl])=>(
           <button key={id} onClick={()=>setActiveTab(id)}
             style={{flex:1,padding:"0.5rem 0.25rem",background:activeTab===id?T.accent:"transparent",color:activeTab===id?"#FFFFFF":T.textMid,border:"none",borderRadius:"0.4rem",fontSize:"0.68rem",fontWeight:activeTab===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.15s"}}>
             {lbl}
@@ -13607,6 +13607,7 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
 
       {/* Products — single hub */}
       {activeTab==="products"&&<AdminProductHub/>}
+      {activeTab==="cleanup"&&<AdminCleanup afRunning={afRunning} afLog={afLog} afDone={afDone} afProducts={afProducts} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog}/>}
       {/* Content sub-tabs */}
       {activeTab==="schedule"&&<EditorialCalendar/>}
       {activeTab==="picks"&&<AdminFounderPicks/>}
