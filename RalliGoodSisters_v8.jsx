@@ -11022,15 +11022,12 @@ function AdminProductHub() {
 // Accepts a CSV (columns: productName, brand, imageUrl) or direct file uploads.
 // For each row: fetches the image → uploads to Firebase Storage → writes permanent URL to Firestore.
 function AdminBulkImageUpload({ onBack }) {
-  const [mode, setMode] = React.useState("csv"); // "csv" | "files"
   const [csvText, setCsvText] = React.useState("");
-  const [files, setFiles] = React.useState([]);
   const [products, setProducts] = React.useState([]);
+  const [parsed, setParsed] = React.useState([]);
   const [log, setLog] = React.useState([]);
   const [running, setRunning] = React.useState(false);
   const [done, setDone] = React.useState(false);
-  const [parsed, setParsed] = React.useState([]); // [{productName, brand, imageUrl}]
-  const fileInputRef = React.useRef(null);
   const stopRef = React.useRef(false);
 
   React.useEffect(() => {
@@ -11039,17 +11036,13 @@ function AdminBulkImageUpload({ onBack }) {
     });
   }, []);
 
-  function addLog(msg, type = "info") {
-    setLog(prev => [...prev, { msg, type, t: Date.now() }]);
-  }
-
-  // Parse CSV: header row (productName,brand,imageUrl) then data rows
+  // Parse CSV — accepts any column order, header row required
+  // Supported columns: productName, brand, imageUrl, ingredients, category, skinTypes, buyUrl, barcode, reason
   function parseCsv(text) {
     const lines = text.trim().split("\n").filter(Boolean);
     if (lines.length < 2) return [];
     const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g,""));
     return lines.slice(1).map(line => {
-      // Handle quoted fields
       const cols = [];
       let cur = "", inQ = false;
       for (const ch of line) {
@@ -11058,126 +11051,127 @@ function AdminBulkImageUpload({ onBack }) {
         else cur += ch;
       }
       cols.push(cur.trim());
-      const row = {};
-      headers.forEach((h, i) => { row[h] = cols[i] || ""; });
-      return { productName: row.productname || row.product || row.name || "", brand: row.brand || "", imageUrl: row.imageurl || row.image || row.url || "" };
-    }).filter(r => r.productName && r.imageUrl);
+      const r = {};
+      headers.forEach((h, i) => { r[h] = cols[i] || ""; });
+      return {
+        productName:  r.productname || r.product || r.name || "",
+        brand:        r.brand || "",
+        imageUrl:     r.imageurl || r.image || r.url || "",
+        ingredients:  r.ingredients || r.ingredient || "",
+        category:     r.category || "",
+        skinTypes:    r.skintypes || r.skintype || "",
+        buyUrl:       r.buyurl || r.buy || r.link || "",
+        barcode:      r.barcode || r.ean || r.upc || "",
+        reason:       r.reason || r.description || "",
+      };
+    }).filter(r => r.productName);
   }
 
-  function handleCsvPreview() {
-    const rows = parseCsv(csvText);
+  function handlePaste(text) {
+    setCsvText(text);
+    const rows = parseCsv(text);
     setParsed(rows);
-    addLog(`Parsed ${rows.length} rows from CSV`, "info");
+    setLog([]);
+    setDone(false);
   }
 
-  function handleFileSelect(e) {
-    const selected = Array.from(e.target.files).filter(f => f.type.startsWith("image/"));
-    setFiles(selected);
-    setParsed(selected.map(f => ({
-      productName: f.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " "),
-      brand: "",
-      imageUrl: "",
-      file: f,
-    })));
-    addLog(`Selected ${selected.length} image files`, "info");
+  // Match CSV row to Firestore product
+  function matchProduct(row) {
+    const nameLow = row.productName.toLowerCase().trim();
+    const brandLow = row.brand.toLowerCase().trim();
+    let match = products.find(p =>
+      p.productName?.toLowerCase().trim() === nameLow &&
+      (!brandLow || (p.brand||"").toLowerCase().includes(brandLow))
+    );
+    if (!match) match = products.find(p =>
+      p.productName?.toLowerCase().includes(nameLow) ||
+      nameLow.includes((p.productName||"").toLowerCase())
+    );
+    return match || null;
   }
 
-  // Upload a single image blob to Firebase Storage, return permanent URL
-  async function uploadToStorage(blob, productId, mime) {
-    const path = `products/${productId}/image.${mime.split("/")[1] || "jpg"}`;
-    const ref = storageRef(storage, path);
-    await uploadBytes(ref, blob, { contentType: mime });
-    return await getDownloadURL(ref);
-  }
-
-  // Fetch image from URL via allorigins proxy (CORS-safe)
   async function fetchImageBlob(url) {
-    // Try direct first
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (r.ok) {
-        const blob = await r.blob();
-        if (blob.size > 1000) return { blob, mime: blob.type || "image/jpeg" };
-      }
+      if (r.ok) { const b = await r.blob(); if (b.size > 1000) return { blob: b, mime: b.type || "image/jpeg" }; }
     } catch {}
-    // Fallback: allorigins proxy
     const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
     const r = await fetch(proxied, { signal: AbortSignal.timeout(10000) });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const blob = await r.blob();
-    if (blob.size < 1000) throw new Error("Image too small — likely a placeholder");
+    if (blob.size < 1000) throw new Error("Image too small");
     return { blob, mime: blob.type || "image/jpeg" };
   }
 
-  // Match a parsed row to a Firestore product by name + brand
-  function matchProduct(row) {
-    const nameLow = row.productName.toLowerCase().trim();
-    const brandLow = (row.brand || "").toLowerCase().trim();
-    // Exact name match first
-    let match = products.find(p => p.productName?.toLowerCase().trim() === nameLow && (!brandLow || (p.brand||"").toLowerCase().includes(brandLow)));
-    if (!match) match = products.find(p => p.productName?.toLowerCase().includes(nameLow) || nameLow.includes(p.productName?.toLowerCase()||"zzz"));
-    return match || null;
+  async function uploadToStorage(blob, productId, mime) {
+    const ext = mime.split("/")[1] || "jpg";
+    const ref = storageRef(storage, `products/${productId}/image.${ext}`);
+    await uploadBytes(ref, blob, { contentType: mime });
+    return await getDownloadURL(ref);
   }
 
   async function runUpload() {
-    if (!parsed.length) { addLog("Nothing to upload — parse CSV or select files first", "warn"); return; }
-    setRunning(true);
-    setDone(false);
+    if (!parsed.length) return;
+    setRunning(true); setDone(false); setLog([]);
     stopRef.current = false;
     let ok = 0, skipped = 0, failed = 0;
 
     for (let i = 0; i < parsed.length; i++) {
-      if (stopRef.current) { addLog("Stopped by user", "warn"); break; }
+      if (stopRef.current) { setLog(l => [...l, { msg: "Stopped.", type: "warn" }]); break; }
       const row = parsed[i];
-      addLog(`[${i+1}/${parsed.length}] "${row.productName}"…`, "info");
-
-      // Match to Firestore product
       const product = matchProduct(row);
+
       if (!product) {
-        addLog(`  ✗ No matching product found in database`, "warn");
+        setLog(l => [...l, { msg: `✗ "${row.productName}" — no match in database`, type: "warn" }]);
         skipped++;
         continue;
       }
 
       try {
-        let blob, mime;
-        if (row.file) {
-          // Direct file upload
-          blob = row.file;
-          mime = row.file.type || "image/jpeg";
-        } else {
-          // Fetch from URL
-          const result = await fetchImageBlob(row.imageUrl);
-          blob = result.blob;
-          mime = result.mime;
+        // Build Firestore update — only include fields that have values
+        const updates = { updatedAt: Date.now() };
+        if (row.ingredients) {
+          updates.ingredients = row.ingredients;
+          try { const a = analyzeIngredients(row.ingredients); if (a?.avgScore != null) updates.poreScore = Math.round(a.avgScore); } catch {}
+        }
+        if (row.category)  updates.category  = row.category;
+        if (row.skinTypes) updates.skinTypes  = row.skinTypes.split(",").map(s => s.trim()).filter(Boolean);
+        if (row.buyUrl)    updates.buyUrl     = row.buyUrl;
+        if (row.barcode)   updates.barcode    = row.barcode;
+        if (row.reason)    updates.reason     = row.reason;
+
+        // Upload image if URL provided
+        if (row.imageUrl) {
+          const { blob, mime } = await fetchImageBlob(row.imageUrl);
+          const permanentUrl = await uploadToStorage(blob, product.id, mime);
+          updates.adminImage = permanentUrl;
+          updates.image = permanentUrl;
         }
 
-        // Upload to Firebase Storage
-        const permanentUrl = await uploadToStorage(blob, product.id, mime);
+        await updateDoc(doc(db, "products", product.id), updates);
 
-        // Write back to Firestore
-        await updateDoc(doc(db, "products", product.id), {
-          adminImage: permanentUrl,
-          image: permanentUrl,
-          updatedAt: Date.now(),
-        });
+        const parts = [];
+        if (updates.adminImage) parts.push("image ✓");
+        if (updates.ingredients) parts.push("ingredients ✓");
+        if (updates.category) parts.push("category ✓");
+        if (updates.barcode) parts.push("barcode ✓");
 
-        addLog(`  ✓ Uploaded → ${permanentUrl.slice(0, 60)}…`, "ok");
+        setLog(l => [...l, { msg: `✓ "${row.productName}" — ${parts.join(", ")}`, type: "ok" }]);
         ok++;
       } catch(e) {
-        addLog(`  ✗ Failed: ${e.message}`, "error");
+        setLog(l => [...l, { msg: `✗ "${row.productName}" — ${e.message}`, type: "error" }]);
         failed++;
       }
 
-      // Small delay to avoid hammering Storage
       await new Promise(r => setTimeout(r, 300));
     }
 
-    addLog(`\nComplete: ${ok} uploaded · ${skipped} skipped (no match) · ${failed} failed`, ok > 0 ? "ok" : "warn");
+    setLog(l => [...l, { msg: `Done: ${ok} updated · ${skipped} skipped · ${failed} failed`, type: ok > 0 ? "ok" : "warn" }]);
     setRunning(false);
     setDone(true);
   }
 
+  const matched = parsed.filter(r => matchProduct(r)).length;
   const logColors = { info: T.textMid, ok: T.sage, warn: T.amber, error: T.rose };
 
   return (
@@ -11185,95 +11179,66 @@ function AdminBulkImageUpload({ onBack }) {
       <button onClick={onBack} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",padding:0}}>← Back to Cleanup</button>
 
       <div style={{background:T.surface,borderRadius:"1rem",padding:"1rem",border:`1px solid ${T.border}`}}>
-        <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>📦 Bulk Image Upload</div>
-        <div style={{fontSize:"0.68rem",color:T.textLight,marginBottom:"0.85rem"}}>Upload images directly to Firebase Storage. Each image gets a permanent URL written back to Firestore — no more broken external links.</div>
-
-        {/* Mode toggle */}
-        <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.85rem"}}>
-          {[{id:"csv",label:"📋 CSV Import"},{id:"files",label:"🖼 Upload Files"}].map(m => (
-            <button key={m.id} onClick={()=>{ setMode(m.id); setParsed([]); setLog([]); }}
-              style={{padding:"0.4rem 0.85rem",background:mode===m.id?"#111827":T.surfaceAlt,color:mode===m.id?"#fff":T.text,border:`1px solid ${mode===m.id?"#111827":T.border}`,borderRadius:"999px",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-              {m.label}
-            </button>
-          ))}
+        <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>☁️ Bulk Product Upload</div>
+        <div style={{fontSize:"0.68rem",color:T.textLight,marginBottom:"0.85rem"}}>
+          Paste your CSV below. Columns: <code style={{background:T.surfaceAlt,padding:"0.1rem 0.3rem",borderRadius:"4px"}}>productName, brand, imageUrl, ingredients, category, skinTypes, buyUrl, barcode, reason</code> — only <b>productName</b> is required, everything else is optional.
         </div>
 
-        {mode === "csv" && (
-          <div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}>
-            <div style={{fontSize:"0.65rem",color:T.textLight,marginBottom:"0.25rem"}}>
-              CSV format: <code style={{background:T.surfaceAlt,padding:"0.1rem 0.3rem",borderRadius:"4px",fontSize:"0.65rem"}}>productName,brand,imageUrl</code> — one product per row. Header row required.
-            </div>
-            <textarea
-              value={csvText}
-              onChange={e=>setCsvText(e.target.value)}
-              placeholder={"productName,brand,imageUrl\nCeraVe Moisturising Cream,CeraVe,https://example.com/cerave.jpg\nThe Ordinary Niacinamide,The Ordinary,https://example.com/niacinamide.jpg"}
-              rows={6}
-              style={{width:"100%",padding:"0.6rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.68rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box"}}
-            />
-            <button onClick={handleCsvPreview} disabled={!csvText.trim()}
-              style={{padding:"0.45rem 1rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",color:T.text,cursor:"pointer",fontFamily:"'Inter',sans-serif",alignSelf:"flex-start"}}>
-              Preview ({parseCsv(csvText).length} rows)
-            </button>
-          </div>
-        )}
+        <textarea
+          value={csvText}
+          onChange={e => handlePaste(e.target.value)}
+          placeholder={"productName,brand,imageUrl,ingredients,category\nCeraVe Moisturising Cream,CeraVe,https://cerave.com/image.jpg,\"water, glycerin, ceramide np\",Moisturiser"}
+          rows={7}
+          style={{width:"100%",padding:"0.65rem",border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.68rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box",lineHeight:1.5}}
+        />
 
-        {mode === "files" && (
-          <div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}>
-            <div style={{fontSize:"0.65rem",color:T.textLight,marginBottom:"0.25rem"}}>
-              Name your image files exactly as the product name (e.g. <code style={{background:T.surfaceAlt,padding:"0.1rem 0.3rem",borderRadius:"4px",fontSize:"0.65rem"}}>CeraVe Moisturising Cream.jpg</code>). The app will match by filename to the product database.
-            </div>
-            <button onClick={()=>fileInputRef.current?.click()}
-              style={{padding:"1.5rem",border:`2px dashed ${T.border}`,borderRadius:"0.85rem",background:T.surfaceAlt,cursor:"pointer",fontSize:"0.78rem",color:T.textMid,fontFamily:"'Inter',sans-serif",textAlign:"center"}}>
-              {files.length ? `✓ ${files.length} files selected — click to change` : "Click to select image files"}
-            </button>
-            <input ref={fileInputRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={handleFileSelect}/>
-          </div>
-        )}
-
-        {/* Parsed preview */}
+        {/* Preview */}
         {parsed.length > 0 && (
-          <div style={{marginTop:"0.75rem",background:T.surfaceAlt,borderRadius:"0.75rem",padding:"0.65rem",maxHeight:"160px",overflowY:"auto"}}>
-            <div style={{fontSize:"0.6rem",color:T.textLight,marginBottom:"0.4rem",textTransform:"uppercase",letterSpacing:"0.06em",fontFamily:"'Inter',sans-serif"}}>Preview — {parsed.length} items</div>
-            {parsed.map((r,i) => {
+          <div style={{marginTop:"0.65rem",background:T.surfaceAlt,borderRadius:"0.75rem",padding:"0.65rem",maxHeight:"180px",overflowY:"auto"}}>
+            <div style={{fontSize:"0.6rem",color:T.textLight,marginBottom:"0.4rem",fontFamily:"'Inter',sans-serif"}}>
+              {parsed.length} rows · {matched} matched · {parsed.length - matched} unmatched
+            </div>
+            {parsed.map((r, i) => {
               const match = matchProduct(r);
+              const fields = [r.imageUrl&&"img", r.ingredients&&"ing", r.category&&"cat", r.barcode&&"barcode"].filter(Boolean);
               return (
-                <div key={i} style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.25rem 0",borderBottom:i<parsed.length-1?`1px solid ${T.border}`:"none"}}>
-                  <span style={{fontSize:"0.7rem",color:match?T.sage:T.rose,flexShrink:0}}>{match?"✓":"✗"}</span>
+                <div key={i} style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.2rem 0",borderBottom:i<parsed.length-1?`1px solid ${T.border}`:"none"}}>
+                  <span style={{fontSize:"0.7rem",color:match?T.sage:T.rose,flexShrink:0,width:"12px"}}>{match?"✓":"✗"}</span>
                   <span style={{fontSize:"0.68rem",color:T.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.productName}{r.brand?` · ${r.brand}`:""}</span>
-                  {!match && <span style={{fontSize:"0.6rem",color:T.rose,flexShrink:0}}>no match</span>}
+                  <span style={{fontSize:"0.58rem",color:T.textLight,flexShrink:0}}>{fields.join(", ")}</span>
                 </div>
               );
             })}
           </div>
         )}
 
-        {/* Action buttons */}
+        {/* Upload button */}
         <div style={{display:"flex",gap:"0.5rem",marginTop:"0.75rem"}}>
-          <button onClick={runUpload} disabled={running || !parsed.length}
-            style={{flex:1,padding:"0.6rem 1rem",background:running||!parsed.length?"#ccc":"#111827",color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:running||!parsed.length?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
-            {running ? `Uploading… (${log.filter(l=>l.type==="ok").length}/${parsed.length})` : `Upload ${parsed.length} images to Firebase Storage`}
+          <button onClick={runUpload} disabled={running || matched === 0}
+            style={{flex:1,padding:"0.65rem 1rem",background:running||matched===0?"#ccc":"#111827",color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:running||matched===0?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
+            {running
+              ? `Uploading… (${log.filter(l=>l.type==="ok").length}/${matched})`
+              : matched > 0 ? `Upload ${matched} products` : "No matched products"}
           </button>
           {running && (
             <button onClick={()=>stopRef.current=true}
-              style={{padding:"0.6rem 0.85rem",background:T.rose+"18",color:T.rose,border:`1px solid ${T.rose}33`,borderRadius:"0.75rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+              style={{padding:"0.65rem 0.85rem",background:T.rose+"18",color:T.rose,border:`1px solid ${T.rose}33`,borderRadius:"0.75rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
               Stop
             </button>
           )}
         </div>
       </div>
 
-      {/* Log output */}
+      {/* Log */}
       {log.length > 0 && (
-        <div style={{background:"#0C1220",borderRadius:"0.85rem",padding:"0.75rem",maxHeight:"220px",overflowY:"auto",fontFamily:"monospace",fontSize:"0.65rem",lineHeight:1.6}}>
-          {log.map((l,i) => (
-            <div key={i} style={{color:logColors[l.type]||"#fff",whiteSpace:"pre-wrap"}}>{l.msg}</div>
-          ))}
+        <div style={{background:"#0C1220",borderRadius:"0.85rem",padding:"0.75rem",maxHeight:"220px",overflowY:"auto",fontFamily:"monospace",fontSize:"0.65rem",lineHeight:1.7}}>
+          {log.map((l,i) => <div key={i} style={{color:logColors[l.type]||"#fff"}}>{l.msg}</div>)}
         </div>
       )}
 
       {done && (
         <div style={{background:T.sage+"18",border:`1px solid ${T.sage}44`,borderRadius:"0.85rem",padding:"0.75rem 1rem",fontSize:"0.75rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif",textAlign:"center"}}>
-          ✓ Upload complete — images are now permanently stored in Firebase Storage
+          ✓ Complete — images stored permanently in Firebase Storage
         </div>
       )}
     </div>
