@@ -9320,17 +9320,67 @@ function AdminEnrichPipeline({ onBack }) {
   }
 
   async function enrichProduct(productName, brand) {
-    const prompt = `Find the complete INCI ingredient list and a clean product image URL for: "${productName}"${brand?" by "+brand:""}.
-Return ONLY a JSON object:
-{"ingredients":"full INCI list or empty","imageUrl":"direct image URL ending in .jpg/.png/.webp or empty","category":"one of: Face Wash,Moisturiser,Serum,SPF,Toner,Eye Cream,Mask,Acne Treatment,Body,Hair,Lip","skinTypes":"from: All,Oily,Dry,Sensitive,Combination,Normal,Acne-prone,Ageing,Dull,Hyperpigmentation","reason":"max 100 chars: key ingredients — benefit"}
-Rules: use brand website/Sephora/ULTA/incidecoder.com for ingredients. imageUrl must be direct. Never fabricate. Return ONLY the JSON.`;
-    const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:1500,tools:[{type:"web_search_20250305",name:"web_search"}],messages:[{role:"user",content:prompt}]})});
-    if (!res.ok) throw new Error(`API ${res.status}`);
+    const prompt = `You are helping build a skincare app database. Find accurate data for this product: "${productName}"${brand ? " by " + brand : ""}.
+
+Search for this product and return ONLY a valid JSON object with these exact fields:
+
+{
+  "ingredients": "the complete official INCI ingredient list copied exactly from the brand website, Sephora product page, ULTA product page, or incidecoder.com — empty string if not found",
+  "imageUrl": "a high-quality direct product image URL — MUST come from one of these sources in priority order: 1) brand's own website (e.g. cerave.com, theordinary.com, eltamd.com), 2) Sephora CDN (cdni.sephora.com or www.sephora.com/productimages), 3) ULTA (images.ulta.com), 4) Dermstore, 5) Cult Beauty. The URL MUST end in .jpg, .jpeg, .png, or .webp. Do NOT use Amazon, eBay, user-submitted photos, blog images, or thumbnails. Empty string if no high-quality source found.",
+  "category": "exactly one of: Face Wash, Moisturiser, Serum, SPF, Toner, Eye Cream, Mask, Acne Treatment, Body, Hair, Lip",
+  "skinTypes": "comma-separated from: All, Oily, Dry, Sensitive, Combination, Normal, Acne-prone, Ageing, Dull, Hyperpigmentation",
+  "reason": "one sentence max 100 chars in format: key ingredient(s) — main benefit"
+}
+
+Critical rules:
+- ingredients: copy the exact INCI list, do not summarize or paraphrase
+- imageUrl: only use official retailer/brand CDN URLs. If the best you can find is Amazon or a blog, use empty string instead
+- Never fabricate data — use empty string for any field you cannot verify
+- Return ONLY the JSON object, no other text`;
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 2000,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+        messages: [{ role: "user", content: prompt }]
+      })
+    });
+
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
     const data = await res.json();
-    const raw = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+
+    // Extract text blocks (skip tool_use blocks)
+    const raw = (data.content || [])
+      .filter(b => b.type === "text")
+      .map(b => b.text)
+      .join("");
+
+    // Parse JSON from response
     const m = raw.match(/\{[\s\S]*\}/);
-    if (!m) throw new Error("No JSON");
-    return JSON.parse(m[0]);
+    if (!m) throw new Error("No JSON in response");
+
+    const result = JSON.parse(m[0]);
+
+    // Validate imageUrl — reject known bad sources
+    const badSources = ["amazon.com","ebay.","walmart.com","target.com","blogspot","wordpress","instagram","pinterest","tumblr","facebook","twitter","reddit","aliexpress","wish.com","openbeautyfacts"];
+    if (result.imageUrl) {
+      const urlLow = result.imageUrl.toLowerCase();
+      const isBad = badSources.some(s => urlLow.includes(s));
+      const hasGoodExt = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(result.imageUrl);
+      if (isBad || !hasGoodExt) {
+        result.imageUrl = ""; // reject bad image sources
+      }
+    }
+
+    return result;
   }
 
   async function updateFirestore(productName, brand, data) {
@@ -9360,8 +9410,9 @@ Rules: use brand website/Sephora/ULTA/incidecoder.com for ingredients. imageUrl 
       try {
         const data=await enrichProduct(productName,brand);
         const {saved,updates,reason}=await updateFirestore(productName,brand,data);
-        const parts=[updates?.ingredients&&"ingredients ✓",updates?.adminImage&&"image ✓",updates?.category&&"category ✓"].filter(Boolean);
-        setQueue(q=>q.map((item,idx)=>idx===i?{...item,status:saved?"done":"skipped",result:saved?parts.join(", ")||"updated":(reason||"no match")}:item));
+        const parts=[updates?.ingredients&&"ing ✓",updates?.adminImage&&"img ✓",updates?.category&&"cat ✓"].filter(Boolean);
+        const noImg = saved && !updates?.adminImage ? " (no good image found)" : "";
+        setQueue(q=>q.map((item,idx)=>idx===i?{...item,status:saved?"done":"skipped",result:saved?(parts.join(", ")||"fields updated")+noImg:(reason||"no match"),imageUrl:data.imageUrl||""}:item));
         if (saved) completed++;
       } catch(e) { setQueue(q=>q.map((item,idx)=>idx===i?{...item,status:"error",result:e.message}:item)); }
       setProgress(Math.round(((i+1)/queue.length)*100));
@@ -9404,8 +9455,13 @@ Rules: use brand website/Sephora/ULTA/incidecoder.com for ingredients. imageUrl 
                   <div style={{fontSize:"0.72rem",fontWeight:"600",color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.productName}</div>
                   {item.brand&&<div style={{fontSize:"0.6rem",color:T.textLight}}>{item.brand}</div>}
                 </div>
-                {item.result&&<div style={{fontSize:"0.6rem",color:statusColor[item.status],textAlign:"right",maxWidth:"140px"}}>{item.result}</div>}
-                {item.status==="searching"&&<div style={{fontSize:"0.6rem",color:T.amber}}>searching…</div>}
+                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"0.2rem",flexShrink:0,maxWidth:"150px"}}>
+                  {item.imageUrl && (
+                    <img src={item.imageUrl} style={{width:"32px",height:"32px",objectFit:"cover",borderRadius:"4px",border:`1px solid ${T.border}`}} onError={e=>e.target.style.display="none"}/>
+                  )}
+                  {item.result&&<div style={{fontSize:"0.58rem",color:statusColor[item.status],textAlign:"right"}}>{item.result}</div>}
+                  {item.status==="searching"&&<div style={{fontSize:"0.6rem",color:T.amber}}>searching…</div>}
+                </div>
               </div>
             ))}
           </div>
@@ -9761,11 +9817,6 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
           </div>
           <div style={{fontSize:"0.72rem",color:T.textMid,flexShrink:0}}>→</div>
         </button>
-      )}
-
-      {/* -- Fix Amazon URLs (one-time cleanup) -- */}
-      {products.some(p => (p.adminImage||"").includes("media-amazon") || (p.adminImage||"").includes("ssl-images-amazon")) && (
-        <FixAmazonUrls products={products} onFixed={loadProducts}/>
       )}
 
       {/* -- Quick action buttons -- */}
