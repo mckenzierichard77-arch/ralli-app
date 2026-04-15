@@ -8870,1856 +8870,16 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
   );
 }
 
-function AdminManageProducts({afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog, autoOpenTriage=false}) {
-  // -- Product list state --
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [editing, setEditing]   = useState(null);
-  const [editSaving, setEditSaving] = useState(false);
-  const [saved, setSaved]       = useState(null);
-  const [editIngId, setEditIngId] = useState(null);
-  const [editIngText, setEditIngText] = useState("");
-  const [editIngSaving, setEditIngSaving] = useState(false);
-  const [search, setSearch]     = useState("");
-  const [filter, setFilter]     = useState("pending");
-  const [activeCat, setActiveCat] = useState(null);
-
-  // -- Toolbar state (Add, Triage, Import, Seed) --
-  const [seeding, setSeeding] = useState(false);
-  const [showSeedConfirm, setShowSeedConfirm] = useState(false);
-  const [showImporter, setShowImporter]     = useState(false);
-  const [importCat, setImportCat]           = useState("moisturizers");
-  const [importResults, setImportResults]   = useState([]);
-  const [importLoading, setImportLoading]   = useState(false);
-  const [importError, setImportError]       = useState("");
-  const [importSelected, setImportSelected] = useState(new Set());
-  const [importSaving, setImportSaving]     = useState(false);
-  const [importDone, setImportDone]         = useState(0);
-  const [triageMode, setTriageMode]         = useState(false);
-  const [triageIdx, setTriageIdx]           = useState(0);
-  const [triageImg, setTriageImg]           = useState("");
-  const [triageLink, setTriageLink]         = useState("");
-  const [triageIng, setTriageIng]           = useState("");
-  const [triageName, setTriageName]         = useState("");
-  const [triageSaving, setTriageSaving]     = useState(false);
-  const [triageSaved, setTriageSaved]       = useState(false);
-  const [triageDone, setTriageDone]         = useState(new Set());
-  const [triageSkipped, setTriageSkipped]   = useState(new Set());
-  const triageImgRef = React.useRef(null);
-  const triageLinkRef = React.useRef(null);
-  const [seedPassword, setSeedPassword] = useState("");
-  const [seedPasswordErr, setSeedPasswordErr] = useState(false);
-  const SEED_PASSWORD = "ralli-reseed";
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [addForm, setAddForm] = useState({productName:"",brand:"",category:"face-wash",poreScore:0,image:"",buyUrl:"",ingredients:"",reason:""});
-  const [addingSave, setAddingSave] = useState(false);
-
-  useEffect(()=>{ load(); },[]);
-  // Auto-open triage when navigated from AdminCleanup's "Review Images" button
-  useEffect(()=>{
-    if (autoOpenTriage && !loading && products.length > 0) {
-      const queue = products.filter(p => (!p.image || !p.buyUrl));
-      if (queue.length > 0) {
-        setFilter("noimage");
-        const p = queue[0];
-        setTriageIdx(0);
-        setTriageImg(p.adminImage||p.image||"");
-        setTriageLink(p.buyUrl||"");
-        setTriageMode(true);
-        setTimeout(()=>triageImgRef.current?.focus(), 150);
-      }
-    }
-  },[autoOpenTriage, loading]);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const snap = await getDocs(query(collection(db,"products"), orderBy("createdAt","desc")));
-      setProducts(snap.docs.map(d=>({id:d.id,...d.data()})));
-    } catch(e) { console.error(e); }
-    setLoading(false);
-  }
-
-  async function saveIngredients(pid) {
-    setEditIngSaving(true);
-    try {
-      const updates = { ingredients: editIngText.trim(), approved: true, updatedAt: Date.now(), lastVerified: Date.now() };
-      await updateDoc(doc(db,"products",pid), updates);
-      setProducts(ps=>ps.map(p=>p.id===pid?{...p,...updates}:p));
-      setEditIngId(null); setEditIngText("");
-    } catch(e) { alert("Save failed: "+e.message); }
-    setEditIngSaving(false);
-  }
-
-  // Also called after imports/seed
-  async function loadData() { await load(); }
-
-  async function saveEdits() {
-    if (!editing) return;
-    setEditSaving(true);
-    try {
-      const updates = {
-        productName: editing.productName.trim(),
-        brand: editing.brand.trim(),
-        category: editing.category,
-        image: editing.image||"",
-        adminImage: editing.image||"",
-        buyUrl: editing.buyUrl||"",
-        approved: true,
-        lastVerified: Date.now(),
-      };
-      await updateDoc(doc(db,"products",editing.id), updates);
-      const postsSnap = await getDocs(query(collection(db,"posts"), where("productId","==",editing.id)));
-      if (!postsSnap.empty) {
-        const batch = writeBatch(db);
-        postsSnap.docs.forEach(d=>batch.update(d.ref,{productName:updates.productName, brand:updates.brand}));
-        await batch.commit();
-      }
-      setProducts(ps=>ps.map(p=>p.id===editing.id?{...p,...updates}:p));
-      setSaved(editing.id); setTimeout(()=>setSaved(null),2500);
-      setEditing(null);
-    } catch(e) { alert("Save failed: "+e.message); }
-    setEditSaving(false);
-  }
-
-  async function toggleApproved(p) {
-    const newVal = !p.approved;
-    await updateDoc(doc(db,"products",p.id),{approved:newVal, approvedAt: newVal ? Date.now() : null, lastVerified: newVal ? Date.now() : null});
-    setProducts(ps=>ps.map(q=>q.id===p.id?{...q,approved:newVal,hidden:false}:q));
-  }
-
-  async function hideProduct(p) {
-    await updateDoc(doc(db,"products",p.id),{approved:false, hidden:true});
-    setProducts(ps=>ps.map(q=>q.id===p.id?{...q,approved:false,hidden:true}:q));
-  }
-
-  async function markReverified(p) {
-    await updateDoc(doc(db,"products",p.id),{lastVerified:Date.now()});
-    setProducts(ps=>ps.map(q=>q.id===p.id?{...q,lastVerified:Date.now()}:q));
-  }
-
-  async function deleteProduct(p) {
-    if (!confirm(`Permanently delete "${p.productName}"?\n\nThis also removes all scan records. Cannot be undone.`)) return;
-    try {
-      const batch = writeBatch(db);
-      batch.delete(doc(db,"products",p.id));
-      const postsSnap = await getDocs(query(collection(db,"posts"), where("productId","==",p.id)));
-      postsSnap.docs.forEach(d=>batch.delete(d.ref));
-      const scansSnap = await getDocs(query(collection(db,"scans"), where("productId","==",p.id)));
-      scansSnap.docs.forEach(d=>batch.delete(d.ref));
-      await batch.commit();
-      setProducts(ps=>ps.filter(q=>q.id!==p.id));
-    } catch(e) { alert("Delete failed: "+e.message); }
-  }
-
-  async function handleAddProduct() {
-    if (!addForm.productName.trim() || !addForm.brand.trim()) return;
-    setAddingSave(true);
-    try {
-      await addDoc(collection(db,"products"), {
-        productName: addForm.productName.trim(),
-        brand: addForm.brand.trim(),
-        category: addForm.category,
-        poreScore: Number(addForm.poreScore)||0,
-        communityRating: null,
-        image: addForm.image.trim(),
-        buyUrl: addForm.buyUrl.trim(),
-        ingredients: addForm.ingredients.trim(),
-        reason: addForm.reason.trim(),
-        skinTypes: [],
-        approved: false,
-        seeded: false,
-        adminAdded: true,
-        createdAt: Date.now(),
-      });
-      setAddForm({productName:"",brand:"",category:"face-wash",poreScore:0,image:"",buyUrl:"",ingredients:"",reason:""});
-      setShowAddForm(false);
-      await load();
-    } catch(e) { alert("Failed to add: "+e.message); }
-    setAddingSave(false);
-  }
-
-  const [migrating, setMigrating] = useState(false);
-  const [deletingDupes, setDeletingDupes] = useState(false);
-
-  async function migrateToFirestore() {
-    if (!confirm("This will push curated product data and image URLs into Firestore.\n\nIt won't overwrite existing images. Safe to run multiple times. Continue?")) return;
-    setMigrating(true);
-    let count = 0;
-    try {
-      // 1. Mark CURATED_RECS_FALLBACK products as featured in Firestore
-      for (const rec of CURATED_RECS_FALLBACK) {
-        const q = query(collection(db,"products"),
-          where("barcode","==",rec.barcode), limit(1));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          const d = snap.docs[0];
-          const updates = { featured: true };
-          if (!d.data().adminImage && !d.data().image) {
-            updates.adminImage = rec.image;
-            updates.image = rec.image;
-          }
-          if (!d.data().buyUrl) updates.buyUrl = rec.buyUrl;
-          if (!d.data().description) updates.description = rec.description;
-          updates.communityRating = rec.communityRating;
-          updates.reason = rec.reason;
-          await updateDoc(d.ref, updates);
-          count++;
-        } else {
-          // Product not in Firestore yet — create it
-          await addDoc(collection(db,"products"), {
-            ...rec, featured: true, approved: true,
-            adminImage: rec.image, source: "curated",
-            createdAt: Date.now(), updatedAt: Date.now(),
-          });
-          count++;
-        }
-      }
-      // 2. Write ASIN data as asin field on matching products
-      const ASIN_DATA = [
-        {barcode:"301762112006", asin:"B00TTD9BRC"}, {barcode:"301762113003", asin:"B01MSSDEPK"},
-        {barcode:"301762162001", asin:"B01N1LL62W"}, {barcode:"3337875545082", asin:"B01N9SPQHQ"},
-        {barcode:"769915190109", asin:"B07L8MK5J7"}, {barcode:"769915357006", asin:"B07K3KNWK9"},
-        {barcode:"769915190208", asin:"B074NGBGQM"}, {barcode:"070501109906", asin:"B00NR1YQK4"},
-        {barcode:"763474298071", asin:"B00949CTQQ"}, {barcode:"381370043651", asin:"B082372MKT"},
-        {barcode:"302993914037", asin:"B07T8KF5RB"}, {barcode:"302993040016", asin:"B000052YOB"},
-        {barcode:"635494263006", asin:"B000OZV5FM"}, {barcode:"810067390161", asin:"B07D83QBVC"},
-        {barcode:"851459007270", asin:"B00PMHXJBY"}, {barcode:"851459007218", asin:"B00PMHXJ7Q"},
-        {barcode:"851459007287", asin:"B07GXMYVDY"}, {barcode:"012853502022", asin:"B01N0Q9AKN"},
-        {barcode:"022400430933", asin:"B000S929ZS"}, {barcode:"075609032975", asin:"B00210JW4G"},
-      ];
-      for (const {barcode, asin} of ASIN_DATA) {
-        const q = query(collection(db,"products"), where("barcode","==",barcode), limit(1));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          await updateDoc(snap.docs[0].ref, { asin, buyUrl: `https://www.amazon.com/dp/${asin}` });
-        }
-      }
-      alert(`✓ Migration complete! ${count} curated products updated in Firestore. ASIN data written. You can now remove hardcoded data from the code.`);
-      await load();
-    } catch(e) { alert("Migration failed: "+e.message); console.error(e); }
-    setMigrating(false);
-  }
-
-  async function deleteDuplicates() {
-    const seen = new Map();
-    const toDelete = [];
-    // Group by brand+productName (lowercased), keep the one with most data
-    products.forEach(p => {
-      const key = `${(p.brand||"").toLowerCase().trim()}|${(p.productName||"").toLowerCase().trim()}`;
-      if (!seen.has(key)) {
-        seen.set(key, p);
-      } else {
-        const existing = seen.get(key);
-        // Keep whichever has more data (image > ingredients > approved > newer)
-        const existingScore = (existing.image?2:0)+(existing.ingredients?2:0)+(existing.approved?1:0);
-        const newScore = (p.image?2:0)+(p.ingredients?2:0)+(p.approved?1:0);
-        if (newScore > existingScore) {
-          toDelete.push(existing.id);
-          seen.set(key, p);
-        } else {
-          toDelete.push(p.id);
-        }
-      }
-    });
-    if (!toDelete.length) { alert("✓ No duplicates found!"); return; }
-    if (!confirm(`Found ${toDelete.length} duplicate products. Delete them?\n\nThe copy with the most data (image, ingredients, approved status) will be kept.`)) return;
-    setDeletingDupes(true);
-    try {
-      const batch = writeBatch(db);
-      toDelete.forEach(id => batch.delete(doc(db,"products",id)));
-      await batch.commit();
-      setProducts(ps => ps.filter(p => !toDelete.includes(p.id)));
-      alert(`✓ Deleted ${toDelete.length} duplicates.`);
-    } catch(e) { alert("Delete failed: "+e.message); }
-    setDeletingDupes(false);
-  }
-
-  async function clearBadImages() {
-
-    const bad = products.filter(p => {
-      const url = (p.adminImage || p.image || "").trim();
-      return url && (!url.startsWith("http") || url.startsWith("data:"));
-    });
-    if (!bad.length) { alert("✓ No bad image URLs found!"); return; }
-    if (!confirm(`Found ${bad.length} products with bad image URLs (base64 or non-http).\n\nClear them so they can be properly triaged?`)) return;
-    const batch = writeBatch(db);
-    bad.forEach(p => batch.update(doc(db,"products",p.id), {image:"", adminImage:"", updatedAt:Date.now()}));
-    await batch.commit();
-    setProducts(ps => ps.map(p => bad.find(b=>b.id===p.id) ? {...p,image:"",adminImage:""} : p));
-    alert(`✓ Cleared ${bad.length} bad image URLs. Run triage to fix them.`);
-  }
-
-
-  async function cleanBuyUrls() {
-    setSeeding(true);
-    try {
-      const snap = await getDocs(collection(db,"products"));
-      const toFix = snap.docs.filter(d=>{
-        const url = d.data().buyUrl||"";
-        return url.includes("YOURTAG") || url.includes("tag=") || url.match(/amazon\.com\/dp\/[A-Z0-9]+$/);
-      });
-      if (!toFix.length) { alert("✓ All URLs look good!"); setSeeding(false); return; }
-      const batch = writeBatch(db);
-      toFix.forEach(d=>{
-        const p = d.data();
-        const search = ((p.brand||"")+" "+(p.productName||"")).trim().replace(/\s+/g,"+");
-        batch.update(d.ref, {buyUrl: `https://www.amazon.com/s?k=${search}`});
-      });
-      await batch.commit();
-      alert(`✓ Fixed ${toFix.length} buy URLs → Amazon search links`);
-      await load();
-    } catch(e) { alert("Fix failed: "+e.message); }
-    setSeeding(false);
-  }
-
-    function handleSeedClick() {
-    setShowSeedConfirm(true);
-    setSeedPassword("");
-    setSeedPasswordErr(false);
-  }
-
-  async function confirmSeed() {
-    if (seedPassword !== SEED_PASSWORD) {
-      setSeedPasswordErr(true);
-      return;
-    }
-    setShowSeedConfirm(false);
-    setSeedPassword("");
-    await seedFromCurated();
-  }
-
-  // -- Open Beauty Facts importer -----------------------------
-    const OBF_CATS = [
-    {id:"moisturizers",      label:"Moisturizers"},
-    {id:"face-creams",       label:"Face Creams"},
-    {id:"serums",            label:"Serums"},
-    {id:"cleansers",         label:"Cleansers"},
-    {id:"face-washes",       label:"Face Washes"},
-    {id:"sunscreens",        label:"Sunscreens"},
-    {id:"toners",            label:"Toners"},
-    {id:"eye-creams",        label:"Eye Creams"},
-    {id:"exfoliants",        label:"Exfoliants"},
-    {id:"face-masks",        label:"Face Masks"},
-    {id:"foundations",       label:"Foundations"},
-    {id:"concealers",        label:"Concealers"},
-  ];
-
-  async function fetchOBF() {
-    setImportLoading(true); setImportError(""); setImportResults([]); setImportSelected(new Set()); setImportDone(0);
-    try {
-      const url = `https://world.openbeautyfacts.org/cgi/search.pl?action=process&tagtype_0=categories&tag_contains_0=contains&tag_0=${encodeURIComponent(importCat)}&page_size=60&json=1&fields=code,product_name,brands,ingredients_text,image_front_url,categories_tags`;
-      const res = await fetch(url);
-      const data = await res.json();
-      const existingIds = new Set(products.map(p=>p.id));
-
-      const importedProducts = (data.products||[])
-        .filter(p => p.product_name && p.brands && p.ingredients_text && p.ingredients_text.length > 20)
-        .map(p => {
-          const brand = p.brands.split(",")[0].trim();
-          const name = p.product_name.trim();
-          const id = "obf_" + (p.code || Math.random().toString(36).slice(2));
-          const analysis = analyzeIngredients(p.ingredients_text);
-          const poreScore = analysis.avgScore != null ? Math.round(analysis.avgScore) : 0;
-          return {
-            id, barcode: p.code||id, productName: name, brand,
-            ingredients: p.ingredients_text,
-            image: p.image_front_url||"",
-            buyUrl: `https://www.amazon.com/s?k=${encodeURIComponent(brand+"+" +name)}`,
-            poreScore, approved: false, source: "obf",
-            category: importCat,
-            analysis,
-          };
-        })
-        .filter(p => !existingIds.has(p.id))
-        .slice(0, 50);
-
-      if (!importedProducts.length) setImportError("No new products found for this category. Try another.");
-      setImportResults(importedProducts);
-      // Auto-select all with poreScore <= 2
-      setImportSelected(new Set(importedProducts.filter(p=>p.poreScore<=2).map(p=>p.id)));
-    } catch(e) {
-      setImportError("Failed to fetch from Open Beauty Facts. Check your connection.");
-      console.error(e);
-    }
-    setImportLoading(false);
-  }
-
-  async function importSelected_fn() {
-    if (!importSelected.size) return;
-    setImportSaving(true);
-    const toImport = importResults.filter(p=>importSelected.has(p.id));
-    let done = 0;
-    for (const p of toImport) {
-      try {
-        const {analysis, ...clean} = p;
-        await setDoc(doc(db,"products",p.id), {
-          ...clean, approved: false, scanCount: 0, uniqueScanners: [],
-          createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-        });
-        done++;
-        setImportDone(done);
-      } catch(e) { console.error("Import error:", e); }
-    }
-    setImportSaving(false);
-    setImportResults([]);
-    setImportSelected(new Set());
-    setImportDone(0);
-    await loadData();
-    alert(`✓ Imported ${done} products as Pending. Review and approve in the Database tab.`);
-  }
-
-  async function seedFromCurated() {
-    setSeeding(true);
-    try {
-      // Get all existing product IDs
-      const existing = await getDocs(collection(db,"products"));
-      const existingIds = new Set(existing.docs.map(d => d.id));
-      const userProducts = existing.docs.filter(d => !d.data().seeded && d.data().source !== "seed").length;
-
-      // Collect all seed products
-      const allProducts = [];
-      for (const cat of SHOP_CATEGORIES) {
-        for (const p of cat.products) {
-          allProducts.push({cat, p});
-        }
-      }
-
-      // Only write products that don't already exist
-      const toWrite = allProducts.filter(({cat, p}) => {
-        const stableId = "seed_" + (p.brand||"").toLowerCase().replace(/[^a-z0-9]/g,"_") + "_" + (p.productName||"").toLowerCase().replace(/[^a-z0-9]/g,"_");
-        return !existingIds.has(stableId);
-      });
-
-      if (!toWrite.length) {
-        alert(`✓ All ${allProducts.length} products already exist. Nothing to add.\n\n${userProducts} user products preserved.`);
-        setSeeding(false); return;
-      }
-
-      if (!confirm(`This will ADD ${toWrite.length} new products to your catalogue.\n\nExisting products (including your manual fixes) will NOT be touched.\n${userProducts} user products preserved.\n\nContinue?`)) {
-        setSeeding(false); return;
-      }
-
-      let written = 0;
-      for (let i = 0; i < toWrite.length; i += 25) {
-        const batch = writeBatch(db);
-        for (const {cat, p} of toWrite.slice(i, i+25)) {
-          const stableId = "seed_" + (p.brand||"").toLowerCase().replace(/[^a-z0-9]/g,"_") + "_" + (p.productName||"").toLowerCase().replace(/[^a-z0-9]/g,"_");
-          const ref = doc(db, "products", stableId);
-          batch.set(ref, {
-            barcode: p.barcode || stableId,
-            productName: p.productName,
-            brand: p.brand,
-            category: cat.id,
-            poreScore: p.poreScore ?? 0,
-            communityRating: null,
-            image: p.image || "",
-            adminImage: p.image || "",
-            asin: p.asin || "",
-            buyUrl: p.buyUrl || "",
-            ingredients: p.ingredients || "",
-            skinTypes: p.skinTypes || [],
-            reason: p.reason || "",
-            approved: true,
-            seeded: true,
-            scanCount: 0,
-            uniqueScanners: [],
-            source: "seed",
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          });
-          written++;
-        }
-        await batch.commit();
-        await new Promise(r => setTimeout(r, 300));
-      }
-      await load();
-      alert(`✓ Added ${written} new products! ${existingIds.size} existing products untouched.`);
-    } catch(e) { alert("Seed failed: "+e.message); console.error(e); }
-    setSeeding(false);
-  }
-
-  // Triage queue — skipped items go to the back, done/hidden items excluded
-  const triageQueue = React.useMemo(()=>{
-    const base = products
-      .filter(p => !triageDone.has(p.id) && !p.hidden && !p.lastVerified)
-      .sort((a,b)=>{
-        const aSkipped = triageSkipped.has(a.id) ? 1 : 0;
-        const bSkipped = triageSkipped.has(b.id) ? 1 : 0;
-        if (aSkipped !== bSkipped) return aSkipped - bSkipped;
-        const aHasImg = !!(a.adminImage||a.image);
-        const bHasImg = !!(b.adminImage||b.image);
-        if (!aHasImg && bHasImg) return -1;
-        if (aHasImg && !bHasImg) return 1;
-        return (b.scanCount||0)-(a.scanCount||0);
-      });
-    return base;
-  }, [products, triageDone, triageSkipped]);
-
-  // Always sync form fields when the current triage product changes
-  React.useEffect(() => {
-    const p = triageQueue[triageIdx];
-    if (!p) return;
-    setTriageName(p.productName||"");
-    setTriageImg(p.adminImage||p.image||"");
-    setTriageIng(p.ingredients||"");
-    const eu = p.buyUrl||"";
-    setTriageLink(eu.startsWith("http") ? eu
-      : `https://www.amazon.com/s?k=${encodeURIComponent(`${p.brand||""} ${p.productName||""}`.trim())}&i=beauty`);
-    setTriageSaved(false);
-  }, [triageIdx, triageQueue.map(p=>p.id).join(",")]);
-
-  function openTriage() {
-    setTriageIdx(0);
-    const p = triageQueue[0];
-    const existingUrl = p?.buyUrl||"";
-    const cleanBuyUrl = existingUrl.startsWith("http") ? existingUrl
-      : `https://www.amazon.com/s?k=${encodeURIComponent((p?.brand||"")+" "+(p?.productName||"")).trim()}&i=beauty`;
-    setTriageImg(p?.adminImage||p?.image||"");
-    setTriageLink(cleanBuyUrl);
-    setTriageIng(p?.ingredients||"");
-    setTriageName(p?.productName||"");
-    setTriageMode(true); setTriageSaved(false);
-    setTimeout(()=>triageImgRef.current?.focus(), 100);
-  }
-
-  // Keyboard shortcuts for quick review
-  React.useEffect(() => {
-    if (!triageMode) return;
-    function onKey(e) {
-      // Don't fire if user is typing in an input
-      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-      if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); triageNav(1); }
-      if (e.key === "ArrowLeft"  || e.key === "ArrowUp")   { e.preventDefault(); triageNav(-1); }
-      if (e.key === "Enter")   { e.preventDefault(); triageSave(true); }
-      if (e.key === "Delete" || e.key === "Backspace") {
-        e.preventDefault();
-        const p = triageQueue[triageIdx];
-        if (!p) return;
-        updateDoc(doc(db,"products",p.id),{hidden:true,approved:false,updatedAt:Date.now()});
-        setProducts(ps=>ps.map(q=>q.id===p.id?{...q,hidden:true,approved:false}:q));
-        setTriageDone(d=>new Set([...d,p.id]));
-        triageNav(1);
-      }
-      if (e.key === "Escape") { setTriageMode(false); }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [triageMode, triageIdx, triageQueue, triageSave]);
-
-  function triageNav(dir) {
-    const next = triageIdx + dir;
-    if (next < 0 || next >= triageQueue.length) return;
-    setTriageImg(""); setTriageLink(""); setTriageIng(""); setTriageName(""); setTriageSaved(false);
-    setTriageIdx(next);
-    const p = triageQueue[next];
-    setTimeout(()=>triageImgRef.current?.focus(), 100);
-  }
-
-  async function triageSave(andNext=false) {
-    const p = triageQueue[triageIdx];
-    if (!p) return;
-
-    // Validate image URL — reject base64 and non-http URLs
-    const imgUrl = triageImg.trim();
-    if (imgUrl) {
-      if (imgUrl.startsWith("data:")) {
-        alert("❌ That's a base64 image — it won't work in the app.\n\nInstead:\n1. Open the image in a new browser tab\n2. Copy the URL from the address bar\n3. Paste that URL here");
-        return;
-      }
-      if (!imgUrl.startsWith("http")) {
-        alert("❌ Image URL must start with https://");
-        return;
-      }
-    }
-
-    setTriageSaving(true);
-    try {
-      const updates = { approved: true, updatedAt: Date.now(), lastVerified: Date.now() };
-      if (imgUrl) { updates.image = imgUrl; updates.adminImage = imgUrl; }
-      if (triageLink.trim()) updates.buyUrl = triageLink.trim();
-      if (triageIng.trim()) updates.ingredients = triageIng.trim();
-      if (triageName.trim() && triageName.trim() !== p.productName) updates.productName = triageName.trim();
-      await updateDoc(doc(db,"products",p.id), updates);
-      // Update local state immediately
-      setProducts(ps=>ps.map(q=>q.id===p.id?{...q,...updates}:q));
-      setTriageDone(d => new Set([...d, p.id]));
-      setTriageSaved(true);
-      // Reload from Firestore to confirm persistence
-      await load();
-      if (andNext) {
-        const nextIdx = triageIdx + 1;
-        setTriageImg(""); setTriageLink(""); setTriageIng(""); setTriageName(""); setTriageSaved(false);
-        if (nextIdx < triageQueue.length) {
-          setTriageIdx(nextIdx);
-          const p2 = triageQueue[nextIdx];
-          setTimeout(()=>triageImgRef.current?.focus(), 100);
-        }
-      }
-    } catch(e) { alert("Save failed: "+e.message); }
-    setTriageSaving(false);
-  }
-
-  const inp = {width:"100%",padding:"0.45rem 0.6rem",borderRadius:"0.4rem",border:`1px solid ${T.border}`,fontSize:"0.78rem",color:T.text,background:T.surface,outline:"none",fontFamily:"'Inter',sans-serif",boxSizing:"border-box"};
-
-  const allCats = [...new Set(products.map(p=>p.category).filter(Boolean))].sort();
-
-  // Compute which products appear in the user-facing Top 100
-  // Must be complete (image + buyUrl + ingredients) — same as shop filter
-  const top100Ids = new Set(
-    [...products]
-      .filter(p =>
-        p.approved &&
-        !needsReverification(p) &&
-        hasValidImage(p) &&
-        p.buyUrl && p.buyUrl.trim() !== "" &&
-        p.ingredients && p.ingredients.trim() !== ""
-      )
-      .sort((a,b) =>
-        (a.poreScore??99)-(b.poreScore??99) ||
-        (b.communityRating||0)-(a.communityRating||0) ||
-        (b.scanCount||0)-(a.scanCount||0)
-      )
-      .slice(0, 100)
-      .map(p => p.id)
-  );
-
-  const filtered = products.filter(p=>{
-    const q = search.toLowerCase();
-    const matchSearch = !q || (p.productName||"").toLowerCase().includes(q)||(p.brand||"").toLowerCase().includes(q)||(p.id||"").includes(q);
-    const matchCat = !activeCat || p.category===activeCat;
-    const stale = needsReverification(p);
-    const matchFilter =
-      filter==="all"      ? true :
-      filter==="pending"  ? (!p.approved && !p.hidden) :
-      filter==="userscans"? (p.source==="user-scan" || p.isRequest) :
-      filter==="reviewed" ? (!!(p.lastVerified)) :
-      filter==="hidden"   ? (!p.approved && p.hidden) :
-      filter==="noimage"  ? !hasValidImage(p) :
-      filter==="noingred" ? (!p.ingredients || p.ingredients.trim() === "") :
-      filter==="approved" ? (p.approved && !stale) :
-      filter==="top100"   ? top100Ids.has(p.id) :
-      filter==="topclicks"? ((p.clickCount||0) > 0) :
-      filter==="recheck"  ? (p.approved && stale) : true;
-    return matchSearch && matchCat && matchFilter;
-  });
-
-  // Sort topclicks by clickCount desc
-  const sortedFiltered = filter === "topclicks"
-    ? [...filtered].sort((a,b) => (b.clickCount||0) - (a.clickCount||0))
-    : filtered;
-
-  const counts = {
-    pending:  products.filter(p=>!p.approved&&!p.hidden).length,
-    userscans: products.filter(p=>p.source==="user-scan"||p.isRequest).length,
-    reviewed: products.filter(p=>!!(p.lastVerified)).length,
-    hidden:   products.filter(p=>!p.approved&&p.hidden).length,
-    approved: products.filter(p=>p.approved&&!needsReverification(p)).length,
-    top100:   top100Ids.size,
-    noimage:  products.filter(p => !hasValidImage(p)).length,
-    noingred: products.filter(p => !p.ingredients || p.ingredients.trim() === "").length,
-    recheck:  products.filter(p=>p.approved&&needsReverification(p)).length,
-    topclicks: products.filter(p=>(p.clickCount||0)>0).length,
-    all:      products.length,
-  };
-
-  const TABS = [
-    {id:"all",       label:"All",             color:T.textMid},
-    {id:"approved",  label:"✓ In App",        color:T.sage},
-    {id:"pending",   label:"⏳ Pending",       color:T.amber},
-    {id:"hidden",    label:"🚫 Rejected",      color:T.rose},
-    {id:"userscans", label:"👤 User Scans",    color:"#6366f1"},
-    {id:"reviewed",  label:"✋ Reviewed",      color:"#0891b2"},
-    {id:"noimage",   label:"🖼 No Image",      color:T.textMid},
-    {id:"noingred",  label:"🧪 No Ingredients",color:T.textMid},
-    {id:"top100",    label:"⭐ Top 100",        color:T.accent},
-    {id:"topclicks", label:"🔥 Top Clicks",    color:"#e44d26"},
-  ];
-
-  if (loading) return <div style={{padding:"2rem",textAlign:"center",color:T.textLight}}>Loading…</div>;
-
-  return (
-    <div>
-      {/* -- Auto-fix panel — always visible at top -- */}
-      <AutoFixDatabase
-        products={products}
-        onRefresh={load}
-        onOpenTriage={()=>{ setFilter("noimage"); openTriage(); }}
-        afRunning={afRunning} afLog={afLog} afDone={afDone}
-        setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone}
-        setAfProducts={setAfProducts} afAddLog={afAddLog}
-      />
-
-      {/* -- Toolbar -- */}
-      <div style={{marginBottom:"0.65rem",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"0.5rem",flexWrap:"wrap"}}>
-        <div style={{fontSize:"0.68rem",color:T.textLight,flexShrink:0}}>{products.length} total · {allCats.length} categories</div>
-        <div style={{display:"flex",gap:"0.4rem",flexWrap:"wrap"}}>
-          <button onClick={()=>setShowAddForm(v=>!v)}
-            style={{padding:"0.35rem 0.75rem",background:showAddForm?T.accent:"none",color:showAddForm?"#FFFFFF":T.textMid,border:`1px solid ${showAddForm?T.accent:T.border}`,borderRadius:"0.5rem",fontSize:"0.68rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>
-            + Add Product
-          </button>
-          <button onClick={openTriage} disabled={triageQueue.length===0}
-            style={{padding:"0.35rem 0.75rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.68rem",color:triageQueue.length?T.textMid:T.textLight,cursor:triageQueue.length?"pointer":"not-allowed",fontFamily:"'Inter',sans-serif",fontWeight:"600",position:"relative"}}>
-            ⚡ Triage
-            {triageQueue.filter(p=>!p.image||!p.buyUrl).length>0&&<span style={{marginLeft:"0.25rem",fontSize:"0.55rem",background:T.amber,color:"#fff",borderRadius:"999px",padding:"0.05rem 0.3rem",fontWeight:"700"}}>{triageQueue.filter(p=>!p.image||!p.buyUrl).length}</span>}
-          </button>
-          <button onClick={deleteDuplicates} disabled={deletingDupes}
-            style={{padding:"0.35rem 0.75rem",background:"none",border:`1px solid ${T.rose}66`,borderRadius:"0.5rem",fontSize:"0.68rem",color:T.rose,cursor:deletingDupes?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"600",opacity:deletingDupes?0.5:1}}>
-            {deletingDupes?"Deleting…":"🗑 Dupes"}
-          </button>
-          <button onClick={clearBadImages}
-            style={{padding:"0.35rem 0.75rem",background:"none",border:`1px solid ${T.amber}66`,borderRadius:"0.5rem",fontSize:"0.68rem",color:T.amber,cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>
-            🧹 Clear Bad Imgs
-          </button>
-          <button onClick={handleSeedClick} disabled={seeding}
-            style={{padding:"0.35rem 0.75rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.68rem",color:T.textMid,cursor:seeding?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"600",opacity:seeding?0.5:1}}>
-            {seeding?"🌱 Seeding…":"🌱 Re-seed"}
-          </button>
-        </div>
-      </div>
-
-      {/* -- Add Product Form -- */}
-      {showAddForm&&(
-        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",padding:"1rem",marginBottom:"0.85rem"}}>
-          <div style={{fontSize:"0.82rem",fontWeight:"700",color:T.text,marginBottom:"0.75rem",fontFamily:"'Inter',sans-serif"}}>Add Product</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem",marginBottom:"0.5rem"}}>
-            {[["productName","Product Name"],["brand","Brand"]].map(([field,label])=>(
-              <div key={field}>
-                <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"3px"}}>{label}</div>
-                <input value={addForm[field]} onChange={e=>setAddForm(f=>({...f,[field]:e.target.value}))}
-                  placeholder={label} style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.78rem",fontFamily:"'Inter',sans-serif",background:T.surface,color:T.text,boxSizing:"border-box"}}/>
-              </div>
-            ))}
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem",marginBottom:"0.5rem"}}>
-            <div>
-              <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"3px"}}>Category</div>
-              <select value={addForm.category} onChange={e=>setAddForm(f=>({...f,category:e.target.value}))}
-                style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.78rem",fontFamily:"'Inter',sans-serif",background:T.surface,color:T.text}}>
-                {CAT_ORDER.map(c=>(<option key={c} value={c}>{c}</option>))}
-              </select>
-            </div>
-            <div>
-              <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"3px"}}>Image URL</div>
-              <input value={addForm.image} onChange={e=>setAddForm(f=>({...f,image:e.target.value}))} placeholder="https://…"
-                style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.78rem",fontFamily:"'Inter',sans-serif",background:T.surface,color:T.text,boxSizing:"border-box"}}/>
-            </div>
-          </div>
-          <div style={{marginBottom:"0.5rem"}}>
-            <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"3px"}}>Buy URL</div>
-            <input value={addForm.buyUrl} onChange={e=>setAddForm(f=>({...f,buyUrl:e.target.value}))} placeholder="https://amazon.com/dp/…"
-              style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.78rem",fontFamily:"'Inter',sans-serif",background:T.surface,color:T.text,boxSizing:"border-box"}}/>
-          </div>
-          <div style={{marginBottom:"0.5rem"}}>
-            <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"3px"}}>Ingredients (optional)</div>
-            <textarea value={addForm.ingredients} onChange={e=>setAddForm(f=>({...f,ingredients:e.target.value}))} rows={3}
-              style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.72rem",fontFamily:"'Inter',sans-serif",background:T.surface,color:T.text,boxSizing:"border-box",resize:"vertical"}}/>
-          </div>
-          <div style={{display:"flex",gap:"0.4rem"}}>
-            <button onClick={handleAddProduct} disabled={addingSave||!addForm.productName.trim()||!addForm.brand.trim()}
-              style={{flex:1,padding:"0.5rem",background:T.accent,color:"#fff",border:"none",borderRadius:"0.5rem",fontSize:"0.8rem",fontWeight:"700",cursor:"pointer",opacity:(addingSave||!addForm.productName.trim()||!addForm.brand.trim())?0.5:1}}>
-              {addingSave?"Saving…":"Add Product"}
-            </button>
-            <button onClick={()=>setShowAddForm(false)}
-              style={{padding:"0.5rem 0.85rem",background:"transparent",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.8rem",color:T.textMid,cursor:"pointer"}}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-
-      {/* -- Category pills -- */}
-      {allCats.length>0&&(
-        <div style={{display:"flex",gap:"0.4rem",overflowX:"auto",paddingBottom:"0.4rem",marginBottom:"0.75rem",scrollbarWidth:"none"}}>
-          <button onClick={()=>setActiveCat(null)} style={{flexShrink:0,padding:"0.28rem 0.7rem",borderRadius:"999px",border:`1px solid ${!activeCat?T.navy:T.border}`,background:!activeCat?T.navy:"transparent",color:!activeCat?"#fff":T.textMid,fontSize:"0.68rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"}}>
-            All
-          </button>
-          {allCats.map(c=>(
-            <button key={c} onClick={()=>setActiveCat(activeCat===c?null:c)}
-              style={{flexShrink:0,padding:"0.28rem 0.7rem",borderRadius:"999px",border:`1px solid ${activeCat===c?T.navy:T.border}`,background:activeCat===c?T.navy:"transparent",color:activeCat===c?"#fff":T.textMid,fontSize:"0.68rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap",textTransform:"capitalize"}}>
-              {c}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* -- Status filter tabs -- */}
-      <div style={{display:"flex",gap:"0.35rem",marginBottom:"0.65rem",overflowX:"auto",scrollbarWidth:"none"}}>
-        {TABS.map(({id,label,color})=>(
-          <button key={id} onClick={()=>setFilter(id)}
-            style={{flexShrink:0,padding:"0.45rem 0.75rem",borderRadius:"0.5rem",border:`1px solid ${filter===id?color:T.border}`,background:filter===id?color+"18":"transparent",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"center",minWidth:"60px"}}>
-            <div style={{fontSize:"0.7rem",fontWeight:filter===id?"700":"500",color:filter===id?color:T.textMid}}>{label}</div>
-            <div style={{fontSize:"0.82rem",fontWeight:"700",color:filter===id?color:T.text,lineHeight:1.1}}>{counts[id]}</div>
-          </button>
-        ))}
-      </div>
-
-      {/* -- Search -- */}
-      <div style={{position:"relative",marginBottom:"0.65rem"}}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" style={{position:"absolute",left:"0.65rem",top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by name, brand or barcode…"
-          style={{...inp, paddingLeft:"2rem", paddingRight: search ? "2rem" : "0.6rem", marginBottom:0}}/>
-        {search && (
-          <button onClick={()=>setSearch("")} style={{position:"absolute",right:"0.5rem",top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:T.textLight,display:"flex",padding:"2px"}}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        )}
-      </div>
-      {search && (
-        <div style={{fontSize:"0.68rem",color:T.textLight,marginBottom:"0.5rem",fontFamily:"'Inter',sans-serif"}}>
-          {sortedFiltered.length} result{sortedFiltered.length!==1?"s":""} for <strong style={{color:T.text}}>"{search}"</strong>
-        </div>
-      )}
-
-      {/* -- Product list -- */}
-      <div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}>
-        {sortedFiltered.map(p=>{
-          const stale = needsReverification(p);
-          const lvTs = p.lastVerified?.seconds ? p.lastVerified.seconds*1000 : (p.lastVerified||0);
-          const lvLabel = lvTs ? new Date(lvTs).toLocaleDateString("en-US",{month:"short",year:"numeric"}) : "Never";
-          return (
-            <div key={p.id} style={{background:T.surface,borderRadius:"0.85rem",border:`2px solid ${saved===p.id?T.sage:stale&&p.approved?T.rose+"66":p.approved?T.sage+"44":T.border}`,padding:"0.75rem",transition:"border-color 0.3s"}}>
-              {editing?.id===p.id ? (
-                <div>
-                  <div style={{fontSize:"0.65rem",fontWeight:"700",color:T.accent,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"0.5rem"}}>Editing: {p.id}</div>
-                  <div style={{display:"flex",gap:"0.4rem",marginBottom:"0.4rem"}}>
-                    <div style={{flex:2}}>
-                      <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",marginBottom:"2px"}}>Product Name</div>
-                      <input style={inp} value={editing.productName} onChange={e=>setEditing(v=>({...v,productName:e.target.value}))}/>
-                    </div>
-                    <div style={{flex:1}}>
-                      <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",marginBottom:"2px"}}>Brand</div>
-                      <input style={inp} value={editing.brand} onChange={e=>setEditing(v=>({...v,brand:e.target.value}))}/>
-                    </div>
-                  </div>
-                  <div style={{marginBottom:"0.4rem"}}>
-                    <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",marginBottom:"2px"}}>Category</div>
-                    <select style={{...inp,background:T.surface}} value={editing.category} onChange={e=>setEditing(v=>({...v,category:e.target.value}))}>
-                      {["face-wash","moisturizer","serum","exfoliant","spf","eye","body","acne","toner","lip","mask","hair","makeup","other"].map(c=>(
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div style={{marginBottom:"0.4rem"}}>
-                    <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",marginBottom:"6px",display:"flex",alignItems:"center",gap:"0.4rem"}}>
-                      Image {editing.image&&<span style={{color:T.sage,fontWeight:"600",textTransform:"none"}}>✓</span>}
-                    </div>
-                    <ImagePicker
-                      brand={editing.brand}
-                      productName={editing.productName}
-                      currentImg={editing.image||""}
-                      onSelect={url=>setEditing(v=>({...v,image:url}))}
-                    />
-                  </div>
-                  <div style={{marginBottom:"0.65rem"}}>
-                    <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",marginBottom:"2px"}}>Buy URL</div>
-                    <input style={inp} value={editing.buyUrl||""} onChange={e=>setEditing(v=>({...v,buyUrl:e.target.value}))} placeholder="https://amazon.com/dp/…"/>
-                  </div>
-                  <div style={{display:"flex",gap:"0.4rem"}}>
-                    <button onClick={saveEdits} disabled={editSaving} title="Save changes and mark product as approved for the shop"
-                      style={{flex:1,padding:"0.5rem",background:T.accent,color:"#FFFFFF",border:"none",borderRadius:"0.5rem",fontSize:"0.8rem",fontWeight:"700",cursor:"pointer",opacity:editSaving?0.6:1}}>
-                      {editSaving?"Saving…":"💾 Save & Approve"}
-                    </button>
-                    <button onClick={()=>setEditing(null)} title="Discard changes"
-                      style={{padding:"0.5rem 0.85rem",background:"transparent",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.8rem",color:T.textMid,cursor:"pointer"}}>
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{display:"flex",alignItems:"center",gap:"0.65rem"}}>
-                  <div style={{width:"48px",height:"48px",borderRadius:"0.5rem",overflow:"hidden",flexShrink:0,background:"#ffffff",border:`1px solid ${T.border}`}}>
-                    {p.image
-                      ? <img src={p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.display="none"}/>
-                      : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1.1rem"}}>📷</div>}
-                  </div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{display:"flex",alignItems:"center",gap:"0.3rem",flexWrap:"wrap",marginBottom:"1px"}}>
-                      <span style={{fontSize:"0.58rem",color:T.accent,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.05em"}}>{p.brand}</span>
-                      {p.approved&&!stale&&<span style={{fontSize:"0.5rem",fontWeight:"700",color:T.sage,background:T.sage+"18",padding:"0.07rem 0.3rem",borderRadius:"999px"}}>{top100Ids.has(p.id)?"⭐ Top 100":"✓ In App"}</span>}
-                      {p.approved&&stale&&<span style={{fontSize:"0.5rem",fontWeight:"700",color:T.rose,background:T.rose+"18",padding:"0.07rem 0.3rem",borderRadius:"999px"}}>Re-check</span>}
-                      {!p.approved&&!p.hidden&&<span style={{fontSize:"0.5rem",fontWeight:"700",color:T.amber,background:T.amber+"18",padding:"0.07rem 0.3rem",borderRadius:"999px"}}>{p.isRequest?"👤 Requested":"⏳ Pending"}</span>}
-                      {p.hidden&&<span style={{fontSize:"0.5rem",fontWeight:"700",color:T.textLight,background:T.border,padding:"0.07rem 0.3rem",borderRadius:"999px"}}>Hidden</span>}
-                      {p.scanCount>0&&<span style={{fontSize:"0.5rem",color:"#6366f1",background:"#6366f118",fontWeight:"700",padding:"0.07rem 0.3rem",borderRadius:"999px"}}>{p.scanCount} scans</span>}
-                    </div>
-                    <div style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
-                    <div style={{fontSize:"0.6rem",color:T.textLight,display:"flex",gap:"0.35rem",marginTop:"1px",flexWrap:"wrap"}}>
-                      <span style={{textTransform:"capitalize"}}>{p.category||"uncategorized"}</span>
-                      <span>·</span>
-                      <AdminImageStatus p={p}/>
-                      <span>·</span>
-                      <span style={{color:p.buyUrl?T.sage:T.rose}}>{p.buyUrl?"✓ link":"no link"}</span>
-                      <span>·</span>
-                      <span
-                        onClick={()=>{setEditIngId(editIngId===p.id?null:p.id); setEditIngText(p.ingredients||"");}}
-                        style={{color:p.ingredients?T.sage:T.rose,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>
-                        {p.ingredients?"✓ ingredients":"+ add ingredients"}
-                      </span>
-                      {p.approved&&<><span>·</span><span style={{color:stale?T.rose:T.sage}}>verified {lvLabel}</span></>}
-                    </div>
-                    {editIngId===p.id&&(
-                      <div style={{marginTop:"0.4rem",display:"flex",gap:"0.3rem",alignItems:"flex-start"}}>
-                        <textarea
-                          autoFocus
-                          value={editIngText}
-                          onChange={e=>setEditIngText(e.target.value)}
-                          placeholder="Paste ingredient list here (comma-separated INCI names)..."
-                          style={{flex:1,padding:"0.4rem 0.5rem",borderRadius:"0.4rem",border:`1px solid ${T.accent}`,fontSize:"0.68rem",color:T.text,background:T.surface,outline:"none",fontFamily:"'Inter',sans-serif",resize:"vertical",minHeight:"60px",lineHeight:1.4}}
-                        />
-                        <div style={{display:"flex",flexDirection:"column",gap:"0.2rem"}}>
-                          <button onClick={()=>saveIngredients(p.id)} disabled={editIngSaving||!editIngText.trim()}
-                            style={{padding:"0.3rem 0.6rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.4rem",fontSize:"0.65rem",cursor:"pointer",fontWeight:"700",whiteSpace:"nowrap"}}>
-                            {editIngSaving?"…":"✓ Save"}
-                          </button>
-                          <button onClick={()=>setEditIngId(null)}
-                            style={{padding:"0.3rem 0.6rem",background:"transparent",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.65rem",cursor:"pointer",color:T.textMid}}>
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div style={{display:"flex",flexDirection:"column",gap:"0.25rem",flexShrink:0}}>
-                    {!p.approved
-                      ? <button onClick={()=>toggleApproved(p)} style={{padding:"0.3rem 0.55rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.4rem",fontSize:"0.65rem",cursor:"pointer",fontWeight:"700",whiteSpace:"nowrap"}}>+ Explore</button>
-                      : <button onClick={()=>toggleApproved(p)} style={{padding:"0.3rem 0.55rem",background:"transparent",color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.65rem",cursor:"pointer"}}>Remove</button>
-                    }
-                    <div style={{display:"flex",gap:"0.2rem"}}>
-                      <button onClick={()=>setEditing({...p,image:p.image||"",buyUrl:p.buyUrl||""})}
-                        style={{flex:1,padding:"0.28rem 0.45rem",background:T.accentSoft,border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.65rem",cursor:"pointer",color:T.text}}>
-                        Edit
-                      </button>
-                      {!p.hidden
-                        ? <button onClick={()=>hideProduct(p)} style={{padding:"0.28rem 0.45rem",background:"transparent",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.65rem",cursor:"pointer",color:T.textLight}}>
-                            Hide
-                          </button>
-                        : <button onClick={()=>toggleApproved(p)} style={{padding:"0.28rem 0.45rem",background:"transparent",border:`1px solid ${T.sage}`,borderRadius:"0.4rem",fontSize:"0.65rem",cursor:"pointer",color:T.sage}}>
-                            Restore
-                          </button>
-                      }
-                      <button onClick={()=>deleteProduct(p)}
-                        style={{padding:"0.28rem 0.45rem",background:"transparent",border:`1px solid ${T.rose}44`,borderRadius:"0.4rem",fontSize:"0.65rem",cursor:"pointer",color:T.rose}}>
-                        🗑
-                      </button>
-                    </div>
-                    {p.approved&&stale&&(
-                      <button onClick={()=>markReverified(p)}
-                        style={{padding:"0.25rem 0.4rem",background:T.sage+"18",border:`1px solid ${T.sage}44`,borderRadius:"0.4rem",fontSize:"0.58rem",cursor:"pointer",color:T.sage,fontWeight:"600",whiteSpace:"nowrap"}}>
-                        ✓ Re-verified
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {sortedFiltered.length===0&&(
-          <div style={{textAlign:"center",padding:"2.5rem 1rem",color:T.textLight,fontSize:"0.85rem"}}>
-            {search?"No products match your search.":filter==="pending"?"All caught up — nothing pending!":"No products in this filter."}
-          </div>
-        )}
-      </div>
-
-      {/* -- Triage Modal -- */}
-      {triageMode&&(
-        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:400,background:"rgba(0,0,0,0.88)",backdropFilter:"blur(6px)",display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
-          <div style={{background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",width:"100%",maxWidth:"520px",boxShadow:"0 -8px 40px rgba(0,0,0,0.25)",height:"88vh",overflowY:"auto"}}>
-
-            {/* Header */}
-            <div style={{background:T.navy,padding:"0.85rem 1.25rem",display:"flex",alignItems:"center",justifyContent:"space-between",borderRadius:"1.25rem 1.25rem 0 0",position:"sticky",top:0,zIndex:1}}>
-              <div style={{display:"flex",alignItems:"center",gap:"0.75rem"}}>
-                <span style={{fontSize:"0.78rem",fontWeight:"700",color:"#fff",fontFamily:"'Inter',sans-serif"}}>⚡ Quick Triage</span>
-                <span style={{fontSize:"0.68rem",color:"rgba(255,255,255,0.5)"}}>{triageIdx+1} / {triageQueue.length}</span>
-              </div>
-              <button onClick={()=>setTriageMode(false)}
-                style={{background:"rgba(255,255,255,0.1)",border:"none",color:"#fff",cursor:"pointer",borderRadius:"0.35rem",padding:"0.3rem 0.55rem",fontSize:"0.75rem"}}>✕</button>
-            </div>
-
-            {triageQueue[triageIdx] ? (()=>{
-              const p = triageQueue[triageIdx];
-              const status = p.approved ? "approved" : (p.hidden ? "hidden" : "pending");
-              const searchQ = encodeURIComponent(`${p.brand||""} ${p.productName||""}`);
-              return (
-                <div style={{padding:"1rem"}}>
-                  {/* Progress bar */}
-                  <div style={{height:"3px",background:T.surfaceAlt,borderRadius:"999px",marginBottom:"1rem",overflow:"hidden"}}>
-                    <div style={{height:"100%",background:T.sage,borderRadius:"999px",width:`${((triageIdx)/Math.max(triageQueue.length-1,1))*100}%`,transition:"width 0.3s"}}/>
-                  </div>
-
-                  {/* Product + image preview */}
-                  <div style={{display:"flex",gap:"0.85rem",marginBottom:"1rem",alignItems:"flex-start"}}>
-                    <div style={{width:"90px",height:"90px",borderRadius:"0.75rem",background:T.surfaceAlt,border:`1.5px solid ${T.border}`,flexShrink:0,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                      {triageImg
-                        ? <img src={triageImg} style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px"}} onError={e=>{e.target.style.opacity="0.15";}}/>
-                        : <span style={{fontSize:"2rem"}}>📷</span>
-                      }
-                    </div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.accent,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.15rem"}}>{p.brand}</div>
-                      <div style={{fontSize:"0.95rem",fontWeight:"700",color:T.text,lineHeight:1.3,marginBottom:"0.35rem"}}>{p.productName}</div>
-                      <div style={{display:"flex",gap:"0.35rem",flexWrap:"wrap"}}>
-                        <span style={{fontSize:"0.58rem",padding:"0.12rem 0.45rem",borderRadius:"999px",background:status==="approved"?T.sage+"15":T.amber+"15",color:status==="approved"?T.sage:T.amber,fontWeight:"600"}}>{status==="approved"?"✓ In App":"Pending"}</span>
-                        {!triageImg&&<span style={{fontSize:"0.58rem",padding:"0.12rem 0.45rem",borderRadius:"999px",background:T.rose+"12",color:T.rose,fontWeight:"600"}}>No image</span>}
-                        {!p.buyUrl&&<span style={{fontSize:"0.58rem",padding:"0.12rem 0.45rem",borderRadius:"999px",background:T.rose+"12",color:T.rose,fontWeight:"600"}}>No link</span>}
-                        {!p.ingredients&&<span style={{fontSize:"0.58rem",padding:"0.12rem 0.45rem",borderRadius:"999px",background:T.rose+"12",color:T.rose,fontWeight:"600"}}>No ingredients</span>}
-                        {p.ingredients&&p.ingredients.split(",").length<8&&<span style={{fontSize:"0.58rem",padding:"0.12rem 0.45rem",borderRadius:"999px",background:T.amber+"15",color:T.amber,fontWeight:"600"}}>⚠ Low confidence</span>}
-                        {p.scanCount>0&&<span style={{fontSize:"0.58rem",padding:"0.12rem 0.45rem",borderRadius:"999px",background:T.accent+"12",color:T.accent,fontWeight:"600"}}>{p.scanCount} scans</span>}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Quick search links */}
-                  <div style={{display:"flex",gap:"0.4rem",marginBottom:"0.85rem",flexWrap:"wrap"}}>
-                    {[
-                      {label:"🔍 Google Images", url:`https://www.google.com/search?q=${searchQ}+product&tbm=isch`},
-                      {label:"Sephora", url:`https://www.sephora.com/search?keyword=${searchQ}`},
-                      {label:"Ulta", url:`https://www.ulta.com/search?search=${searchQ}`},
-                      {label:"Amazon", url:`https://www.amazon.com/s?k=${searchQ}&i=beauty`},
-                    ].map(({label,url})=>(
-                      <a key={label} href={url} target="_blank" rel="noopener noreferrer"
-                        style={{padding:"0.3rem 0.65rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.68rem",color:T.textMid,textDecoration:"none",fontFamily:"'Inter',sans-serif",fontWeight:"600",whiteSpace:"nowrap"}}>
-                        {label}
-                      </a>
-                    ))}
-                  </div>
-
-                  {/* Product Name */}
-                  <div style={{marginBottom:"0.6rem"}}>
-                    <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"4px"}}>Product Name</div>
-                    <input
-                      value={triageName}
-                      onChange={e=>{setTriageName(e.target.value);setTriageSaved(false);}}
-                      placeholder="Product name…"
-                      style={{width:"100%",padding:"0.5rem 0.65rem",border:`1.5px solid ${triageName?T.sage:T.border}`,borderRadius:"0.5rem",fontSize:"0.78rem",fontFamily:"'Inter',sans-serif",background:T.surface,color:T.text,outline:"none",boxSizing:"border-box"}}
-                    />
-                  </div>
-
-                  {/* Image URL */}
-                  <div style={{marginBottom:"0.6rem"}}>
-                    <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"4px"}}>Image URL</div>
-                    <div style={{display:"flex",gap:"0.4rem"}}>
-                      <input
-                        ref={triageImgRef}
-                        value={triageImg}
-                        onChange={e=>{setTriageImg(e.target.value);setTriageSaved(false);}}
-                        placeholder="Paste https:// image URL (not base64)…"
-                        style={{flex:1,padding:"0.5rem 0.65rem",border:`1.5px solid ${triageImg?T.sage:T.border}`,borderRadius:"0.5rem",fontSize:"0.78rem",fontFamily:"'Inter',sans-serif",background:T.surface,color:T.text,outline:"none"}}
-                      />
-                      {triageImg&&<button onClick={()=>{setTriageImg("");setTriageSaved(false);}} style={{padding:"0.5rem 0.65rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.75rem",cursor:"pointer",color:T.rose}}>✕</button>}
-                    </div>
-                  </div>
-
-                  {/* Buy Link URL */}
-                  <div style={{marginBottom:"1rem"}}>
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"4px"}}>
-                      <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em"}}>Buy Link</div>
-                      <button onClick={()=>{
-                        const p = triageQueue[triageIdx];
-                        if (!p) return;
-                        const name = triageName.trim() || p.productName || "";
-                        const brand = p.brand || "";
-                        const q = encodeURIComponent(`${brand} ${name}`.trim());
-                        setTriageLink(`https://www.amazon.com/s?k=${q}&i=beauty`);
-                        setTriageSaved(false);
-                      }} style={{fontSize:"0.58rem",color:T.accent,background:"none",border:"none",cursor:"pointer",fontWeight:"600",padding:0}}>
-                        ↺ Reset to correct product
-                      </button>
-                    </div>
-                    <div style={{display:"flex",gap:"0.4rem"}}>
-                      <input
-                        value={triageLink}
-                        onChange={e=>{setTriageLink(e.target.value);setTriageSaved(false);}}
-                        placeholder="Paste product buy URL here…"
-                        style={{flex:1,padding:"0.5rem 0.65rem",border:`1.5px solid ${triageLink?T.sage:T.border}`,borderRadius:"0.5rem",fontSize:"0.78rem",fontFamily:"'Inter',sans-serif",background:T.surface,color:T.text,outline:"none"}}
-                      />
-                      {triageLink&&<a href={triageLink} target="_blank" rel="noopener noreferrer" style={{padding:"0.5rem 0.65rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.75rem",color:T.accent,textDecoration:"none",display:"flex",alignItems:"center"}}>↗</a>}
-                    </div>
-                  </div>
-
-                  {/* Ingredients */}
-                  <div style={{marginBottom:"1rem"}}>
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"4px"}}>
-                      <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em"}}>Ingredients</div>
-                      {!triageIng && <span style={{fontSize:"0.58rem",color:T.rose,fontWeight:"600"}}>Missing</span>}
-                      {triageIng && <span style={{fontSize:"0.58rem",color:T.sage,fontWeight:"600"}}>✓ {triageIng.split(",").length} ingredients</span>}
-                    </div>
-                    <textarea
-                      value={triageIng}
-                      onChange={e=>{setTriageIng(e.target.value);setTriageSaved(false);}}
-                      placeholder="water, glycerin, niacinamide, ceramide np…"
-                      rows={3}
-                      style={{width:"100%",padding:"0.5rem 0.65rem",border:`1.5px solid ${triageIng?T.sage:T.border}`,borderRadius:"0.5rem",fontSize:"0.72rem",fontFamily:"'Inter',sans-serif",background:T.surface,color:T.text,outline:"none",resize:"vertical",boxSizing:"border-box"}}
-                    />
-                  </div>
-
-                  {/* Action buttons */}
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:"0.5rem",marginBottom:"0.75rem"}}>
-                    <button onClick={()=>triageNav(-1)} disabled={triageIdx===0}
-                      style={{padding:"0.7rem 0",background:"transparent",border:`1.5px solid ${T.border}`,borderRadius:"0.65rem",fontSize:"0.78rem",cursor:triageIdx>0?"pointer":"not-allowed",color:T.textMid,opacity:triageIdx===0?0.3:1,fontWeight:"600"}}>
-                      ← Back
-                    </button>
-                    <button onClick={async()=>{
-                      await updateDoc(doc(db,"products",p.id),{hidden:true,approved:false,updatedAt:Date.now()});
-                      setProducts(ps=>ps.map(q=>q.id===p.id?{...q,hidden:true,approved:false}:q));
-                      setTriageDone(d=>new Set([...d,p.id]));
-                      triageNav(1);
-                    }} style={{padding:"0.7rem 0",background:T.rose+"15",border:`1.5px solid ${T.rose}33`,borderRadius:"0.65rem",fontSize:"0.78rem",cursor:"pointer",color:T.rose,fontWeight:"700"}}>
-                      🚫 Hide
-                    </button>
-                    <button onClick={()=>{
-                      setTriageSkipped(s=>new Set([...s, p.id]));
-                      // Reset to index 0 so skipped items go to back
-                      const nextIdx = triageIdx + 1 < triageQueue.length ? triageIdx + 1 : 0;
-                      setTriageImg(""); setTriageLink(""); setTriageIng(""); setTriageName(""); setTriageSaved(false);
-                      setTriageIdx(nextIdx);
-                      const p2 = triageQueue[nextIdx];
-                      if (p2 && p2.id !== p.id) {
-                        setTimeout(()=>triageImgRef.current?.focus(), 100);
-                      }
-                    }}
-                      style={{padding:"0.7rem 0",background:T.amber+"10",border:`1.5px solid ${T.amber}33`,borderRadius:"0.65rem",fontSize:"0.78rem",cursor:"pointer",color:T.amber,fontWeight:"700"}}>
-                      Skip →
-                    </button>
-                    <button onClick={()=>triageSave(true)} disabled={triageSaving}
-                      style={{padding:"0.7rem 0",background:triageSaved?T.sage:T.navy,color:"#fff",border:"none",borderRadius:"0.65rem",fontSize:"0.78rem",fontWeight:"700",cursor:"pointer",transition:"all 0.15s"}}>
-                      {triageSaving?"…":triageSaved?"✓ Saved":"✓ Save →"}
-                    </button>
-                  </div>
-
-                  <div style={{fontSize:"0.58rem",color:T.textLight,textAlign:"center",display:"flex",gap:"1rem",justifyContent:"center"}}>
-                    <span><kbd style={{background:T.surfaceAlt,padding:"0.1rem 0.3rem",borderRadius:"0.2rem",border:`1px solid ${T.border}`}}>Enter</kbd> save & next</span>
-                    <span><kbd style={{background:T.surfaceAlt,padding:"0.1rem 0.3rem",borderRadius:"0.2rem",border:`1px solid ${T.border}`}}>Del</kbd> hide</span>
-                    <span><kbd style={{background:T.surfaceAlt,padding:"0.1rem 0.3rem",borderRadius:"0.2rem",border:`1px solid ${T.border}`}}>Esc</kbd> close</span>
-                  </div>
-                </div>
-              );
-            })() : (
-              <div style={{padding:"2rem",textAlign:"center"}}>
-                <div style={{fontSize:"2rem",marginBottom:"0.5rem"}}>🎉</div>
-                <div style={{fontWeight:"700",fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem",color:T.text}}>All done!</div>
-                <div style={{fontSize:"0.8rem",color:T.textLight,marginBottom:"1rem"}}>Every product has been reviewed.</div>
-                <button onClick={()=>setTriageMode(false)} style={{padding:"0.6rem 1.5rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.6rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>Close</button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* -- Re-seed password confirmation modal -- */}
-      {showSeedConfirm&&(
-        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(28,28,26,0.65)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}}>
-          <div style={{background:T.surface,borderRadius:"1.25rem",padding:"1.5rem",width:"100%",maxWidth:"360px",boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}}>
-            <div style={{fontSize:"1.5rem",textAlign:"center",marginBottom:"0.5rem"}}>⚠️</div>
-            <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"700",fontSize:"1rem",color:T.text,textAlign:"center",marginBottom:"0.25rem"}}>Confirm Re-seed</div>
-            <div style={{fontSize:"0.78rem",color:T.rose,textAlign:"center",marginBottom:"1.25rem",lineHeight:1.5}}>
-              This will <strong>delete all existing products</strong> and replace them with the 200 curated ones.<br/>All user scan records will be lost.
-            </div>
-            <div style={{fontSize:"0.72rem",color:T.textLight,marginBottom:"0.35rem",fontWeight:"600"}}>Enter password to confirm:</div>
-            <input
-              type="password"
-              value={seedPassword}
-              onChange={e=>{setSeedPassword(e.target.value); setSeedPasswordErr(false);}}
-              onKeyDown={e=>e.key==="Enter"&&confirmSeed()}
-              placeholder="Password"
-              autoFocus
-              style={{width:"100%",padding:"0.6rem 0.75rem",borderRadius:"0.6rem",border:`1.5px solid ${seedPasswordErr?T.rose:T.border}`,fontSize:"0.85rem",color:T.text,background:"#FFFFFF",outline:"none",fontFamily:"'Inter',sans-serif",boxSizing:"border-box",marginBottom:"0.3rem"}}
-            />
-            {seedPasswordErr&&<div style={{fontSize:"0.7rem",color:T.rose,marginBottom:"0.5rem"}}>Incorrect password</div>}
-            <div style={{display:"flex",gap:"0.5rem",marginTop:"0.75rem"}}>
-              <button onClick={()=>setShowSeedConfirm(false)}
-                style={{flex:1,padding:"0.6rem",background:"transparent",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.82rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                Cancel
-              </button>
-              <button onClick={confirmSeed}
-                style={{flex:1,padding:"0.6rem",background:T.rose,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.82rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                🌱 Yes, Re-seed
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-
-function ProductRequestsPanel() {
-  const [requests, setRequests] = useState([]);
-  const [loading, setLoading]   = useState(true);
-
-  useEffect(()=>{
-    async function load() {
-      try {
-        const snap = await getDocs(query(collection(db,"product_requests"), orderBy("requestedAt","desc"), limit(100)));
-        setRequests(snap.docs.map(d=>({id:d.id,...d.data()})));
-      } catch(e) { console.error(e); }
-      setLoading(false);
-    }
-    load();
-  },[]);
-
-  async function markDone(id) {
-    await updateDoc(doc(db,"product_requests",id),{status:"done"});
-    setRequests(rs=>rs.map(r=>r.id===id?{...r,status:"done"}:r));
-  }
-  async function dismiss(id) {
-    await updateDoc(doc(db,"product_requests",id),{status:"dismissed"});
-    setRequests(rs=>rs.map(r=>r.id===id?{...r,status:"dismissed"}:r));
-  }
-
-  const pending   = requests.filter(r=>r.status==="pending");
-  const done      = requests.filter(r=>r.status==="done");
-  const dismissed = requests.filter(r=>r.status==="dismissed");
-
-  if (loading) return <div style={{padding:"2rem",textAlign:"center",color:T.textLight,fontSize:"0.82rem"}}>Loading…</div>;
-
-  return (
-    <div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}>
-      <div style={{fontSize:"0.72rem",color:T.textLight,marginBottom:"0.25rem"}}>
-        <strong style={{color:T.text}}>{pending.length}</strong> pending · {done.length} added · {dismissed.length} dismissed
-      </div>
-      {requests.length===0&&(
-        <div style={{padding:"2rem",textAlign:"center",color:T.textLight,fontSize:"0.82rem",background:T.surface,borderRadius:"1rem",border:`1px solid ${T.border}`}}>
-          No product requests yet
-        </div>
-      )}
-      {requests.map(r=>(
-        <div key={r.id} style={{background:T.surface,border:`1px solid ${r.status==="pending"?T.amber+"55":T.border}`,borderRadius:"0.75rem",padding:"0.75rem 0.9rem",display:"flex",alignItems:"center",gap:"0.65rem",opacity:r.status!=="pending"?0.55:1}}>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:"0.82rem",fontWeight:"600",color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>"{r.query}"</div>
-            <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px",display:"flex",gap:"0.4rem",alignItems:"center"}}>
-              <span>{new Date(r.requestedAt).toLocaleDateString()}</span>
-              {r.status!=="pending"&&<span style={{color:r.status==="done"?T.sage:T.textLight,fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.04em",fontSize:"0.55rem"}}>{r.status==="done"?"✓ Added":"Dismissed"}</span>}
-            </div>
-          </div>
-          {r.status==="pending"&&(
-            <div style={{display:"flex",gap:"0.3rem",flexShrink:0}}>
-              <button onClick={()=>markDone(r.id)}
-                style={{padding:"0.28rem 0.55rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.4rem",fontSize:"0.65rem",fontWeight:"700",cursor:"pointer"}}>
-                ✓ Added
-              </button>
-              <button onClick={()=>dismiss(r.id)}
-                style={{padding:"0.28rem 0.45rem",background:"transparent",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.65rem",cursor:"pointer",color:T.textLight}}>
-                ✕
-              </button>
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function AdminShopManager() {
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [saving, setSaving]     = useState({});
-  const [search, setSearch]     = useState("");
-  const [view, setView]         = useState("all"); // all | in | out
-
-  useEffect(() => { load(); }, []);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const snap = await getDocs(query(collection(db,"products"), orderBy("createdAt","desc")));
-      setProducts(snap.docs.map(d=>({id:d.id,...d.data()})));
-    } catch(e) { console.error(e); }
-    setLoading(false);
-  }
-
-  async function toggle(p) {
-    setSaving(s=>({...s,[p.id]:true}));
-    const newVal = !p.approved;
-    try {
-      await updateDoc(doc(db,"products",p.id), { approved: newVal, updatedAt: Date.now() });
-      setProducts(ps=>ps.map(q=>q.id===p.id?{...q,approved:newVal}:q));
-    } catch(e) { console.error(e); }
-    setSaving(s=>({...s,[p.id]:false}));
-  }
-
-  async function toggleOverride(p) {
-    setSaving(s=>({...s,[p.id]:true}));
-    const newVal = !p.shopOverride;
-    try {
-      await updateDoc(doc(db,"products",p.id), { shopOverride: newVal, updatedAt: Date.now() });
-      setProducts(ps=>ps.map(q=>q.id===p.id?{...q,shopOverride:newVal}:q));
-    } catch(e) { console.error(e); }
-    setSaving(s=>({...s,[p.id]:false}));
-  }
-
-  const filtered = products.filter(p => {
-    const q = search.toLowerCase();
-    const matchSearch = !q || (p.productName||"").toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q);
-    const hasImg = hasValidImage(p);
-    const matchView = view==="all" ? true : view==="in" ? qualifies(p) : !qualifies(p);
-    return matchSearch && matchView;
-  });
-
-  const qualifies = p => {
-    const img = (p.adminImage||p.image||"").trim();
-    const ing = (p.ingredients||"").trim();
-    const buy = (p.buyUrl||"").trim();
-    return (hasValidImage(p) && ing.length > 10 && buy.startsWith("http")) || p.shopOverride;
-  };
-  const inCount  = products.filter(p=>qualifies(p)).length;
-  const outCount = products.filter(p=>!qualifies(p)).length;
-
-  if (loading) return <div style={{padding:"2rem",textAlign:"center",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Loading…</div>;
-
-  return (
-    <div style={{fontFamily:"'Inter',sans-serif"}}>
-      {/* Header stats */}
-      <div style={{display:"flex",gap:"0.5rem",marginBottom:"1rem"}}>
-        {[
-          {label:"In Explore", val:inCount, color:T.sage},
-          {label:"Not in Explore", val:outCount, color:T.textMid},
-          {label:"Total", val:products.length, color:T.accent},
-        ].map(s=>(
-          <div key={s.label} style={{flex:1,textAlign:"center",padding:"0.6rem",background:T.surfaceAlt,borderRadius:"0.6rem",border:`1px solid ${T.border}`}}>
-            <div style={{fontSize:"1.2rem",fontWeight:"800",color:s.color}}>{s.val}</div>
-            <div style={{fontSize:"0.55rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em"}}>{s.label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Search + filter */}
-      <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.75rem"}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…"
-          style={{flex:1,padding:"0.5rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.78rem",background:T.surface,color:T.text,outline:"none",fontFamily:"'Inter',sans-serif"}}/>
-        <div style={{display:"flex",background:T.surfaceAlt,borderRadius:"0.5rem",border:`1px solid ${T.border}`,overflow:"hidden"}}>
-          {[["all","All"],["in","✓ In Explore"],["out","Out"]].map(([id,lbl])=>(
-            <button key={id} onClick={()=>setView(id)}
-              style={{padding:"0.4rem 0.65rem",background:view===id?T.text:"transparent",color:view===id?"#fff":T.textMid,border:"none",fontSize:"0.68rem",cursor:"pointer",fontWeight:view===id?"600":"400",fontFamily:"'Inter',sans-serif"}}>
-              {lbl}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Product list */}
-      <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
-        {filtered.map(p => {
-          const img = p.adminImage || p.image || p.productImage || "";
-          const hasImg = img.startsWith("http");
-          const hasIng = (p.ingredients||"").trim().length > 5;
-          const hasBuy = (p.buyUrl||"").startsWith("http");
-          const ready  = hasImg && hasIng && hasBuy;
-          return (
-            <div key={p.id} style={{display:"flex",alignItems:"center",gap:"0.6rem",padding:"0.5rem 0.65rem",background:T.surface,borderRadius:"0.65rem",border:`1px solid ${qualifies(p)?T.sage+"44":T.border}`}}>
-              {/* Thumbnail */}
-              <div style={{width:"36px",height:"36px",borderRadius:"0.4rem",background:T.surfaceAlt,flexShrink:0,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                {hasImg
-                  ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain"}}/>
-                  : <span style={{fontSize:"0.55rem",color:T.textLight}}>No img</span>}
-              </div>
-              {/* Info */}
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.productName}</div>
-                <div style={{fontSize:"0.6rem",color:T.textLight}}>{p.brand||"—"}</div>
-                {/* Status badges */}
-                <div style={{display:"flex",gap:"0.25rem",marginTop:"2px",flexWrap:"wrap"}}>
-                  {p.shopOverride&&<span style={{fontSize:"0.5rem",background:T.accent+"22",color:T.accent,padding:"0.05rem 0.25rem",borderRadius:"999px",fontWeight:"600"}}>forced</span>}
-                  {!ready&&[!hasImg&&"no img",!hasIng&&"no ingr.",!hasBuy&&"no link"].filter(Boolean).map(w=>(
-                    <span key={w} style={{fontSize:"0.5rem",background:T.amber+"22",color:T.amber,padding:"0.05rem 0.25rem",borderRadius:"999px"}}>{w}</span>
-                  ))}
-                </div>
-              </div>
-              {/* Manual override checkbox */}
-              <label title="Force into Explore regardless of missing fields" style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"2px",cursor:"pointer",flexShrink:0}}>
-                <input type="checkbox" checked={!!p.shopOverride} onChange={()=>toggleOverride(p)}
-                  style={{width:"15px",height:"15px",cursor:"pointer",accentColor:T.accent}}/>
-                <span style={{fontSize:"0.45rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.04em"}}>Force</span>
-              </label>
-              {/* Approved toggle */}
-              <button onClick={()=>toggle(p)} disabled={saving[p.id]}
-                style={{flexShrink:0,padding:"0.3rem 0.6rem",background:qualifies(p)?T.sage:T.surfaceAlt,color:qualifies(p)?"#fff":T.textMid,border:`1px solid ${qualifies(p)?T.sage:T.border}`,borderRadius:"0.4rem",fontSize:"0.65rem",fontWeight:"600",cursor:qualifies(p)?"default":"pointer",minWidth:"54px"}}>
-                {saving[p.id]?"Saving…":qualifies(p)?"✓ In Explore":"Needs data"}
-              </button>
-            </div>
-          );
-        })}
-        {filtered.length===0&&<div style={{textAlign:"center",color:T.textLight,padding:"2rem",fontSize:"0.8rem"}}>No products found</div>}
-      </div>
-    </div>
-  );
-}
-
-
-// -- Admin: What We're Loving manager -------------------------
-function AdminWWLManager() {
-  const [picks, setPicks]       = useState([]);
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [saving, setSaving]     = useState(false);
-  const [search, setSearch]     = useState("");
-  const [msg, setMsg]           = useState("");
-
-  useEffect(()=>{
-    async function load() {
-      // Load products first
-      try {
-        const prodSnap = await getDocs(collection(db,"products"));
-        setProducts(prodSnap.docs.map(d=>({id:d.id,...d.data()})).filter(p=>p.approved).sort((a,b)=>(a.productName||"").localeCompare(b.productName||"")));
-      } catch(e) { console.error("WWL products error:", e); }
-      // Load picks separately
-      try {
-        const pickSnap = await getDocs(query(collection(db,"founder_picks"), orderBy("order","asc")));
-        setPicks(pickSnap.docs.map(d=>({id:d.id,...d.data()})));
-      } catch {
-        try {
-          const pickSnap = await getDocs(collection(db,"founder_picks"));
-          setPicks(pickSnap.docs.map(d=>({id:d.id,...d.data()})));
-        } catch {}
-      }
-      setLoading(false);
-    }
-    load();
-  },[]);
-
-  async function addPick(product) {
-    if (picks.find(p=>p.productId===product.id)) { setMsg("Already in picks"); setTimeout(()=>setMsg(""),2000); return; }
-    setSaving(true);
-    const newPick = { productId:product.id, productName:product.productName, brand:product.brand||"", image:product.adminImage||product.image||"", poreScore:product.poreScore||0, buyUrl:product.buyUrl||"", note:"", order:picks.length };
-    const ref = await addDoc(collection(db,"founder_picks"), newPick);
-    setPicks(p=>[...p, {id:ref.id,...newPick}]);
-    setSearch(""); setSaving(false);
-    setMsg("Added!"); setTimeout(()=>setMsg(""),2000);
-  }
-
-  async function removePick(id) {
-    await deleteDoc(doc(db,"founder_picks",id));
-    setPicks(p=>p.filter(x=>x.id!==id));
-  }
-
-  async function updateNote(id, note) {
-    await updateDoc(doc(db,"founder_picks",id),{note});
-    setPicks(p=>p.map(x=>x.id===id?{...x,note}:x));
-  }
-
-  const filtered = search.trim().length > 0
-    ? products.filter(p=>(p.productName+" "+p.brand).toLowerCase().includes(search.toLowerCase())).slice(0,8)
-    : [];
-
-  if (loading) return <div style={{padding:"2rem",textAlign:"center",color:T.textLight}}>Loading…</div>;
-
-  return (
-    <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
-      <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.5}}>
-        These products appear in the "What We're Loving" carousel on the Explore page. Add up to 10.
-      </div>
-
-      {/* Search to add */}
-      <div>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={`Search ${products.length} products…`}
-          style={{width:"100%",padding:"0.65rem 1rem",borderRadius:"0.65rem",border:`1px solid ${T.border}`,fontSize:"0.82rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface,outline:"none",boxSizing:"border-box"}}/>
-      </div>
-
-      {/* Results — inline buttons, not a dropdown */}
-      {filtered.length > 0 && (
-        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.65rem",overflow:"hidden"}}>
-          {filtered.map(p=>(
-            <button key={p.id} onClick={()=>{document.activeElement?.blur();addPick(p);}}
-              style={{width:"100%",padding:"0.85rem 1rem",background:"none",border:"none",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:"0.6rem",cursor:"pointer",textAlign:"left",WebkitTapHighlightColor:"rgba(0,0,0,0.05)"}}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text}}>{p.productName}</div>
-                <div style={{fontSize:"0.68rem",color:T.textLight}}>{p.brand}</div>
-              </div>
-              <div style={{flexShrink:0,background:T.sage,color:"#fff",borderRadius:"0.5rem",padding:"0.35rem 0.75rem",fontSize:"0.75rem",fontWeight:"700"}}>+ Add</div>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {msg&&<div style={{fontSize:"0.75rem",color:T.sage,fontWeight:"600"}}>{msg}</div>}
-
-      {/* Current picks */}
-      <div style={{fontSize:"0.62rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",fontWeight:"600"}}>{picks.length} / 10 picks</div>
-      {picks.length===0&&(
-        <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.8rem",background:T.surfaceAlt,borderRadius:"0.75rem"}}>No picks yet — search and add products above</div>
-      )}
-      {picks.map((pick,i)=>(
-        <div key={pick.id} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",padding:"0.75rem",display:"flex",gap:"0.65rem",alignItems:"flex-start"}}>
-          <div style={{width:"40px",height:"40px",flexShrink:0,borderRadius:"0.4rem",overflow:"hidden",background:"#fff",border:`1px solid ${T.border}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-            {pick.image?<img src={pick.image} style={{width:"100%",height:"100%",objectFit:"contain",padding:"3px"}} alt=""/>:<span style={{fontSize:"1rem"}}>📦</span>}
-          </div>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pick.productName}</div>
-            <div style={{fontSize:"0.65rem",color:T.textLight,marginBottom:"0.35rem"}}>{pick.brand}</div>
-            <input value={pick.note||""} onChange={e=>updateNote(pick.id,e.target.value)}
-              placeholder="Add a short note (e.g. 'Great for dry skin')"
-              style={{width:"100%",padding:"0.4rem 0.6rem",borderRadius:"0.4rem",border:`1px solid ${T.border}`,fontSize:"0.72rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.bg,outline:"none",boxSizing:"border-box"}}/>
-          </div>
-          <button onClick={()=>removePick(pick.id)} style={{background:"none",border:"none",cursor:"pointer",color:T.rose,padding:"0.2rem",flexShrink:0}}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-
-
-// -- Admin: AI Nightly Triage Bot ------------------------------
-
-
-// -- Admin: AutoFix only (used in Clean Up tab) ----------------
-function AdminAutoFixOnly({afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog}) {
-  const [products, setProducts] = React.useState([]);
-  React.useEffect(() => {
-    getDocs(collection(db, "products")).then(snap => {
-      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }).catch(() => {});
-  }, []);
-  return <AutoFixDatabase products={products} onRefresh={async () => {
-    const snap = await getDocs(collection(db, "products"));
-    setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-  }} onOpenTriage={() => {}} afRunning={afRunning} afLog={afLog} afDone={afDone} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog}/>;
-}
-
-// -- Admin: Clean Up (Ingredients Auto-fetch + Manual Image Triage + Fill Ingredients) --
-
-// -- One-time Amazon URL fixer ----------------------------------
-function FixAmazonUrls({ products, onFixed }) {
-  const [fixing, setFixing] = React.useState(false);
-  const [done, setDone] = React.useState(false);
-  const [count, setCount] = React.useState(0);
-
-  async function fixUrls() {
-    setFixing(true);
-    let fixed = 0;
-    const broken = products.filter(p => {
-      const img = p.adminImage || "";
-      return img.includes("media-amazon") || img.includes("ssl-images-amazon");
-    });
-    for (const p of broken) {
-      const img = p.adminImage || "";
-      // Normalize: extract image ID and use _AC_SL400_
-      const match = img.match(/\/images\/I\/([A-Za-z0-9%+_-]+?)(?:\._[^/]+_)?\.(?:jpg|jpeg|png|webp)/i);
-      if (match) {
-        const newUrl = "https://m.media-amazon.com/images/I/" + match[1] + "._AC_SL400_.jpg";
-        try {
-          await updateDoc(doc(db, "products", p.id), { adminImage: newUrl, updatedAt: Date.now() });
-          fixed++;
-        } catch(e) { console.error(e); }
-      }
-    }
-    setCount(fixed);
-    setDone(true);
-    setFixing(false);
-    if (fixed > 0) onFixed();
-  }
-
-  if (done) return null;
-
-  return (
-    <div style={{background:T.amber+"15",border:`1px solid ${T.amber}44`,borderRadius:"0.75rem",padding:"0.65rem 0.85rem",display:"flex",alignItems:"center",gap:"0.75rem"}}>
-      <div style={{flex:1}}>
-        <div style={{fontSize:"0.72rem",fontWeight:"600",color:T.amber,fontFamily:"'Inter',sans-serif"}}>⚠ Amazon image URLs need fixing</div>
-        <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"1px"}}>{products.filter(p=>(p.adminImage||"").includes("amazon")).length} products have broken Amazon URLs — one-time fix</div>
-      </div>
-      <button onClick={fixUrls} disabled={fixing}
-        style={{padding:"0.4rem 0.85rem",background:T.amber,color:"#fff",border:"none",borderRadius:"0.5rem",fontSize:"0.68rem",fontWeight:"700",cursor:fixing?"default":"pointer",fontFamily:"'Inter',sans-serif",flexShrink:0}}>
-        {fixing ? "Fixing…" : "Fix now"}
-      </button>
-    </div>
-  );
-}
-
-
-async function tryClaudeCandidates(p) {
-  if (!ANTHROPIC_KEY) return [];
-  try {
-    // Use proxy to avoid CORS issues
-    const res = await fetch("/api/anthropic", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 600,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-        system: "Find skincare product images. Search Sephora and Ulta for the product. Return ONLY a JSON object: {\"urls\": [\"https://...\", \"https://...\"]}. Include up to 4 direct image URLs ending in .jpg, .png, or .webp. No explanation.",
-        messages: [{ role: "user", content: `Find product image URLs for: ${(p.brand||"").trim()} ${(p.productName||"").trim()}` }]
-      })
-    });
-    const data = await res.json();
-    if (data.error) { console.error("Claude error:", data.error); return []; }
-    const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").replace(/```json|```/g,"").trim();
-    console.log("[ImagePicker] Response:", text.slice(0,400));
-    // Try JSON object with urls array
-    const objMatch = text.match(/\{[\s\S]*?\}/);
-    if (objMatch) {
-      try {
-        const r = JSON.parse(objMatch[0]);
-        const urls = (r.urls||r.url?[r.url]:[]).filter(u=>u&&u.startsWith("http"));
-        if (urls.length) return urls.map(u=>({url:u,source:"Web"}));
-      } catch {}
-    }
-    // Try JSON array
-    const arrMatch = text.match(/\[[\s\S]*?\]/);
-    if (arrMatch) {
-      try {
-        const r = JSON.parse(arrMatch[0]);
-        const valid = r.filter(x=>x&&(x.url||x).startsWith("http")).map(x=>({url:x.url||x,source:x.source||"Web"}));
-        if (valid.length) return valid;
-      } catch {}
-    }
-    // Fallback: extract image URLs from raw text
-    const matches = [...text.matchAll(/https?:\/\/[^\s"'<>)]+\.(?:jpg|jpeg|png|webp|avif)[^\s"'<>)]*/gi)];
-    if (matches.length) return matches.slice(0,4).map(m=>({url:m[0],source:"Web"}));
-    return [];
-  } catch(e) { console.error("[ImagePicker] Error:", e); return []; }
-}
-
-// -- AdminImagePicker -----------------------------------------
-function AdminImagePicker({products, setProducts, onBack}) {
-  const noImg = products.filter(p => !hasValidImage(p));
-  const [idx, setIdx] = React.useState(0);
-  const [candidates, setCandidates] = React.useState([]);
-  const [loading, setLoading] = React.useState(false);
-  const [saved, setSaved] = React.useState(false);
-  const [customUrl, setCustomUrl] = React.useState("");
-  const [searchStatus, setSearchStatus] = React.useState("");
-
-  const product = noImg[idx];
-
-  async function search() {
-    if (!product) return;
-    if (!ANTHROPIC_KEY) { setSearchStatus("No API key — check VITE_ANTHROPIC_KEY in Vercel"); return; }
-    setLoading(true); setCandidates([]); setSaved(false); setCustomUrl(""); setSearchStatus("Searching…");
-    try {
-      const results = await tryClaudeCandidates(product);
-      setCandidates(results);
-      if (!results.length) setSearchStatus("No images found — try pasting a URL below or skip");
-      else setSearchStatus("");
-    } catch(e) {
-      setSearchStatus("Error: " + e.message);
-    }
-    setLoading(false);
-  }
-
-  async function pickImage(url) {
-    if (!product || !url) return;
-    await updateDoc(doc(db, "products", product.id), { adminImage: url, image: url, updatedAt: Date.now() });
-    setProducts(ps => ps.map(p => p.id === product.id ? {...p, adminImage: url, image: url} : p));
-    setSaved(true);
-    setTimeout(() => { setIdx(i => i+1); setSaved(false); setCandidates([]); }, 600);
-  }
-
-  async function saveCustom() {
-    if (!customUrl.trim().startsWith("http")) return;
-    await pickImage(customUrl.trim());
-  }
-
-  function skip() { setIdx(i => i+1); setCandidates([]); setSaved(false); setCustomUrl(""); }
-
-  if (!product) return (
-    <div style={{padding:"2rem",textAlign:"center"}}>
-      <div style={{fontSize:"2rem",marginBottom:"0.5rem"}}>✓</div>
-      <div style={{fontWeight:"600",color:T.text}}>All products have images!</div>
-      <button onClick={onBack} style={{marginTop:"1rem",padding:"0.5rem 1rem",background:T.accent,color:"#fff",border:"none",borderRadius:"0.5rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back</button>
-    </div>
-  );
-
-  return (
-    <div style={{maxWidth:"480px",margin:"0 auto"}}>
-      <div style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"1rem"}}>
-        <button onClick={onBack} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back</button>
-        <span style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{idx+1} of {noImg.length} missing images</span>
-      </div>
-
-      {/* Product info */}
-      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",padding:"0.85rem 1rem",marginBottom:"0.85rem"}}>
-        <div style={{fontSize:"0.6rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",fontFamily:"'Inter',sans-serif"}}>{product.brand}</div>
-        <div style={{fontWeight:"600",color:T.text,fontSize:"0.95rem",fontFamily:"'Inter',sans-serif",marginTop:"2px"}}>{product.productName}</div>
-        <div style={{fontSize:"0.7rem",color:T.textLight,marginTop:"3px",fontFamily:"'Inter',sans-serif"}}>{product.category} · pore score {product.poreScore??0}/5</div>
-      </div>
-
-      {/* Search buttons */}
-      {!loading && candidates.length === 0 && !saved && (
-        <div style={{display:"flex",flexDirection:"column",gap:"0.5rem",marginBottom:"0.75rem"}}>
-          <button onClick={search}
-            style={{width:"100%",padding:"0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.85rem",cursor:"pointer",fontWeight:"600",fontSize:"0.9rem",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem"}}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            Find images with AI
-          </button>
-          <a href={`https://www.google.com/search?q=${encodeURIComponent((product.brand||"")+" "+(product.productName||"")+" product")}&tbm=isch`} target="_blank" rel="noopener noreferrer"
-            style={{width:"100%",padding:"0.75rem",background:"none",border:`1.5px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",fontWeight:"600",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem",color:T.text,textDecoration:"none",boxSizing:"border-box"}}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-            Google it → copy image URL and paste below
-          </a>
-        </div>
-      )}
-
-      {loading && (
-        <div style={{textAlign:"center",padding:"1.5rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontSize:"0.85rem"}}>
-          <div style={{width:"20px",height:"20px",border:`2px solid ${T.border}`,borderTopColor:T.accent,borderRadius:"50%",animation:"spin 0.8s linear infinite",margin:"0 auto 0.5rem"}}/>
-          Searching Sephora, ULTA & brand sites…
-        </div>
-      )}
-      {!loading && searchStatus && (
-        <div style={{padding:"0.75rem 1rem",background:candidates.length===0?T.rose+"12":T.sage+"12",border:`1px solid ${candidates.length===0?T.rose:T.sage}33`,borderRadius:"0.65rem",fontSize:"0.78rem",color:candidates.length===0?T.rose:T.sage,fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem"}}>
-          {searchStatus}
-        </div>
-      )}
-
-      {saved && (
-        <div style={{textAlign:"center",padding:"1rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>✓ Saved! Moving to next…</div>
-      )}
-
-      {/* Candidate grid */}
-      {candidates.length > 0 && !saved && (
-        <div>
-          <div style={{fontSize:"0.65rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",fontFamily:"'Inter',sans-serif",marginBottom:"0.5rem"}}>Tap to select the best image</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.6rem",marginBottom:"0.75rem"}}>
-            {candidates.map((c,i) => (
-              <button key={i} onClick={()=>pickImage(c.url)}
-                style={{background:T.surface,border:`1.5px solid ${T.border}`,borderRadius:"0.75rem",overflow:"hidden",cursor:"pointer",padding:0,display:"flex",flexDirection:"column",textAlign:"left",transition:"border-color 0.15s"}}
-                onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
-                onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
-                <div style={{width:"100%",aspectRatio:"1/1",background:T.surfaceAlt,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
-                  <img src={c.url} alt="" style={{width:"90%",height:"90%",objectFit:"contain",mixBlendMode:"multiply"}} onError={e=>{e.target.style.display="none";}}/>
-                </div>
-                <div style={{padding:"0.4rem 0.6rem",fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",borderTop:`1px solid ${T.border}`}}>{c.source||"Web"}</div>
-              </button>
-            ))}
-          </div>
-          {candidates.length === 0 && <div style={{fontSize:"0.78rem",color:T.textLight,textAlign:"center",padding:"0.5rem",fontFamily:"'Inter',sans-serif"}}>No images found — try pasting a URL below</div>}
-        </div>
-      )}
-
-      {/* Manual URL paste */}
-      <div style={{marginBottom:"0.6rem"}}>
-        <div style={{fontSize:"0.65rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",fontFamily:"'Inter',sans-serif",marginBottom:"0.4rem"}}>Or paste an image URL</div>
-        <div style={{display:"flex",gap:"0.5rem"}}>
-          <input value={customUrl} onChange={e=>setCustomUrl(e.target.value)} placeholder="https://..."
-            style={{flex:1,padding:"0.6rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.82rem",color:T.text,background:T.surface,outline:"none",fontFamily:"'Inter',sans-serif"}}/>
-          <button onClick={saveCustom} disabled={!customUrl.trim().startsWith("http")}
-            style={{padding:"0.6rem 0.85rem",background:customUrl.trim().startsWith("http")?T.sage:"#ccc",color:"#fff",border:"none",borderRadius:"0.6rem",cursor:customUrl.trim().startsWith("http")?"pointer":"not-allowed",fontWeight:"600",fontFamily:"'Inter',sans-serif",fontSize:"0.8rem"}}>
-            Save
-          </button>
-        </div>
-      </div>
-
-      {/* Skip */}
-      <button onClick={skip}
-        style={{width:"100%",padding:"0.65rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",color:T.textLight,fontSize:"0.78rem",fontFamily:"'Inter',sans-serif"}}>
-        Skip this product →
-      </button>
-    </div>
-  );
-}
-
-
-// -- AdminProductHub -------------------------------------------
-// Simple, focused product management — stats → fix ingredients → fix images → approve
-
-// -- AdminProductEditInline ------------------------------------
-function AdminProductEditInline({product, onSave, onBack}) {
-  const [name, setName] = React.useState(product.productName||"");
-  const [brand, setBrand] = React.useState(product.brand||"");
-  const [category, setCategory] = React.useState(product.category||"");
-  const [ingredients, setIngredients] = React.useState(product.ingredients||"");
-  const [imageUrl, setImageUrl] = React.useState(product.adminImage||product.image||"");
-  const [buyUrl, setBuyUrl] = React.useState(product.buyUrl||"");
-  const [approved, setApproved] = React.useState(!!product.approved);
-  const [saving, setSaving] = React.useState(false);
-
-  const liveScore = ingredients.trim().length > 10
-    ? (() => { try { const r = analyzeIngredients(ingredients); return r.avgScore!=null ? Math.round(r.avgScore) : null; } catch { return null; } })()
-    : null;
-  const ps = liveScore != null ? poreStyle(liveScore) : null;
-
-  const cats = ["face-wash","moisturizer","serum","spf","toner","eye","body","acne","exfoliant","mask","lip","hair","makeup","other"];
-
-  async function save() {
-    setSaving(true);
-    await onSave({
-      productName: name.trim(),
-      brand: brand.trim(),
-      category: category||"other",
-      ingredients: ingredients.trim(),
-      adminImage: imageUrl.trim(),
-      image: imageUrl.trim(),
-      buyUrl: buyUrl.trim(),
-      approved,
-      poreScore: liveScore ?? product.poreScore ?? 0,
-    });
-    setSaving(false);
-  }
-
-  const inp = {width:"100%",padding:"0.6rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.82rem",color:T.text,background:T.surface,outline:"none",fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem"};
-  const lbl = {fontSize:"0.62rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.07em",fontFamily:"'Inter',sans-serif",marginBottom:"0.3rem",display:"block"};
-
-  return (
-    <div style={{maxWidth:"480px",margin:"0 auto"}}>
-      <button onClick={onBack} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
-
-      {/* Image preview */}
-      {imageUrl && (
-        <div style={{width:"100%",height:"180px",background:T.surfaceAlt,borderRadius:"0.85rem",marginBottom:"0.75rem",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
-          <img src={imageUrl} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/>
-        </div>
-      )}
-
-      <label style={lbl}>Product name</label>
-      <input value={name} onChange={e=>setName(e.target.value)} style={inp}/>
-
-      <label style={lbl}>Brand</label>
-      <input value={brand} onChange={e=>setBrand(e.target.value)} style={inp}/>
-
-      <label style={lbl}>Category</label>
-      <select value={category} onChange={e=>setCategory(e.target.value)} style={{...inp,marginBottom:"0.75rem"}}>
-        {cats.map(c=><option key={c} value={c}>{c}</option>)}
-      </select>
-
-      <label style={lbl}>Image URL</label>
-      <input value={imageUrl} onChange={e=>setImageUrl(e.target.value)} placeholder="https://..." style={inp}/>
-
-      <label style={lbl}>Buy URL</label>
-      <input value={buyUrl} onChange={e=>setBuyUrl(e.target.value)} placeholder="https://..." style={inp}/>
-
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.3rem"}}>
-        <label style={{...lbl,marginBottom:0}}>
-          Ingredients
-          {liveScore!=null && <span style={{marginLeft:"0.5rem",color:ps.color,fontWeight:"600"}}> · {liveScore}/5 ({ps.label})</span>}
-        </label>
-        <a href={`https://www.google.com/search?q=${encodeURIComponent((brand||name)+" ingredients INCI")}`} target="_blank" rel="noopener noreferrer"
-          style={{fontSize:"0.68rem",color:T.accent,textDecoration:"none",fontFamily:"'Inter',sans-serif",fontWeight:"600",flexShrink:0}}>
-          Google it →
-        </a>
-      </div>
-      <textarea value={ingredients} onChange={e=>setIngredients(e.target.value)} rows={5}
-        placeholder="Water, Glycerin, Niacinamide…"
-        style={{...inp,resize:"vertical",lineHeight:1.6,marginBottom:"0.75rem"}}/>
-
-      <div style={{display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"1rem"}}>
-        <input type="checkbox" id="approved-cb" checked={approved} onChange={e=>setApproved(e.target.checked)} style={{width:16,height:16,cursor:"pointer"}}/>
-        <label htmlFor="approved-cb" style={{fontSize:"0.82rem",color:T.text,fontFamily:"'Inter',sans-serif",cursor:"pointer"}}>Approved — show in Explore</label>
-      </div>
-
-      <button onClick={save} disabled={saving}
-        style={{width:"100%",padding:"0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.75rem",cursor:"pointer",fontWeight:"600",fontSize:"0.9rem",fontFamily:"'Inter',sans-serif"}}>
-        {saving ? "Saving…" : "Save changes"}
-      </button>
-    </div>
-  );
-}
-
+// ── Admin Products Tab ──────────────────────────────────────────────────────
+// Simple product manager: filter, edit inline, export/upload CSV
 function AdminProductHub() {
   const [products, setProducts] = React.useState([]);
-  const [loading, setLoading] = React.useState(true);
-  const [view, setView] = React.useState("home"); // home | ingredients | images | approve | requests | reports | edit
-  const [editProduct, setEditProduct] = React.useState(null);
-  const [searchQ, setSearchQ] = React.useState("");
-  const [obfRunning, setObfRunning] = React.useState(false);
-  const [obfStatus, setObfStatus] = React.useState("");
-  const [obfDone, setObfDone] = React.useState(0);
-  const stopRef = React.useRef(false);
+  const [loading, setLoading]   = React.useState(true);
+  const [filter, setFilter]     = React.useState("all"); // all | noimage | noingredients | both
+  const [search, setSearch]     = React.useState("");
+  const [editing, setEditing]   = React.useState(null); // product being edited
+  const [saving, setSaving]     = React.useState(false);
+  const [saved, setSaved]       = React.useState(null);
 
   React.useEffect(() => { loadProducts(); }, []);
 
@@ -10727,298 +8887,254 @@ function AdminProductHub() {
     setLoading(true);
     try {
       const snap = await getDocs(collection(db, "products"));
-      setProducts(snap.docs.map(d => ({id:d.id,...d.data()})));
+      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch(e) { console.error(e); }
     setLoading(false);
   }
 
-  const hasImg = p => hasValidImage(p);
-  const hasIng = p => (p.ingredients||"").trim().length > 10;
-  const isReady = p => hasImg(p) && hasIng(p) && p.approved;
-  const needsImg = p => !hasImg(p);
-  const needsIng = p => !hasIng(p);
-  const needsApproval = p => hasImg(p) && hasIng(p) && !p.approved && !p.hidden;
+  // ── Helpers ──
+  const hasImg = p => {
+    const url = (p.adminImage || p.image || "").trim();
+    return url.length > 8 && !url.includes("openbeautyfacts") && !url.startsWith("blob:");
+  };
+  const hasIng = p => (p.ingredients || "").trim().length > 10;
 
-  const readyCount = products.filter(isReady).length;
-  const imgCount = products.filter(needsImg).length;
-  const ingCount = products.filter(needsIng).length;
-  const approveCount = products.filter(needsApproval).length;
+  // ── Filters ──
+  const filtered = products.filter(p => {
+    if (filter === "noimage")       return !hasImg(p);
+    if (filter === "noingredients") return !hasIng(p);
+    if (filter === "both")          return !hasImg(p) && !hasIng(p);
+    if (filter === "ready")         return hasImg(p) && hasIng(p);
+    return true;
+  }).filter(p => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (p.productName||"").toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q);
+  });
 
-  async function runOBFSweep() {
-    setObfRunning(true); setObfDone(0); stopRef.current = false;
-    const needIng = products.filter(needsIng);
-    setObfStatus(`Fetching ingredients for ${needIng.length} products…`);
-    let found = 0;
-    for (let i = 0; i < needIng.length; i++) {
-      if (stopRef.current) break;
-      const p = needIng[i];
-      setObfStatus(`[${i+1}/${needIng.length}] ${p.productName}…`);
-      try {
-        let ing = "";
-        if (p.barcode && !/^seed_/.test(p.barcode)) {
-          const r = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${p.barcode}.json`, {signal:AbortSignal.timeout(5000)});
-          const d = await r.json();
-          if (d.status===1) ing = d.product?.ingredients_text_en || d.product?.ingredients_text || "";
-        }
-        if (!ing) {
-          const q = encodeURIComponent(`${p.brand||""} ${p.productName||""}`.trim());
-          const r = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${q}&search_simple=1&action=process&json=1&page_size=3&fields=product_name,brands,ingredients_text,ingredients_text_en,code`, {signal:AbortSignal.timeout(5000)});
-          const d = await r.json();
-          const brandLow = (p.brand||"").toLowerCase().split(" ")[0];
-          const hit = (d.products||[]).find(x=>(x.brands||"").toLowerCase().includes(brandLow)) || (d.products||[])[0];
-          ing = hit?.ingredients_text_en || hit?.ingredients_text || "";
-        }
-        if (ing && ing.trim().length > 10) {
-          let poreScore = p.poreScore;
-          try { const a = analyzeIngredients(ing); if (a?.avgScore!=null) poreScore=Math.round(a.avgScore); } catch {}
-          await updateDoc(doc(db,"products",p.id), {ingredients:ing, poreScore, updatedAt:Date.now()});
-          setProducts(ps => ps.map(x => x.id===p.id ? {...x,ingredients:ing,poreScore} : x));
-          found++; setObfDone(found);
-        }
-      } catch(e) { console.error(p.productName, e); }
+  const counts = {
+    all:            products.length,
+    noimage:        products.filter(p => !hasImg(p)).length,
+    noingredients:  products.filter(p => !hasIng(p)).length,
+    both:           products.filter(p => !hasImg(p) && !hasIng(p)).length,
+    ready:          products.filter(p => hasImg(p) && hasIng(p)).length,
+  };
+
+  // ── Export CSV ──
+  async function exportCsv() {
+    const snap = await getDocs(collection(db, "products"));
+    const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    function esc(v) {
+      v = (v == null ? "" : String(v)).replace(/\r?\n/g, " ");
+      return (v.includes(",") || v.includes('"')) ? `"${v.replace(/"/g,'""')}"` : v;
     }
-    setObfStatus(`Done — ${found} ingredients added.`);
-    setObfRunning(false);
+    const headers = ["productName","brand","imageUrl","ingredients","category","skinTypes","buyUrl","barcode","reason"];
+    const lines = [headers.join(",")];
+    rows.forEach(r => {
+      lines.push([
+        esc(r.productName), esc(r.brand),
+        esc(r.adminImage || r.image || ""),
+        esc(r.ingredients || ""),
+        esc(r.category || ""),
+        esc(Array.isArray(r.skinTypes) ? r.skinTypes.join(",") : r.skinTypes || ""),
+        esc(r.buyUrl || ""),
+        esc(r.barcode || ""),
+        esc(r.reason || ""),
+      ].join(","));
+    });
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = "ralli_products.csv"; a.click();
   }
 
-  async function approveProduct(p) {
-    await updateDoc(doc(db,"products",p.id), {approved:true, approvedAt:Date.now(), lastVerified:Date.now()});
-    setProducts(ps => ps.map(x => x.id===p.id ? {...x,approved:true} : x));
+  // ── Save inline edit ──
+  async function saveEdit() {
+    if (!editing) return;
+    setSaving(true);
+    try {
+      const updates = {
+        productName:  editing.productName,
+        brand:        editing.brand,
+        category:     editing.category,
+        skinTypes:    typeof editing.skinTypes === "string"
+                        ? editing.skinTypes.split(",").map(s=>s.trim()).filter(Boolean)
+                        : editing.skinTypes || [],
+        reason:       editing.reason,
+        ingredients:  editing.ingredients,
+        adminImage:   editing.adminImage,
+        buyUrl:       editing.buyUrl,
+        approved:     editing.approved || false,
+        hidden:       editing.hidden || false,
+        updatedAt:    Date.now(),
+      };
+      if (updates.ingredients) {
+        try { const a = analyzeIngredients(updates.ingredients); if (a?.avgScore!=null) updates.poreScore=Math.round(a.avgScore); } catch {}
+      }
+      await updateDoc(doc(db, "products", editing.id), updates);
+      setProducts(ps => ps.map(p => p.id === editing.id ? { ...p, ...updates } : p));
+      setSaved(editing.id);
+      setEditing(null);
+      setTimeout(() => setSaved(null), 2000);
+    } catch(e) { alert("Save failed: " + e.message); }
+    setSaving(false);
   }
 
-  async function hideProduct(p) {
-    await updateDoc(doc(db,"products",p.id), {approved:false, hidden:true});
-    setProducts(ps => ps.map(x => x.id===p.id ? {...x,approved:false,hidden:true} : x));
-  }
+  const CATEGORIES = ["Face Wash","Moisturiser","Serum","SPF","Toner","Eye Cream","Mask","Acne Treatment","Body","Hair","Lip"];
 
-  if (loading) return <div style={{textAlign:"center",padding:"3rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Loading…</div>;
+  if (loading) return <div style={{padding:"2rem",textAlign:"center",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Loading products…</div>;
 
-  // -- Image Picker view --
-  if (view === "images") return <AdminImagePicker products={products} setProducts={setProducts} onBack={()=>setView("home")}/>;
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
 
-  // -- Approve view --
-  if (view === "approve") {
-    const GOOD_BRANDS = ["CeraVe","The Ordinary","La Roche-Posay","EltaMD","Paula's Choice","Cetaphil","Neutrogena","COSRX","Vanicream","Glow Recipe","Tatcha","Drunk Elephant","First Aid Beauty","SkinCeuticals","Tower28","Merit","Clearstem","Colorescience","Skinceuticals"];
-    const queue = products.filter(needsApproval);
-    const goodQueue = queue.filter(p => GOOD_BRANDS.some(b => (p.brand||"").toLowerCase().includes(b.toLowerCase())));
-    const otherQueue = queue.filter(p => !GOOD_BRANDS.some(b => (p.brand||"").toLowerCase().includes(b.toLowerCase())));
+      {/* ── Header actions ── */}
+      <div style={{display:"flex",gap:"0.5rem",alignItems:"center",flexWrap:"wrap"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…"
+          style={{flex:1,minWidth:"140px",padding:"0.55rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface}}/>
+        <button onClick={exportCsv}
+          style={{padding:"0.55rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"}}>
+          ⬇️ Export CSV
+        </button>
+        <button onClick={loadProducts}
+          style={{padding:"0.55rem 0.75rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+          ↺
+        </button>
+      </div>
 
-    async function approveAll(list) {
-      for (const p of list) await approveProduct(p);
-    }
-    async function hideAll(list) {
-      for (const p of list) await hideProduct(p);
-    }
+      {/* ── Filter pills ── */}
+      <div style={{display:"flex",gap:"0.35rem",flexWrap:"wrap"}}>
+        {[
+          ["all",           `All (${counts.all})`],
+          ["noimage",       `No image (${counts.noimage})`,       T.rose],
+          ["noingredients", `No ingredients (${counts.noingredients})`, T.amber],
+          ["both",          `Both missing (${counts.both})`,      "#7C3AED"],
+          ["ready",         `Complete (${counts.ready})`,         T.sage],
+        ].map(([id, label, color]) => (
+          <button key={id} onClick={() => setFilter(id)}
+            style={{
+              padding:"0.35rem 0.75rem",
+              background: filter===id ? (color||T.accent) : T.surfaceAlt,
+              color: filter===id ? "#fff" : T.textMid,
+              border: `1px solid ${filter===id ? (color||T.accent) : T.border}`,
+              borderRadius:"999px", fontSize:"0.68rem", fontWeight: filter===id?"600":"400",
+              cursor:"pointer", fontFamily:"'Inter',sans-serif"
+            }}>
+            {label}
+          </button>
+        ))}
+      </div>
 
-    return (
-      <div>
-        <button onClick={()=>setView("home")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
-
-        {/* Bulk actions */}
-        {goodQueue.length > 0 && (
-          <div style={{background:T.sage+"12",border:`1px solid ${T.sage}33`,borderRadius:"0.85rem",padding:"0.85rem 1rem",marginBottom:"0.75rem"}}>
-            <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.sage,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>✓ {goodQueue.length} known brands ready</div>
-            <div style={{fontSize:"0.68rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.6rem"}}>CeraVe, The Ordinary, EltaMD, COSRX and others from your seed</div>
-            <button onClick={()=>approveAll(goodQueue)}
-              style={{width:"100%",padding:"0.6rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.65rem",cursor:"pointer",fontWeight:"600",fontSize:"0.82rem",fontFamily:"'Inter',sans-serif"}}>
-              Approve all {goodQueue.length} known brands →
-            </button>
+      {/* ── Product list ── */}
+      <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
+        {filtered.length === 0 && (
+          <div style={{padding:"2rem",textAlign:"center",color:T.textLight,fontSize:"0.78rem",fontFamily:"'Inter',sans-serif"}}>
+            No products match this filter.
           </div>
         )}
-        {otherQueue.length > 0 && (
-          <div style={{background:T.rose+"10",border:`1px solid ${T.rose}33`,borderRadius:"0.85rem",padding:"0.85rem 1rem",marginBottom:"0.75rem"}}>
-            <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.rose,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>⚠ {otherQueue.length} unknown brands — review individually</div>
-            <div style={{fontSize:"0.68rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.6rem"}}>These may be low-quality OBF products. Hide ones you don't want.</div>
-            <button onClick={()=>hideAll(otherQueue)}
-              style={{width:"100%",padding:"0.6rem",background:"none",color:T.rose,border:`1px solid ${T.rose}`,borderRadius:"0.65rem",cursor:"pointer",fontWeight:"600",fontSize:"0.82rem",fontFamily:"'Inter',sans-serif"}}>
-              Hide all {otherQueue.length} unknown brands →
-            </button>
-          </div>
-        )}
+        {filtered.map(p => {
+          const isEditing = editing?.id === p.id;
+          const imgOk = hasImg(p);
+          const ingOk = hasIng(p);
 
-        {/* Individual list */}
-        <div style={{fontSize:"0.65rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.07em",fontFamily:"'Inter',sans-serif",marginBottom:"0.5rem",marginTop:"0.25rem"}}>Or review individually</div>
-        {queue.length === 0 && <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>All done! ✓</div>}
-        {queue.map(p => {
-          const img = p.adminImage || p.image || "";
-          const isGood = GOOD_BRANDS.some(b => (p.brand||"").toLowerCase().includes(b.toLowerCase()));
+          if (isEditing) return (
+            <div key={p.id} style={{background:T.surface,border:`2px solid ${T.accent}`,borderRadius:"0.85rem",padding:"1rem"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem",marginBottom:"0.5rem"}}>
+                {[
+                  ["Product Name", "productName"],
+                  ["Brand", "brand"],
+                  ["Buy URL", "buyUrl"],
+                  ["Image URL", "adminImage"],
+                ].map(([label, field]) => (
+                  <div key={field}>
+                    <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>{label}</div>
+                    <input value={editing[field]||""} onChange={e=>setEditing({...editing,[field]:e.target.value})}
+                      style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.7rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
+                  </div>
+                ))}
+              </div>
+              <div style={{marginBottom:"0.5rem"}}>
+                <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>Category</div>
+                <select value={editing.category||""} onChange={e=>setEditing({...editing,category:e.target.value})}
+                  style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.7rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt}}>
+                  <option value="">— select —</option>
+                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div style={{marginBottom:"0.5rem"}}>
+                <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>Skin Types (comma-separated)</div>
+                <input value={Array.isArray(editing.skinTypes)?editing.skinTypes.join(","):editing.skinTypes||""} onChange={e=>setEditing({...editing,skinTypes:e.target.value})}
+                  style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.7rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
+              </div>
+              <div style={{marginBottom:"0.5rem"}}>
+                <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>Reason (1 line)</div>
+                <input value={editing.reason||""} onChange={e=>setEditing({...editing,reason:e.target.value})}
+                  style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.7rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
+              </div>
+              <div style={{marginBottom:"0.75rem"}}>
+                <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>Ingredients</div>
+                <textarea value={editing.ingredients||""} onChange={e=>setEditing({...editing,ingredients:e.target.value})} rows={4}
+                  style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.65rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box"}}/>
+              </div>
+              <div style={{display:"flex",gap:"0.5rem"}}>
+                <button onClick={saveEdit} disabled={saving}
+                  style={{flex:1,padding:"0.55rem",background:T.accent,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.75rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                  {saving ? "Saving…" : "Save"}
+                </button>
+                <button onClick={()=>setEditing(null)}
+                  style={{padding:"0.55rem 1rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.75rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          );
+
           return (
-            <div key={p.id} style={{background:T.surface,border:`1px solid ${isGood?T.sage+"33":T.border}`,borderRadius:"0.85rem",padding:"0.75rem",marginBottom:"0.6rem",display:"flex",alignItems:"center",gap:"0.75rem"}}>
-              <div style={{width:44,height:44,borderRadius:"0.55rem",overflow:"hidden",background:T.surfaceAlt,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                {img ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/> : <span style={{fontSize:"0.6rem",color:T.textLight}}>no img</span>}
+            <div key={p.id}
+              style={{background:saved===p.id?T.sage+"18":T.surface,border:`1px solid ${saved===p.id?T.sage:T.border}`,borderRadius:"0.75rem",padding:"0.65rem 0.85rem",display:"flex",alignItems:"center",gap:"0.65rem",cursor:"pointer",transition:"border 0.2s"}}
+              onClick={()=>setEditing({...p, skinTypes: Array.isArray(p.skinTypes)?p.skinTypes.join(","):p.skinTypes||""})}>
+
+              {/* Image thumbnail */}
+              <div style={{width:"40px",height:"40px",borderRadius:"0.4rem",background:T.surfaceAlt,flexShrink:0,overflow:"hidden",border:`1px solid ${T.border}`}}>
+                {imgOk
+                  ? <img src={p.adminImage||p.image} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
+                  : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1rem"}}>📷</div>
+                }
               </div>
+
+              {/* Info */}
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:"0.65rem",color:isGood?T.sage:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",fontFamily:"'Inter',sans-serif"}}>{p.brand}</div>
-                <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
-                <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px",fontFamily:"'Inter',sans-serif"}}>{p.category} · pore {p.poreScore??0}/5</div>
+                <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
+                <div style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{p.brand}{p.category ? ` · ${p.category}` : ""}</div>
               </div>
-              <div style={{display:"flex",flexDirection:"column",gap:"0.35rem",flexShrink:0}}>
-                <button onClick={()=>approveProduct(p)} style={{padding:"0.35rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"999px",cursor:"pointer",fontSize:"0.72rem",fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>✓</button>
-                <button onClick={()=>hideProduct(p)} style={{padding:"0.35rem 0.85rem",background:"none",color:T.textLight,border:`1px solid ${T.border}`,borderRadius:"999px",cursor:"pointer",fontSize:"0.72rem",fontFamily:"'Inter',sans-serif"}}>Hide</button>
+
+              {/* Status pills */}
+              <div style={{display:"flex",gap:"0.25rem",flexShrink:0}}>
+                <span style={{fontSize:"0.58rem",padding:"0.15rem 0.4rem",borderRadius:"999px",background:imgOk?T.sage+"22":T.rose+"22",color:imgOk?T.sage:T.rose,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>
+                  {imgOk?"img ✓":"no img"}
+                </span>
+                <span style={{fontSize:"0.58rem",padding:"0.15rem 0.4rem",borderRadius:"999px",background:ingOk?T.sage+"22":T.amber+"22",color:ingOk?T.sage:T.amber,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>
+                  {ingOk?"ing ✓":"no ing"}
+                </span>
               </div>
+
+              <div style={{fontSize:"0.65rem",color:T.textLight,flexShrink:0}}>✏️</div>
             </div>
           );
         })}
       </div>
-    );
-  }
 
-  // -- Edit view --
-  if (view === "edit" && editProduct) {
-    return <AdminProductEditInline product={editProduct} onSave={async (updates) => {
-      try {
-        const clean = Object.fromEntries(Object.entries({...updates, updatedAt:serverTimestamp()}).filter(([,v])=>v!==undefined));
-        await updateDoc(doc(db,"products",editProduct.id), clean);
-        setProducts(ps => ps.map(p => p.id===editProduct.id ? {...p,...updates} : p));
-        setView("home");
-      } catch(e) { alert("Save failed: " + e.message); }
-    }} onBack={()=>setView("home")}/>;
-  }
-
-  // -- Requests view --
-  if (view === "requests") return (
-    <div>
-      <button onClick={()=>setView("home")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
-      <AdminRequestsTab/>
-    </div>
-  );
-
-  // -- Reports view --
-  if (view === "reports") return (
-    <div>
-      <button onClick={()=>setView("home")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>← Back</button>
-      <AdminIngredientReports/>
-    </div>
-  );
-
-  // -- Home view --
-  return (
-    <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
-
-      {/* Status bar */}
-      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"1rem",display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
-        <div style={{textAlign:"center",padding:"0.5rem",background:T.sage+"12",borderRadius:"0.6rem"}}>
-          <div style={{fontSize:"1.4rem",fontWeight:"700",color:T.sage,fontFamily:"'Inter',sans-serif"}}>{readyCount}</div>
-          <div style={{fontSize:"0.6rem",color:T.sage,fontFamily:"'Inter',sans-serif",marginTop:"1px"}}>Live in Explore</div>
+      {filtered.length > 0 && (
+        <div style={{textAlign:"center",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",paddingBottom:"1rem"}}>
+          Showing {filtered.length} of {products.length} products · Tap any product to edit
         </div>
-        <div style={{textAlign:"center",padding:"0.5rem",background:approveCount>0?T.amber+"12":T.surfaceAlt,borderRadius:"0.6rem"}}>
-          <div style={{fontSize:"1.4rem",fontWeight:"700",color:approveCount>0?T.amber:T.textLight,fontFamily:"'Inter',sans-serif"}}>{approveCount}</div>
-          <div style={{fontSize:"0.6rem",color:approveCount>0?T.amber:T.textLight,fontFamily:"'Inter',sans-serif",marginTop:"1px"}}>Ready to approve</div>
-        </div>
-        <div style={{textAlign:"center",padding:"0.5rem",background:T.rose+"10",borderRadius:"0.6rem"}}>
-          <div style={{fontSize:"1.4rem",fontWeight:"700",color:T.rose,fontFamily:"'Inter',sans-serif"}}>{imgCount}</div>
-          <div style={{fontSize:"0.6rem",color:T.rose,fontFamily:"'Inter',sans-serif",marginTop:"1px"}}>Missing images</div>
-        </div>
-        <div style={{textAlign:"center",padding:"0.5rem",background:T.rose+"10",borderRadius:"0.6rem"}}>
-          <div style={{fontSize:"1.4rem",fontWeight:"700",color:T.rose,fontFamily:"'Inter',sans-serif"}}>{ingCount}</div>
-          <div style={{fontSize:"0.6rem",color:T.rose,fontFamily:"'Inter',sans-serif",marginTop:"1px"}}>Missing ingredients</div>
-        </div>
-      </div>
-
-      {/* Step 1 — Fix ingredients */}
-      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"1rem"}}>
-        <div style={{fontWeight:"600",color:T.text,fontSize:"0.88rem",fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>Step 1 — Fill missing ingredients</div>
-        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem"}}>Searches Open Beauty Facts automatically for {ingCount} products</div>
-        {obfRunning ? (
-          <div>
-            <div style={{fontSize:"0.75rem",color:T.accent,fontFamily:"'Inter',sans-serif",marginBottom:"0.5rem"}}>{obfStatus}</div>
-            <div style={{height:"4px",background:T.border,borderRadius:"2px",overflow:"hidden"}}>
-              <div style={{height:"100%",background:T.accent,borderRadius:"2px",width:`${products.filter(needsIng).length>0?(obfDone/products.filter(needsIng).length*100):100}%`,transition:"width 0.3s"}}/>
-            </div>
-            <button onClick={()=>{stopRef.current=true;}} style={{marginTop:"0.5rem",padding:"0.4rem 0.85rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"999px",cursor:"pointer",fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Stop</button>
-          </div>
-        ) : (
-          <div>
-            {obfStatus && <div style={{fontSize:"0.72rem",color:T.sage,fontFamily:"'Inter',sans-serif",marginBottom:"0.5rem"}}>{obfStatus}</div>}
-            <button onClick={runOBFSweep} disabled={ingCount===0}
-              style={{width:"100%",padding:"0.75rem",background:ingCount>0?T.navy:"#ccc",color:"#fff",border:"none",borderRadius:"0.75rem",cursor:ingCount>0?"pointer":"not-allowed",fontWeight:"600",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif"}}>
-              {ingCount>0 ? `Run OBF Sweep (${ingCount} missing)` : "✓ All ingredients filled"}
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Step 2 — Fix images */}
-      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"1rem"}}>
-        <div style={{fontWeight:"600",color:T.text,fontSize:"0.88rem",fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>Step 2 — Find missing images</div>
-        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem"}}>Claude searches Sephora & ULTA — you pick the best photo</div>
-        <button onClick={()=>setView("images")} disabled={imgCount===0}
-          style={{width:"100%",padding:"0.75rem",background:imgCount>0?T.navy:"#ccc",color:"#fff",border:"none",borderRadius:"0.75rem",cursor:imgCount>0?"pointer":"not-allowed",fontWeight:"600",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif"}}>
-          {imgCount>0 ? `Open Image Picker (${imgCount} missing)` : "✓ All images filled"}
-        </button>
-      </div>
-
-      {/* Step 3 — Approve */}
-      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"1rem"}}>
-        <div style={{fontWeight:"600",color:T.text,fontSize:"0.88rem",fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem"}}>Step 3 — Approve for Explore</div>
-        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem"}}>Products with both image + ingredients, waiting for your sign-off</div>
-        <button onClick={()=>setView("approve")} disabled={approveCount===0}
-          style={{width:"100%",padding:"0.75rem",background:approveCount>0?T.sage:"#ccc",color:"#fff",border:"none",borderRadius:"0.75rem",cursor:approveCount>0?"pointer":"not-allowed",fontWeight:"600",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif"}}>
-          {approveCount>0 ? `Review & Approve (${approveCount} ready)` : "✓ Nothing to approve"}
-        </button>
-      </div>
-
-      {/* Other tools */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
-        <button onClick={()=>setView("requests")}
-          style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
-          <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.text}}>📬 Requests</div>
-          <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px"}}>User product requests</div>
-        </button>
-        <button onClick={()=>setView("reports")}
-          style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
-          <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.text}}>⚠️ Reports</div>
-          <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px"}}>Ingredient corrections</div>
-        </button>
-      </div>
-
-      {/* All products — searchable list */}
-      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",overflow:"hidden"}}>
-        <div style={{padding:"0.75rem 1rem",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:"0.5rem"}}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search all products…"
-            style={{flex:1,border:"none",outline:"none",fontSize:"0.82rem",color:T.text,background:"transparent",fontFamily:"'Inter',sans-serif"}}/>
-          {searchQ&&<button onClick={()=>setSearchQ("")} style={{background:"none",border:"none",cursor:"pointer",color:T.textLight,fontSize:"0.8rem"}}>✕</button>}
-        </div>
-        <div style={{maxHeight:"400px",overflowY:"auto"}}>
-          {products
-            .filter(p => searchQ.trim().length < 2 ? true : (p.productName+" "+p.brand).toLowerCase().includes(searchQ.toLowerCase()))
-            .sort((a,b) => (a.productName||"").localeCompare(b.productName||""))
-            .slice(0, searchQ.trim().length >= 2 ? 50 : 20)
-            .map(p => {
-              const img = p.adminImage||p.image||"";
-              const ready = hasImg(p) && hasIng(p);
-              return (
-                <div key={p.id} style={{display:"flex",alignItems:"center",gap:"0.65rem",padding:"0.6rem 1rem",borderBottom:`1px solid ${T.border}40`}}>
-                  <div style={{width:36,height:36,borderRadius:"0.45rem",overflow:"hidden",background:T.surfaceAlt,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    {img ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",mixBlendMode:"multiply"}} onError={e=>e.target.style.opacity="0"}/> : <span style={{fontSize:"0.5rem",color:T.textLight}}>no img</span>}
-                  </div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
-                    <div style={{display:"flex",alignItems:"center",gap:"0.35rem",marginTop:"2px"}}>
-                      {p.approved ? <span style={{fontSize:"0.55rem",background:T.sage+"20",color:T.sage,padding:"1px 5px",borderRadius:"999px",fontWeight:"600"}}>✓ Live</span>
-                        : p.hidden ? <span style={{fontSize:"0.55rem",background:T.rose+"15",color:T.rose,padding:"1px 5px",borderRadius:"999px"}}>Hidden</span>
-                        : <span style={{fontSize:"0.55rem",background:T.amber+"20",color:T.amber,padding:"1px 5px",borderRadius:"999px"}}>Pending</span>}
-                      {!hasImg(p)&&<span style={{fontSize:"0.55rem",color:T.rose,fontFamily:"'Inter',sans-serif"}}>no img</span>}
-                      {!hasIng(p)&&<span style={{fontSize:"0.55rem",color:T.rose,fontFamily:"'Inter',sans-serif"}}>no ing</span>}
-                    </div>
-                  </div>
-                  <button onClick={()=>{setEditProduct(p);setView("edit");}}
-                    style={{padding:"0.3rem 0.75rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"999px",cursor:"pointer",fontSize:"0.7rem",color:T.textMid,fontFamily:"'Inter',sans-serif",flexShrink:0}}>
-                    Edit
-                  </button>
-                </div>
-              );
-          })}
-          {searchQ.trim().length < 2 && <div style={{padding:"0.6rem 1rem",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",textAlign:"center"}}>Search to find any product</div>}
-        </div>
-      </div>
-
+      )}
     </div>
   );
 }
 
-// -- Admin: Bulk Image Upload to Firebase Storage ---------------
+// Keep AdminManageProducts as a thin alias so existing references don't break
+function AdminManageProducts(props) { return <AdminProductHub/>; }
+
+
 const SEEDED_PRODUCTS_CSV = `productName,brand,imageUrl,ingredients,category,skinTypes,buyUrl,barcode,reason
 Gentle Skin Cleanser,CeraVe,,,Face Wash,All,,,
 Hydrating Facial Cleanser,CeraVe,,,Face Wash,"Dry,Normal",,,
@@ -12014,8 +10130,8 @@ Lubriderm Daily Moisture Lotion,Lubriderm,,,Body,"Normal,Dry",,,
 St Ives Oatmeal & Shea Butter Body Lotion,St. Ives,,,Body,"Dry,Sensitive",,,
 `;
 
-// Accepts a CSV with columns: productName, brand, imageUrl, ingredients, category, skinTypes, buyUrl, barcode, reason
-// Pre-seeded with 992 products — paste your own CSV to override, or add imageUrl/ingredients columns to existing rows.
+
+// ── Bulk Upload ─────────────────────────────────────────────────────────────
 function AdminBulkImageUpload({ onBack }) {
   const [csvText, setCsvText] = React.useState(SEEDED_PRODUCTS_CSV);
   const [products, setProducts] = React.useState([]);
@@ -12029,12 +10145,10 @@ function AdminBulkImageUpload({ onBack }) {
     getDocs(collection(db, "products")).then(snap => {
       const prods = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setProducts(prods);
-      // Auto-parse the seeded CSV now that we have products to match against
       setParsed(parseCsvStatic(SEEDED_PRODUCTS_CSV));
     });
   }, []);
 
-  // Static parse helper (no closure deps) used for initial seed load
   function parseCsvStatic(text) {
     const lines = text.trim().split("\n").filter(Boolean);
     if (lines.length < 2) return [];
@@ -12052,36 +10166,7 @@ function AdminBulkImageUpload({ onBack }) {
     }).filter(r => r.productName);
   }
 
-  // Parse CSV — accepts any column order, header row required
-  // Supported columns: productName, brand, imageUrl, ingredients, category, skinTypes, buyUrl, barcode, reason
-  function parseCsv(text) {
-    const lines = text.trim().split("\n").filter(Boolean);
-    if (lines.length < 2) return [];
-    const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g,""));
-    return lines.slice(1).map(line => {
-      const cols = [];
-      let cur = "", inQ = false;
-      for (const ch of line) {
-        if (ch === '"') { inQ = !inQ; }
-        else if (ch === "," && !inQ) { cols.push(cur.trim()); cur = ""; }
-        else cur += ch;
-      }
-      cols.push(cur.trim());
-      const r = {};
-      headers.forEach((h, i) => { r[h] = cols[i] || ""; });
-      return {
-        productName:  r.productname || r.product || r.name || "",
-        brand:        r.brand || "",
-        imageUrl:     r.imageurl || r.image || r.url || "",
-        ingredients:  r.ingredients || r.ingredient || "",
-        category:     r.category || "",
-        skinTypes:    r.skintypes || r.skintype || "",
-        buyUrl:       r.buyurl || r.buy || r.link || "",
-        barcode:      r.barcode || r.ean || r.upc || "",
-        reason:       r.reason || r.description || "",
-      };
-    }).filter(r => r.productName);
-  }
+  function parseCsv(text) { return parseCsvStatic(text); }
 
   function handlePaste(text) {
     setCsvText(text);
@@ -12091,18 +10176,11 @@ function AdminBulkImageUpload({ onBack }) {
     setDone(false);
   }
 
-  // Match CSV row to Firestore product
   function matchProduct(row) {
     const nameLow = row.productName.toLowerCase().trim();
     const brandLow = row.brand.toLowerCase().trim();
-    let match = products.find(p =>
-      p.productName?.toLowerCase().trim() === nameLow &&
-      (!brandLow || (p.brand||"").toLowerCase().includes(brandLow))
-    );
-    if (!match) match = products.find(p =>
-      p.productName?.toLowerCase().includes(nameLow) ||
-      nameLow.includes((p.productName||"").toLowerCase())
-    );
+    let match = products.find(p => p.productName?.toLowerCase().trim() === nameLow && (!brandLow || (p.brand||"").toLowerCase().includes(brandLow)));
+    if (!match) match = products.find(p => p.productName?.toLowerCase().includes(nameLow) || nameLow.includes((p.productName||"").toLowerCase()));
     return match || null;
   }
 
@@ -12136,55 +10214,34 @@ function AdminBulkImageUpload({ onBack }) {
       if (stopRef.current) { setLog(l => [...l, { msg: "Stopped.", type: "warn" }]); break; }
       const row = parsed[i];
       const product = matchProduct(row);
-
-      if (!product) {
-        setLog(l => [...l, { msg: `✗ "${row.productName}" — no match in database`, type: "warn" }]);
-        skipped++;
-        continue;
-      }
+      if (!product) { setLog(l => [...l, { msg: `✗ "${row.productName}" — no match`, type: "warn" }]); skipped++; continue; }
 
       try {
-        // Build Firestore update — only include fields that have values
         const updates = { updatedAt: Date.now() };
-        if (row.ingredients) {
-          updates.ingredients = row.ingredients;
-          try { const a = analyzeIngredients(row.ingredients); if (a?.avgScore != null) updates.poreScore = Math.round(a.avgScore); } catch {}
-        }
+        if (row.ingredients) { updates.ingredients = row.ingredients; try { const a = analyzeIngredients(row.ingredients); if (a?.avgScore!=null) updates.poreScore=Math.round(a.avgScore); } catch {} }
         if (row.category)  updates.category  = row.category;
-        if (row.skinTypes) updates.skinTypes  = row.skinTypes.split(",").map(s => s.trim()).filter(Boolean);
+        if (row.skinTypes) updates.skinTypes  = row.skinTypes.split(",").map(s=>s.trim()).filter(Boolean);
         if (row.buyUrl)    updates.buyUrl     = row.buyUrl;
         if (row.barcode)   updates.barcode    = row.barcode;
         if (row.reason)    updates.reason     = row.reason;
-
-        // Upload image if URL provided
         if (row.imageUrl) {
           const { blob, mime } = await fetchImageBlob(row.imageUrl);
           const permanentUrl = await uploadToStorage(blob, product.id, mime);
           updates.adminImage = permanentUrl;
           updates.image = permanentUrl;
         }
-
         await updateDoc(doc(db, "products", product.id), updates);
-
-        const parts = [];
-        if (updates.adminImage) parts.push("image ✓");
-        if (updates.ingredients) parts.push("ingredients ✓");
-        if (updates.category) parts.push("category ✓");
-        if (updates.barcode) parts.push("barcode ✓");
-
-        setLog(l => [...l, { msg: `✓ "${row.productName}" — ${parts.join(", ")}`, type: "ok" }]);
+        const parts = [updates.adminImage&&"img",updates.ingredients&&"ing",updates.category&&"cat"].filter(Boolean);
+        setLog(l => [...l, { msg: `✓ "${row.productName}" — ${parts.join(", ")||"updated"}`, type: "ok" }]);
         ok++;
       } catch(e) {
         setLog(l => [...l, { msg: `✗ "${row.productName}" — ${e.message}`, type: "error" }]);
         failed++;
       }
-
       await new Promise(r => setTimeout(r, 300));
     }
-
-    setLog(l => [...l, { msg: `Done: ${ok} updated · ${skipped} skipped · ${failed} failed`, type: ok > 0 ? "ok" : "warn" }]);
-    setRunning(false);
-    setDone(true);
+    setLog(l => [...l, { msg: `Done: ${ok} updated · ${skipped} skipped · ${failed} failed`, type: ok>0?"ok":"warn" }]);
+    setRunning(false); setDone(true);
   }
 
   const matched = parsed.filter(r => matchProduct(r)).length;
@@ -12193,369 +10250,288 @@ function AdminBulkImageUpload({ onBack }) {
   return (
     <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
       <button onClick={onBack} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",padding:0}}>← Back to Cleanup</button>
-
       <div style={{background:T.surface,borderRadius:"1rem",padding:"1rem",border:`1px solid ${T.border}`}}>
         <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>☁️ Bulk Product Upload</div>
-        <div style={{fontSize:"0.68rem",color:T.textLight,marginBottom:"0.85rem"}}>
-          Paste your CSV below. Columns: <code style={{background:T.surfaceAlt,padding:"0.1rem 0.3rem",borderRadius:"4px"}}>productName, brand, imageUrl, ingredients, category, skinTypes, buyUrl, barcode, reason</code> — only <b>productName</b> is required, everything else is optional.
-        </div>
-
-        <textarea
-          value={csvText}
-          onChange={e => handlePaste(e.target.value)}
-          placeholder={"productName,brand,imageUrl,ingredients,category\nCeraVe Moisturising Cream,CeraVe,https://cerave.com/image.jpg,\"water, glycerin, ceramide np\",Moisturiser"}
-          rows={7}
-          style={{width:"100%",padding:"0.65rem",border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.68rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box",lineHeight:1.5}}
-        />
-
-        {/* Preview */}
+        <div style={{fontSize:"0.68rem",color:T.textLight,marginBottom:"0.85rem"}}>Paste CSV with columns: <code style={{background:T.surfaceAlt,padding:"0.1rem 0.3rem",borderRadius:"4px"}}>productName, brand, imageUrl, ingredients, category, skinTypes, buyUrl, barcode, reason</code></div>
+        <textarea value={csvText} onChange={e=>handlePaste(e.target.value)} rows={7}
+          style={{width:"100%",padding:"0.65rem",border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.68rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box",lineHeight:1.5}}/>
         {parsed.length > 0 && (
           <div style={{marginTop:"0.65rem",background:T.surfaceAlt,borderRadius:"0.75rem",padding:"0.65rem",maxHeight:"180px",overflowY:"auto"}}>
-            <div style={{fontSize:"0.6rem",color:T.textLight,marginBottom:"0.4rem",fontFamily:"'Inter',sans-serif"}}>
-              {parsed.length} rows · {matched} matched · {parsed.length - matched} unmatched
-            </div>
-            {parsed.map((r, i) => {
-              const match = matchProduct(r);
-              const fields = [r.imageUrl&&"img", r.ingredients&&"ing", r.category&&"cat", r.barcode&&"barcode"].filter(Boolean);
-              return (
-                <div key={i} style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.2rem 0",borderBottom:i<parsed.length-1?`1px solid ${T.border}`:"none"}}>
-                  <span style={{fontSize:"0.7rem",color:match?T.sage:T.rose,flexShrink:0,width:"12px"}}>{match?"✓":"✗"}</span>
-                  <span style={{fontSize:"0.68rem",color:T.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.productName}{r.brand?` · ${r.brand}`:""}</span>
-                  <span style={{fontSize:"0.58rem",color:T.textLight,flexShrink:0}}>{fields.join(", ")}</span>
-                </div>
-              );
-            })}
+            <div style={{fontSize:"0.6rem",color:T.textLight,marginBottom:"0.4rem"}}>{parsed.length} rows · {matched} matched · {parsed.length-matched} unmatched</div>
+            {parsed.map((r,i)=>{ const match=matchProduct(r); const fields=[r.imageUrl&&"img",r.ingredients&&"ing",r.category&&"cat"].filter(Boolean); return (
+              <div key={i} style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.2rem 0",borderBottom:i<parsed.length-1?`1px solid ${T.border}`:"none"}}>
+                <span style={{fontSize:"0.7rem",color:match?T.sage:T.rose,width:"12px"}}>{match?"✓":"✗"}</span>
+                <span style={{fontSize:"0.68rem",color:T.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.productName}{r.brand?` · ${r.brand}`:""}</span>
+                <span style={{fontSize:"0.58rem",color:T.textLight}}>{fields.join(", ")}</span>
+              </div>
+            );})}
           </div>
         )}
-
-        {/* Upload button */}
         <div style={{display:"flex",gap:"0.5rem",marginTop:"0.75rem"}}>
-          <button onClick={runUpload} disabled={running || matched === 0}
-            style={{flex:1,padding:"0.65rem 1rem",background:running||matched===0?"#ccc":"#111827",color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:running||matched===0?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
-            {running
-              ? `Uploading… (${log.filter(l=>l.type==="ok").length}/${matched})`
-              : matched > 0 ? `Upload ${matched} products` : "No matched products"}
+          <button onClick={runUpload} disabled={running||matched===0}
+            style={{flex:1,padding:"0.65rem",background:running||matched===0?"#ccc":"#111827",color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:running||matched===0?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
+            {running?`Uploading…`:matched>0?`Upload ${matched} products`:"No matched products"}
           </button>
-          {running && (
-            <button onClick={()=>stopRef.current=true}
-              style={{padding:"0.65rem 0.85rem",background:T.rose+"18",color:T.rose,border:`1px solid ${T.rose}33`,borderRadius:"0.75rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-              Stop
-            </button>
-          )}
+          {running&&<button onClick={()=>stopRef.current=true} style={{padding:"0.65rem 0.85rem",background:T.rose+"18",color:T.rose,border:`1px solid ${T.rose}33`,borderRadius:"0.75rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Stop</button>}
         </div>
       </div>
-
-      {/* Log */}
-      {log.length > 0 && (
-        <div style={{background:"#0C1220",borderRadius:"0.85rem",padding:"0.75rem",maxHeight:"220px",overflowY:"auto",fontFamily:"monospace",fontSize:"0.65rem",lineHeight:1.7}}>
-          {log.map((l,i) => <div key={i} style={{color:logColors[l.type]||"#fff"}}>{l.msg}</div>)}
-        </div>
-      )}
-
-      {done && (
-        <div style={{background:T.sage+"18",border:`1px solid ${T.sage}44`,borderRadius:"0.85rem",padding:"0.75rem 1rem",fontSize:"0.75rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif",textAlign:"center"}}>
-          ✓ Complete — images stored permanently in Firebase Storage
-        </div>
-      )}
+      {log.length>0&&<div style={{background:"#0C1220",borderRadius:"0.85rem",padding:"0.75rem",maxHeight:"220px",overflowY:"auto",fontFamily:"monospace",fontSize:"0.65rem",lineHeight:1.7}}>{log.map((l,i)=><div key={i} style={{color:logColors[l.type]||"#fff"}}>{l.msg}</div>)}</div>}
+      {done&&<div style={{background:T.sage+"18",border:`1px solid ${T.sage}44`,borderRadius:"0.85rem",padding:"0.75rem 1rem",fontSize:"0.75rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif",textAlign:"center"}}>✓ Complete — stored in Firebase Storage</div>}
     </div>
   );
 }
 
-// ── AI Product Enrichment Pipeline ─────────────────────────────────────────
-// Paste product names + brands → Claude searches for ingredients + images automatically
+// ── AI Enrichment Pipeline ──────────────────────────────────────────────────
 function AdminEnrichPipeline({ onBack }) {
   const [input, setInput] = React.useState("");
-  const [queue, setQueue] = React.useState([]); // [{productName, brand, status, result}]
+  const [queue, setQueue] = React.useState([]);
   const [running, setRunning] = React.useState(false);
   const [done, setDone] = React.useState(false);
   const [progress, setProgress] = React.useState(0);
   const stopRef = React.useRef(false);
 
-  // Parse pasted input — accepts:
-  //   "CeraVe Moisturizing Cream" (one per line)
-  //   "CeraVe Moisturizing Cream, CeraVe" (name, brand)
-  //   CSV with productName,brand columns
   function parseInput(text) {
     const lines = text.trim().split("\n").filter(Boolean);
     if (!lines.length) return [];
-
-    // Detect CSV with header
     const firstLower = lines[0].toLowerCase();
     if (firstLower.includes("productname") || firstLower.includes("product_name")) {
-      const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s/g,""));
+      const headers = lines[0].split(",").map(h=>h.trim().toLowerCase().replace(/\s/g,""));
       return lines.slice(1).map(line => {
-        const cols = [];
-        let cur = "", inQ = false;
-        for (const ch of line) {
-          if (ch === '"') { inQ = !inQ; }
-          else if (ch === "," && !inQ) { cols.push(cur.trim()); cur = ""; }
-          else cur += ch;
-        }
+        const cols=[]; let cur="",inQ=false;
+        for (const ch of line) { if(ch==='"'){inQ=!inQ;}else if(ch===","&&!inQ){cols.push(cur.trim());cur="";}else cur+=ch; }
         cols.push(cur.trim());
-        const r = {};
-        headers.forEach((h,i) => { r[h] = cols[i] || ""; });
-        return { productName: r.productname || r.product || r.name || "", brand: r.brand || "" };
-      }).filter(r => r.productName);
+        const r={}; headers.forEach((h,i)=>{r[h]=cols[i]||"";});
+        return {productName:r.productname||r.product||r.name||"",brand:r.brand||""};
+      }).filter(r=>r.productName);
     }
-
-    // Plain lines — "Product Name, Brand" or just "Product Name"
-    return lines.map(line => {
-      const parts = line.split(",");
-      return {
-        productName: parts[0].trim(),
-        brand: parts[1]?.trim() || ""
-      };
-    }).filter(r => r.productName);
+    return lines.map(line=>{const parts=line.split(",");return{productName:parts[0].trim(),brand:parts[1]?.trim()||""};}).filter(r=>r.productName);
   }
 
   function handlePreview() {
     const parsed = parseInput(input);
-    setQueue(parsed.map(p => ({ ...p, status: "pending", result: null })));
-    setDone(false);
-    setProgress(0);
+    setQueue(parsed.map(p=>({...p,status:"pending",result:null})));
+    setDone(false); setProgress(0);
   }
 
-  // Call Claude with web search to find product data
   async function enrichProduct(productName, brand) {
-    const query = `${productName}${brand ? " by " + brand : ""} skincare full ingredient list INCI`;
-    const prompt = `Find the complete INCI ingredient list and a clean product image URL for this skincare product: "${productName}"${brand ? " by " + brand : ""}.
-
-Search the web and return ONLY a JSON object (no markdown, no explanation) with these fields:
-{
-  "ingredients": "full comma-separated INCI ingredient list or empty string if not found",
-  "imageUrl": "direct URL to a clean product image (from brand website, Sephora, ULTA, or INCI Decoder) or empty string if not found",
-  "category": "one of: Face Wash, Moisturiser, Serum, SPF, Toner, Eye Cream, Mask, Acne Treatment, Body, Hair, Lip",
-  "skinTypes": "comma-separated from: All, Oily, Dry, Sensitive, Combination, Normal, Acne-prone, Ageing, Dull, Hyperpigmentation",
-  "reason": "one sentence max 100 chars: key ingredient(s) — main benefit"
-}
-
-Rules:
-- ingredients: use the official INCI list from the brand website, Sephora, ULTA, or incidecoder.com
-- imageUrl: must be a direct image URL ending in .jpg, .png, or .webp from a reliable source
-- If you cannot find verified data, use empty string — do not fabricate
-- Return ONLY the JSON object`;
-
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 1500,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-        messages: [{ role: "user", content: prompt }]
-      })
-    });
-
-    if (!res.ok) throw new Error(`API error ${res.status}`);
+    const prompt = `Find the complete INCI ingredient list and a clean product image URL for: "${productName}"${brand?" by "+brand:""}.
+Return ONLY a JSON object:
+{"ingredients":"full INCI list or empty","imageUrl":"direct image URL ending in .jpg/.png/.webp or empty","category":"one of: Face Wash,Moisturiser,Serum,SPF,Toner,Eye Cream,Mask,Acne Treatment,Body,Hair,Lip","skinTypes":"from: All,Oily,Dry,Sensitive,Combination,Normal,Acne-prone,Ageing,Dull,Hyperpigmentation","reason":"max 100 chars: key ingredients — benefit"}
+Rules: use brand website/Sephora/ULTA/incidecoder.com for ingredients. imageUrl must be direct. Never fabricate. Return ONLY the JSON.`;
+    const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:1500,tools:[{type:"web_search_20250305",name:"web_search"}],messages:[{role:"user",content:prompt}]})});
+    if (!res.ok) throw new Error(`API ${res.status}`);
     const data = await res.json();
-
-    // Extract text from response (may contain tool use blocks)
-    const textBlocks = (data.content || []).filter(b => b.type === "text");
-    const raw = textBlocks.map(b => b.text).join("");
-
-    // Parse JSON from response
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON in response");
-    return JSON.parse(jsonMatch[0]);
+    const raw = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error("No JSON");
+    return JSON.parse(m[0]);
   }
 
-  // Match product name to Firestore doc and update it
   async function updateFirestore(productName, brand, data) {
-    // Find matching product
-    const snap = await getDocs(collection(db, "products"));
-    const nameLow = productName.toLowerCase().trim();
-    const brandLow = (brand || "").toLowerCase().trim();
-
-    let match = snap.docs.find(d => {
-      const p = d.data();
-      return p.productName?.toLowerCase().trim() === nameLow &&
-        (!brandLow || (p.brand || "").toLowerCase().includes(brandLow));
-    });
-    if (!match) match = snap.docs.find(d => {
-      const p = d.data();
-      return p.productName?.toLowerCase().includes(nameLow) ||
-        nameLow.includes((p.productName || "").toLowerCase());
-    });
-
-    if (!match) return { saved: false, reason: "No Firestore match" };
-
-    const updates = { updatedAt: Date.now() };
-    if (data.ingredients) {
-      updates.ingredients = data.ingredients;
-      try {
-        const a = analyzeIngredients(data.ingredients);
-        if (a?.avgScore != null) updates.poreScore = Math.round(a.avgScore);
-      } catch {}
-    }
-    if (data.category)  updates.category  = data.category;
-    if (data.skinTypes) updates.skinTypes  = data.skinTypes.split(",").map(s => s.trim()).filter(Boolean);
-    if (data.reason)    updates.reason     = data.reason;
-
-    // Fetch + upload image if found
-    if (data.imageUrl) {
-      try {
-        const imgRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(data.imageUrl)}`, { signal: AbortSignal.timeout(8000) });
-        if (imgRes.ok) {
-          const blob = await imgRes.blob();
-          if (blob.size > 2000) {
-            const ext = (blob.type || "image/jpeg").split("/")[1] || "jpg";
-            const ref = storageRef(storage, `products/${match.id}/image.${ext}`);
-            await uploadBytes(ref, blob, { contentType: blob.type });
-            const permanentUrl = await getDownloadURL(ref);
-            updates.adminImage = permanentUrl;
-            updates.image = permanentUrl;
-          }
-        }
-      } catch {}
-    }
-
-    await updateDoc(doc(db, "products", match.id), updates);
-    return { saved: true, updates };
+    const snap = await getDocs(collection(db,"products"));
+    const nameLow=productName.toLowerCase().trim(), brandLow=(brand||"").toLowerCase().trim();
+    let match=snap.docs.find(d=>{const p=d.data();return p.productName?.toLowerCase().trim()===nameLow&&(!brandLow||(p.brand||"").toLowerCase().includes(brandLow));});
+    if (!match) match=snap.docs.find(d=>d.data().productName?.toLowerCase().trim()===nameLow);
+    if (!match) return {saved:false,reason:"No match"};
+    const updates={updatedAt:Date.now()};
+    if (data.ingredients){updates.ingredients=data.ingredients;try{const a=analyzeIngredients(data.ingredients);if(a?.avgScore!=null)updates.poreScore=Math.round(a.avgScore);}catch{}}
+    if (data.category) updates.category=data.category;
+    if (data.skinTypes) updates.skinTypes=data.skinTypes.split(",").map(s=>s.trim()).filter(Boolean);
+    if (data.reason) updates.reason=data.reason;
+    if (data.imageUrl) { try { const r=await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(data.imageUrl)}`,{signal:AbortSignal.timeout(8000)}); if(r.ok){const blob=await r.blob();if(blob.size>2000){const ext=(blob.type||"image/jpeg").split("/")[1]||"jpg";const ref=storageRef(storage,`products/${match.id}/image.${ext}`);await uploadBytes(ref,blob,{contentType:blob.type});const url=await getDownloadURL(ref);updates.adminImage=url;updates.image=url;}} } catch {} }
+    await updateDoc(doc(db,"products",match.id),updates);
+    return {saved:true,updates};
   }
 
   async function runPipeline() {
-    if (!queue.length) return;
-    if (!ANTHROPIC_KEY) { alert("No Anthropic API key — set VITE_ANTHROPIC_KEY in Vercel"); return; }
-    setRunning(true); setDone(false); stopRef.current = false;
-    let completed = 0;
-
-    for (let i = 0; i < queue.length; i++) {
-      if (stopRef.current) {
-        setQueue(q => q.map((item, idx) => idx >= i ? { ...item, status: "stopped" } : item));
-        break;
-      }
-
-      const { productName, brand } = queue[i];
-      setQueue(q => q.map((item, idx) => idx === i ? { ...item, status: "searching" } : item));
-
+    if (!queue.length||!ANTHROPIC_KEY) { if(!ANTHROPIC_KEY) alert("No API key — set VITE_ANTHROPIC_KEY"); return; }
+    setRunning(true); setDone(false); stopRef.current=false;
+    let completed=0;
+    for (let i=0;i<queue.length;i++) {
+      if (stopRef.current){setQueue(q=>q.map((item,idx)=>idx>=i?{...item,status:"stopped"}:item));break;}
+      const {productName,brand}=queue[i];
+      setQueue(q=>q.map((item,idx)=>idx===i?{...item,status:"searching"}:item));
       try {
-        const data = await enrichProduct(productName, brand);
-        const { saved, updates, reason } = await updateFirestore(productName, brand, data);
-
-        const parts = [];
-        if (updates?.ingredients) parts.push("ingredients ✓");
-        if (updates?.adminImage)  parts.push("image ✓");
-        if (updates?.category)    parts.push("category ✓");
-
-        setQueue(q => q.map((item, idx) => idx === i ? {
-          ...item,
-          status: saved ? "done" : "skipped",
-          result: saved ? parts.join(", ") || "fields updated" : (reason || "no match")
-        } : item));
+        const data=await enrichProduct(productName,brand);
+        const {saved,updates,reason}=await updateFirestore(productName,brand,data);
+        const parts=[updates?.ingredients&&"ingredients ✓",updates?.adminImage&&"image ✓",updates?.category&&"category ✓"].filter(Boolean);
+        setQueue(q=>q.map((item,idx)=>idx===i?{...item,status:saved?"done":"skipped",result:saved?parts.join(", ")||"updated":(reason||"no match")}:item));
         if (saved) completed++;
-      } catch(e) {
-        setQueue(q => q.map((item, idx) => idx === i ? { ...item, status: "error", result: e.message } : item));
-      }
-
-      setProgress(Math.round(((i + 1) / queue.length) * 100));
-      // Respect rate limits — 1.5s between calls
-      await new Promise(r => setTimeout(r, 1500));
+      } catch(e) { setQueue(q=>q.map((item,idx)=>idx===i?{...item,status:"error",result:e.message}:item)); }
+      setProgress(Math.round(((i+1)/queue.length)*100));
+      await new Promise(r=>setTimeout(r,1500));
     }
-
-    setRunning(false);
-    setDone(true);
+    setRunning(false); setDone(true);
   }
 
-  const statusColor = { pending: T.textLight, searching: T.amber, done: T.sage, error: T.rose, skipped: T.textLight, stopped: T.textLight };
-  const statusIcon  = { pending: "○", searching: "⟳", done: "✓", error: "✗", skipped: "—", stopped: "◼" };
-
-  const counts = queue.reduce((acc, q) => { acc[q.status] = (acc[q.status]||0)+1; return acc; }, {});
+  const statusColor={pending:T.textLight,searching:T.amber,done:T.sage,error:T.rose,skipped:T.textLight,stopped:T.textLight};
+  const statusIcon={pending:"○",searching:"⟳",done:"✓",error:"✗",skipped:"—",stopped:"◼"};
+  const counts=queue.reduce((acc,q)=>{acc[q.status]=(acc[q.status]||0)+1;return acc;},{});
 
   return (
     <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
       <button onClick={onBack} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",padding:0}}>← Back to Cleanup</button>
-
       <div style={{background:T.surface,borderRadius:"1rem",padding:"1rem",border:`1px solid ${T.border}`}}>
         <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"0.15rem"}}>✨ AI Enrichment Pipeline</div>
-        <div style={{fontSize:"0.68rem",color:T.textLight,marginBottom:"0.85rem"}}>
-          Paste product names (one per line, optionally with brand after a comma). Claude searches the web for ingredients and images automatically — no manual Googling.
-        </div>
-
-        <textarea
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          placeholder={"CeraVe Moisturizing Cream, CeraVe\nNiacinamide 10% + Zinc 1%, The Ordinary\nUV Clear Broad-Spectrum SPF 46, EltaMD\n\nOr paste a CSV with productName,brand columns"}
-          rows={7}
-          style={{width:"100%",padding:"0.65rem",border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.72rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box",lineHeight:1.6}}
-        />
-
-        <div style={{display:"flex",gap:"0.5rem",marginTop:"0.6rem"}}>
-          <button onClick={handlePreview} disabled={!input.trim() || running}
+        <div style={{fontSize:"0.68rem",color:T.textLight,marginBottom:"0.85rem"}}>Paste product names (one per line, optionally "Product Name, Brand"). Claude searches the web for ingredients and images — no manual Googling.</div>
+        <textarea value={input} onChange={e=>setInput(e.target.value)} rows={7} placeholder={"CeraVe Moisturizing Cream, CeraVe\nNiacinamide 10% + Zinc 1%, The Ordinary\nUV Clear Broad-Spectrum SPF 46, EltaMD"}
+          style={{width:"100%",padding:"0.65rem",border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.72rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box",lineHeight:1.6}}/>
+        <div style={{marginTop:"0.6rem"}}>
+          <button onClick={handlePreview} disabled={!input.trim()||running}
             style={{padding:"0.55rem 1rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",color:T.text,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
             Preview ({parseInput(input).length} products)
           </button>
         </div>
       </div>
-
-      {queue.length > 0 && (
+      {queue.length>0&&(
         <div style={{background:T.surface,borderRadius:"1rem",border:`1px solid ${T.border}`,overflow:"hidden"}}>
-          {/* Header */}
           <div style={{padding:"0.75rem 1rem",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <div style={{fontSize:"0.78rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>
-              {queue.length} products queued
-              {running && <span style={{color:T.amber,marginLeft:"0.5rem",fontSize:"0.68rem"}}> — enriching…</span>}
-            </div>
-            <div style={{display:"flex",gap:"0.5rem",alignItems:"center"}}>
-              {counts.done > 0 && <span style={{fontSize:"0.65rem",color:T.sage,fontFamily:"'Inter',sans-serif"}}>✓ {counts.done} done</span>}
-              {counts.error > 0 && <span style={{fontSize:"0.65rem",color:T.rose,fontFamily:"'Inter',sans-serif"}}>✗ {counts.error} failed</span>}
-            </div>
+            <div style={{fontSize:"0.78rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>{queue.length} products queued{running&&<span style={{color:T.amber,marginLeft:"0.5rem",fontSize:"0.68rem"}}> — enriching…</span>}</div>
+            <div style={{display:"flex",gap:"0.5rem"}}>{counts.done>0&&<span style={{fontSize:"0.65rem",color:T.sage}}>✓ {counts.done}</span>}{counts.error>0&&<span style={{fontSize:"0.65rem",color:T.rose}}>✗ {counts.error}</span>}</div>
           </div>
-
-          {/* Progress bar */}
-          {running && (
-            <div style={{height:"3px",background:T.surfaceAlt}}>
-              <div style={{height:"100%",background:T.amber,width:`${progress}%`,transition:"width 0.3s"}}/>
-            </div>
-          )}
-
-          {/* Queue list */}
+          {running&&<div style={{height:"3px",background:T.surfaceAlt}}><div style={{height:"100%",background:T.amber,width:`${progress}%`,transition:"width 0.3s"}}/></div>}
           <div style={{maxHeight:"280px",overflowY:"auto"}}>
-            {queue.map((item, i) => (
+            {queue.map((item,i)=>(
               <div key={i} style={{display:"flex",alignItems:"center",gap:"0.6rem",padding:"0.5rem 1rem",borderBottom:`1px solid ${T.border}`,background:i%2===0?T.surface:T.surfaceAlt+"60"}}>
-                <span style={{fontSize:"0.8rem",color:statusColor[item.status],flexShrink:0,width:"14px",animation:item.status==="searching"?"spin 1s linear infinite":undefined}}>{statusIcon[item.status]}</span>
+                <span style={{fontSize:"0.8rem",color:statusColor[item.status],width:"14px"}}>{statusIcon[item.status]}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:"0.72rem",fontWeight:"600",color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.productName}</div>
-                  {item.brand && <div style={{fontSize:"0.6rem",color:T.textLight}}>{item.brand}</div>}
+                  {item.brand&&<div style={{fontSize:"0.6rem",color:T.textLight}}>{item.brand}</div>}
                 </div>
-                {item.result && (
-                  <div style={{fontSize:"0.6rem",color:statusColor[item.status],flexShrink:0,textAlign:"right",maxWidth:"140px"}}>{item.result}</div>
-                )}
-                {item.status === "searching" && (
-                  <div style={{fontSize:"0.6rem",color:T.amber,flexShrink:0}}>searching…</div>
-                )}
+                {item.result&&<div style={{fontSize:"0.6rem",color:statusColor[item.status],textAlign:"right",maxWidth:"140px"}}>{item.result}</div>}
+                {item.status==="searching"&&<div style={{fontSize:"0.6rem",color:T.amber}}>searching…</div>}
               </div>
             ))}
           </div>
-
-          {/* Action buttons */}
           <div style={{padding:"0.75rem 1rem",borderTop:`1px solid ${T.border}`,display:"flex",gap:"0.5rem"}}>
-            <button onClick={runPipeline} disabled={running || done}
+            <button onClick={runPipeline} disabled={running||done}
               style={{flex:1,padding:"0.65rem",background:running||done?"#ccc":"#7C3AED",color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:running||done?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
-              {running ? `Enriching ${queue.findIndex(q=>q.status==="searching")+1} of ${queue.length}…` : done ? "✓ Complete — run again to re-enrich" : `✨ Enrich ${queue.length} products`}
+              {running?`Enriching ${queue.findIndex(q=>q.status==="searching")+1} of ${queue.length}…`:done?"✓ Complete — run again to re-enrich":`✨ Enrich ${queue.length} products`}
             </button>
-            {running && (
-              <button onClick={()=>stopRef.current=true}
-                style={{padding:"0.65rem 0.85rem",background:T.rose+"18",color:T.rose,border:`1px solid ${T.rose}33`,borderRadius:"0.75rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                Stop
-              </button>
-            )}
+            {running&&<button onClick={()=>stopRef.current=true} style={{padding:"0.65rem 0.85rem",background:T.rose+"18",color:T.rose,border:`1px solid ${T.rose}33`,borderRadius:"0.75rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Stop</button>}
           </div>
         </div>
       )}
+      {done&&<div style={{background:T.sage+"18",border:`1px solid ${T.sage}44`,borderRadius:"0.85rem",padding:"0.85rem 1rem",fontSize:"0.75rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif",textAlign:"center"}}>✓ Pipeline complete — {counts.done||0} enriched · {counts.error||0} failed · {counts.skipped||0} skipped</div>}
+      <div style={{background:T.surfaceAlt,borderRadius:"0.75rem",padding:"0.75rem 1rem",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.6}}><b style={{color:T.textMid}}>How it works:</b> Claude searches the web for each product's official INCI list and a clean image, uploads to Firebase Storage, and recalculates pore scores. Rate: ~1 product per 2 seconds.</div>
+    </div>
+  );
+}
 
-      {done && (
-        <div style={{background:T.sage+"18",border:`1px solid ${T.sage}44`,borderRadius:"0.85rem",padding:"0.85rem 1rem",fontSize:"0.75rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif",textAlign:"center"}}>
-          ✓ Pipeline complete — {counts.done || 0} products enriched, {counts.error || 0} failed, {counts.skipped || 0} skipped
+
+
+const NUCLEAR_CLEAN_PRODUCTS = [{"productName": "Protector solar facial antiedad color spf 50+ sun ultimate", "brand": "Les Cosmetiques", "category": "SPF", "skinTypes": "All", "reason": "Broad-spectrum SPF 50 — daily UV protection"}, {"productName": "SA Smoothing Cleanser", "brand": "CeraVe", "category": "Face Wash", "skinTypes": "All", "reason": "Daily facial cleanser by CeraVe"}, {"productName": "Hydrating Foaming Oil Cleanser", "brand": "CeraVe", "category": "Face Wash", "skinTypes": "All", "reason": "Daily facial cleanser by CeraVe"}, {"productName": "C-Firma™ Vitamin C Day Serum", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "Dull", "reason": "Vitamin C — antioxidant brightening and dark spot correction"}, {"productName": "Pantene Active Nutri-Plex Smooth & Sleek Conditioner|Balsam Rinse Off or Leave-On", "brand": "Pantene", "category": "Hair", "skinTypes": "All", "reason": "Hair care by Pantene"}, {"productName": "Vanicream Moisturizing Lotion", "brand": "Vanicream", "category": "Moisturiser", "skinTypes": "All", "reason": "Daily moisturiser by Vanicream"}, {"productName": "Nivea Creme", "brand": "Nivea", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by Nivea"}, {"productName": "Oil control", "brand": "Eucerin", "category": "Moisturiser", "skinTypes": "Acne-prone,Oily", "reason": "Skincare product by Eucerin"}, {"productName": "Foaming Facial Cleanser", "brand": "CeraVe", "category": "Face Wash", "skinTypes": "All", "reason": "Daily facial cleanser by CeraVe"}, {"productName": "Crystal Tears Serum &quot;The power of youth&quot;", "brand": "Mira Dror", "category": "Serum", "skinTypes": "All", "reason": "Treatment serum by Mira Dror"}, {"productName": "Cream pure urea 10%", "brand": "Deliplus", "category": "Moisturiser", "skinTypes": "All", "reason": "Daily moisturiser by Deliplus"}, {"productName": "Hydro Boost Water Gel", "brand": "Neutrogena", "category": "Moisturiser", "skinTypes": "Oily,Combination,Normal", "reason": "Lightweight, non-greasy hydration"}, {"productName": "gel nettoyant", "brand": "La Roche-Posay", "category": "Face Wash", "skinTypes": "All", "reason": "Daily facial cleanser by La Roche-Posay"}, {"productName": "Moisturizing Cream", "brand": "CeraVe", "category": "Moisturiser", "skinTypes": "Dry,Normal,Sensitive", "reason": "Non-pore-clogging, ceramide-rich"}, {"productName": "Nivea crème", "brand": "Nivea", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by Nivea"}, {"productName": "CeraVe Moisturizing Cream", "brand": "CeraVe", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by CeraVe"}, {"productName": "30% AHA + 2% BHA Exfoliating Peel Pads", "brand": "Dr. Dennis Gross", "category": "Toner", "skinTypes": "Acne-prone,Oily", "reason": "Skincare product by Dr. Dennis Gross"}, {"productName": "Vanicream Daily Facial Moisturizer", "brand": "Vanicream", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by Vanicream"}, {"productName": "Superfood Cleanser", "brand": "Youth To The People", "category": "Face Wash", "skinTypes": "All", "reason": "Skincare product by Youth To The People"}, {"productName": "Skin Perfecting 2% BHA Liquid Exfoliant", "brand": "Paula's Choice", "category": "Toner", "skinTypes": "Oily,Acne-prone,Combination", "reason": "Unclogs pores, smooths texture"}, {"productName": "Baume lèvres réparateur Beurre de Karité", "brand": "Le Petit Olivier", "category": "Lip", "skinTypes": "All", "reason": "Skincare product by Le Petit Olivier"}, {"productName": "Acne Free Terminator 10 Spot Treatment", "brand": "AcneFree", "category": "Acne Treatment", "skinTypes": "Acne-prone,Oily", "reason": "Maximum strength 10% benzoyl peroxide spot treatment"}, {"productName": "Omega Rich Rescue Cream", "brand": "Alpyn Beauty", "category": "Moisturiser", "skinTypes": "Dry,Sensitive,Acne-prone", "reason": "Wild-harvested cloudberry + omegas, no pore-clogging oils"}, {"productName": "Salicylic Acid Cleanser", "brand": "Alpyn Beauty", "category": "Face Wash", "skinTypes": "Acne-prone,Oily,Combination", "reason": "Wild-harvested botanicals + 0.5% salicylic acid, acne-safe"}, {"productName": "Skin Relief Moisture Repair Cream", "brand": "Aveeno", "category": "Body", "skinTypes": "Dry,Sensitive,Eczema", "reason": "Oat + ceramides, fragrance-free body cream"}, {"productName": "Aqua Bomb", "brand": "Belif", "category": "Moisturiser", "skinTypes": "Oily,Combination,Normal", "reason": "Lady's mantle herb water-burst gel, no pore-cloggers"}, {"productName": "Sensibio H2O Micellar Water", "brand": "Bioderma", "category": "Toner", "skinTypes": "Sensitive,All", "reason": "Cult micellar water, removes makeup without rinsing"}, {"productName": "Squalane + Antioxidant Cleansing Oil", "brand": "Biossance", "category": "Face Wash", "skinTypes": "Dry,Normal,Sensitive", "reason": "Squalane-based cleansing oil — no mineral oil, no coconut oil"}, {"productName": "Squalane + Phyto-Retinol Serum", "brand": "Biossance", "category": "Serum", "skinTypes": "All,Mature,Acne-prone", "reason": "Bakuchiol (plant retinol) + squalane — retinol benefits without irritation"}, {"productName": "Squalane + Probiotic Moisturizer", "brand": "Biossance", "category": "Moisturiser", "skinTypes": "All,Acne-prone,Sensitive", "reason": "Sugarcane-derived squalane, zero pore-cloggers, microbiome-friendly"}, {"productName": "Acne Control Gel", "brand": "CeraVe", "category": "Acne Treatment", "skinTypes": "Acne-prone,Oily", "reason": "Skincare product by CeraVe"}, {"productName": "Acne Foaming Cream Cleanser", "brand": "CeraVe", "category": "Face Wash", "skinTypes": "Acne-prone,Oily", "reason": "4% benzoyl peroxide + ceramides, gentle on skin barrier"}, {"productName": "AM Facial Moisturizing Lotion SPF 30", "brand": "CeraVe", "category": "SPF", "skinTypes": "All", "reason": "Broad-spectrum SPF 30 — daily UV protection"}, {"productName": "Eye Repair Cream", "brand": "CeraVe", "category": "Eye Cream", "skinTypes": "Sensitive", "reason": "Ceramides + niacinamide, reduces dark circles and puffiness"}, {"productName": "Hydrating Facial Cleanser", "brand": "CeraVe", "category": "Face Wash", "skinTypes": "All", "reason": "Ceramide-rich, fragrance-free, zero pore-cloggers"}, {"productName": "Hydrating Hyaluronic Acid Serum", "brand": "CeraVe", "category": "Serum", "skinTypes": "All", "reason": "Hyaluronic acid — deep hydration and plumping for all skin types"}, {"productName": "Mineral Sunscreen SPF 50", "brand": "CeraVe", "category": "SPF", "skinTypes": "All", "reason": "Broad-spectrum SPF 50 — daily UV protection"}, {"productName": "PM Facial Moisturizing Lotion", "brand": "CeraVe", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by CeraVe"}, {"productName": "Renewing SA Cleanser", "brand": "CeraVe", "category": "Face Wash", "skinTypes": "All", "reason": "Salicylic acid + ceramides — exfoliating without stripping"}, {"productName": "Resurfacing Retinol Serum", "brand": "CeraVe", "category": "Serum", "skinTypes": "Ageing", "reason": "Retinol — anti-ageing, smooths texture and reduces fine lines"}, {"productName": "Skin Renewing Vitamin C Serum", "brand": "CeraVe", "category": "Serum", "skinTypes": "Dull", "reason": "Vitamin C — antioxidant brightening and dark spot correction"}, {"productName": "Bright Healthy Radiance Serum", "brand": "Cetaphil", "category": "Serum", "skinTypes": "Dull", "reason": "Skincare product by Cetaphil"}, {"productName": "Daily Facial Moisturizer SPF 35", "brand": "Cetaphil", "category": "SPF", "skinTypes": "All", "reason": "Skincare product by Cetaphil"}, {"productName": "Gentle Skin Cleanser", "brand": "Cetaphil", "category": "Face Wash", "skinTypes": "Sensitive", "reason": "Dermatologist #1 recommended, fragrance-free"}, {"productName": "Hydrating Eye Gel-Cream", "brand": "Cetaphil", "category": "Eye Cream", "skinTypes": "All", "reason": "Skincare product by Cetaphil"}, {"productName": "Oil Control Foam Wash", "brand": "Cetaphil", "category": "Face Wash", "skinTypes": "Acne-prone,Oily", "reason": "Skincare product by Cetaphil"}, {"productName": "Pro Oil Removing Foam Wash", "brand": "Cetaphil", "category": "Face Wash", "skinTypes": "All", "reason": "Skincare product by Cetaphil"}, {"productName": "Redness Relieving Daily Facial Moisturizer SPF 20", "brand": "Cetaphil", "category": "SPF", "skinTypes": "All", "reason": "Skincare product by Cetaphil"}, {"productName": "Acne Body Wash", "brand": "Clearstem", "category": "Acne Treatment", "skinTypes": "Acne-prone,Body", "reason": "Acne-safe body wash — salicylic acid + stem cells, no pore-cloggers"}, {"productName": "BOUNCEBACK Hyaluronic Acid Moisturizer", "brand": "Clearstem", "category": "Moisturiser", "skinTypes": "All", "reason": "Hyaluronic acid — deep hydration and plumping for all skin types"}, {"productName": "Brightening Serum", "brand": "Clearstem", "category": "Serum", "skinTypes": "All,Dull,Post-acne,Acne-prone", "reason": "100% acne-safe brightening serum — fades marks without clogging"}, {"productName": "CELLRENEW Microneedling Collagen Serum", "brand": "Clearstem", "category": "Serum", "skinTypes": "Ageing", "reason": "Skincare product by Clearstem"}, {"productName": "CELLRENEW Stem Cell Mask", "brand": "Clearstem", "category": "Mask", "skinTypes": "All,Acne-prone,Mature", "reason": "Stem cell technology in a 100% acne-safe mask formula"}, {"productName": "CELLRENEW Stem Cell Moisturizer", "brand": "Clearstem", "category": "Moisturiser", "skinTypes": "All,Acne-prone,Mature", "reason": "100% acne-safe moisturizer with stem cell technology and growth factors"}, {"productName": "CLEARITY Targeted Skin Clearing Serum", "brand": "Clearstem", "category": "Serum", "skinTypes": "All", "reason": "Skincare product by Clearstem"}, {"productName": "CLEARSTEM BOUNCEBACK Post-Breakout Serum", "brand": "Clearstem", "category": "Acne Treatment", "skinTypes": "Post-acne,Acne-prone,All", "reason": "Fades post-acne marks fast — stem cells + niacinamide, 100% acne-safe"}, {"productName": "CLEARSTEM CLARIFY Acne Serum", "brand": "Clearstem", "category": "Acne Treatment", "skinTypes": "Acne-prone,All", "reason": "Stem cell + salicylic acid — targets acne without drying"}, {"productName": "CLEARSTEM CLEARBODY Acne Spray", "brand": "Clearstem", "category": "Body", "skinTypes": "Acne-prone,Body", "reason": "Hard-to-reach back acne spray — salicylic + stem cells, 100% acne-safe"}, {"productName": "CLEARSTEM MINSCAPE Retinol Serum", "brand": "Clearstem", "category": "Serum", "skinTypes": "Acne-prone,Mature,All", "reason": "Acne-safe retinol — no pore-cloggers in the base, stem cells enhance results"}, {"productName": "DEWGLOW Mineral Sunscreen SPF 30", "brand": "Clearstem", "category": "SPF", "skinTypes": "Dull", "reason": "Broad-spectrum SPF 30 — daily UV protection"}, {"productName": "CLEARITY The Blackhead Dissolver Mandelic Acid Serum", "brand": "Clearstem", "category": "Serum", "skinTypes": "All,Dull,Acne-prone", "reason": "Acne-safe vitamin C — brightens without pore-cloggers"}, {"productName": "Even Up Clinical Pigment Perfector SPF 50", "brand": "Colorescience", "category": "SPF", "skinTypes": "Dull", "reason": "Broad-spectrum SPF 50 — daily UV protection"}, {"productName": "Sunforgettable Total Protection Face Shield Flex SPF 50", "brand": "Colorescience", "category": "SPF", "skinTypes": "All,Post-acne,Redness", "reason": "Tinted mineral SPF 50 with optical blurring — corrects redness and spots"}, {"productName": "Mineral Eye Cream SPF 35", "brand": "Colorescience", "category": "SPF", "skinTypes": "All,Sensitive", "reason": "Mineral SPF + peptides for the eye area, no pore-cloggers"}, {"productName": "Pep Up Collagen Renew Serum", "brand": "Colorescience", "category": "Serum", "skinTypes": "Ageing", "reason": "Skincare product by Colorescience"}, {"productName": "Sunforgettable Total Protection Brush-On Shield SPF 50", "brand": "Colorescience", "category": "SPF", "skinTypes": "All", "reason": "Broad-spectrum SPF 50 — daily UV protection"}, {"productName": "Sunforgettable Total Protection Face Shield SPF 50", "brand": "Colorescience", "category": "SPF", "skinTypes": "All", "reason": "Broad-spectrum SPF 50 — daily UV protection"}, {"productName": "Sunforgettable Total Protection SPF 50", "brand": "Colorescience", "category": "SPF", "skinTypes": "All,Sensitive,Acne-prone", "reason": "100% mineral, reef-safe, acne-safe powder SPF"}, {"productName": "Total Eye 3-in-1 Renewal Therapy SPF 35", "brand": "Colorescience", "category": "Eye Cream", "skinTypes": "All", "reason": "Mineral SPF + peptides + colour correction for eyes"}, {"productName": "Total Protection Face Shield SPF 50+", "brand": "Colorescience", "category": "SPF", "skinTypes": "All,Sensitive,Acne-prone", "reason": "Broad spectrum mineral SPF 50+ — pollution shield, non-comedogenic"}, {"productName": "Acne Pimple Master Patch", "brand": "COSRX", "category": "Acne Treatment", "skinTypes": "Acne-prone,Oily", "reason": "Skincare product by COSRX"}, {"productName": "AHA 7 Whitehead Power Liquid", "brand": "COSRX", "category": "Toner", "skinTypes": "All", "reason": "Skincare product by COSRX"}, {"productName": "AHA/BHA Clarifying Treatment Toner", "brand": "COSRX", "category": "Toner", "skinTypes": "Oily,Acne-prone,Combination", "reason": "Willow bark BHA + glycolic AHA dual-acid daily toner"}, {"productName": "BHA Blackhead Power Liquid", "brand": "COSRX", "category": "Toner", "skinTypes": "Acne-prone,Oily", "reason": "4% betaine salicylate — clears blackheads, gentler than traditional BHA"}, {"productName": "Galactomyces 95 Tone Balancing Essence", "brand": "COSRX", "category": "Toner", "skinTypes": "All", "reason": "Galactomyces 95% — brightening and pore-minimising essence"}, {"productName": "Low pH Good Morning Gel Cleanser", "brand": "COSRX", "category": "Face Wash", "skinTypes": "All", "reason": "pH 5.0 preserves acid mantle, BHA-boosted"}, {"productName": "Oil-Free Ultra Moisturizing Lotion", "brand": "COSRX", "category": "Moisturiser", "skinTypes": "Acne-prone,Oily", "reason": "Skincare product by COSRX"}, {"productName": "Propolis Light Ampule", "brand": "COSRX", "category": "Serum", "skinTypes": "All", "reason": "Propolis — antioxidant-rich brightening and healing ampoule"}, {"productName": "Pure Fit Cica Serum", "brand": "COSRX", "category": "Serum", "skinTypes": "Sensitive", "reason": "Cica (centella) — calming redness and repairing skin barrier"}, {"productName": "Daily Microfoliant", "brand": "Dermalogica", "category": "Face Wash", "skinTypes": "All,Sensitive,Acne-prone", "reason": "Rice-based enzyme powder exfoliant — brightens without irritating"}, {"productName": "Cica Repair Cream Mask", "brand": "Dr. Jart+", "category": "Mask", "skinTypes": "Sensitive,Acne-prone,Irritated", "reason": "Centella asiatica repairs and calms — no pore-cloggers"}, {"productName": "Cicapair Tiger Grass Color Correcting Treatment", "brand": "Dr. Jart+", "category": "Moisturiser", "skinTypes": "Sensitive,Redness,All", "reason": "Centella asiatica calms redness, SPF 30, non-comedogenic"}, {"productName": "A-Passioni Retinol Cream", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "Ageing", "reason": "1% vegan retinol in a non-comedogenic base — smoothing and resurfacing"}, {"productName": "B-Hydra Intensive Hydration Serum", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "All", "reason": "Pro-vitamin B5 + pineapple ceramide — weightless hydration serum"}, {"productName": "Beste No. 9 Jelly Cleanser", "brand": "Drunk Elephant", "category": "Face Wash", "skinTypes": "All", "reason": "Gentle jelly cleanser — removes makeup and SPF without stripping, zero pore-cloggers"}, {"productName": "Body Lochi Hydrating Milk", "brand": "Drunk Elephant", "category": "Body", "skinTypes": "All,Dry,Sensitive", "reason": "Lightweight body milk with 7 AHAs + enzymes — non-comedogenic, no fragrance"}, {"productName": "C-Firma Fresh Day Serum", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "All", "reason": "15% L-ascorbic acid vitamin C, freshness-activated"}, {"productName": "Lala Retro Whipped Cream", "brand": "Drunk Elephant", "category": "Moisturiser", "skinTypes": "Dry,Sensitive,Mature", "reason": "6 African oils + ceramides — rich barrier repair without pore-cloggers"}, {"productName": "Protini Polypeptide Cream", "brand": "Drunk Elephant", "category": "Moisturiser", "skinTypes": "Ageing", "reason": "Signal peptides + growth factors, zero pore-cloggers"}, {"productName": "Shaba Complex Eye Serum", "brand": "Drunk Elephant", "category": "Eye Cream", "skinTypes": "All", "reason": "Copper peptides + kiwi fruit water — firms and brightens under eyes, no pore-cloggers"}, {"productName": "T.L.C. Framboos Glycolic Night Serum", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "All", "reason": "12% AHA + 2% BHA blend — resurfacing night serum, no pore-cloggers"}, {"productName": "T.L.C. Instant Gekko Mask", "brand": "Drunk Elephant", "category": "Mask", "skinTypes": "Dry,Dehydrated,All", "reason": "Moisture-surge mask with marula oil + hyaluronic acid, no pore-cloggers"}, {"productName": "T.L.C. Sukari Babyfacial", "brand": "Drunk Elephant", "category": "Mask", "skinTypes": "All", "reason": "25% AHA + 2% BHA weekly treatment, resurfaces skin"}, {"productName": "The Cleanser", "brand": "Drunk Elephant", "category": "Face Wash", "skinTypes": "All", "reason": "pH-balanced amino acid cleanser free from the Suspicious 6"}, {"productName": "Umbra Sheer Physical Daily Defense SPF 30", "brand": "Drunk Elephant", "category": "SPF", "skinTypes": "All", "reason": "20% zinc oxide sheer mineral SPF — lightweight, non-comedogenic, no white cast"}, {"productName": "Umbra Tinte Physical Daily Defense SPF 30", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "All,Sensitive,Acne-prone", "reason": "Tinted mineral SPF 30 with 20% zinc oxide — lightweight, non-comedogenic"}, {"productName": "Cleanser Balm", "brand": "Elemis", "category": "Face Wash", "skinTypes": "Dry,Mature,All", "reason": "Melts into oil to remove makeup — elderberry + starflower, no pore-cloggers"}, {"productName": "AM Therapy Facial Moisturizer", "brand": "EltaMD", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by EltaMD"}, {"productName": "PM Therapy Facial Moisturizer", "brand": "EltaMD", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by EltaMD"}, {"productName": "Skin Recovery Eye and Area Cream", "brand": "EltaMD", "category": "Eye Cream", "skinTypes": "All", "reason": "Skincare product by EltaMD"}, {"productName": "UV Clear Broad-Spectrum SPF 46", "brand": "EltaMD", "category": "SPF", "skinTypes": "All", "reason": "Niacinamide + zinc oxide — dermatologist favourite for acne-prone skin"}, {"productName": "UV Daily Broad-Spectrum SPF 40", "brand": "EltaMD", "category": "SPF", "skinTypes": "All", "reason": "Broad-spectrum SPF 40 — lightweight daily UV protection"}, {"productName": "UV Physical Broad-Spectrum SPF 41", "brand": "EltaMD", "category": "SPF", "skinTypes": "All", "reason": "Skincare product by EltaMD"}, {"productName": "UV Sport Broad-Spectrum SPF 50", "brand": "EltaMD", "category": "SPF", "skinTypes": "All", "reason": "Broad-spectrum SPF 50 — daily UV protection"}, {"productName": "Acne Body Lotion", "brand": "Face Reality", "category": "Body", "skinTypes": "Acne-prone,Body,Oily", "reason": "Professional acne-safe body lotion — clears bacne and chest breakouts"}, {"productName": "Acne Med 10%", "brand": "Face Reality", "category": "Acne Treatment", "skinTypes": "Acne-prone,Oily", "reason": "Maximum strength benzoyl peroxide treatment — professional acne brand"}, {"productName": "Acne Med 5%", "brand": "Face Reality", "category": "Acne Treatment", "skinTypes": "Acne-prone,Oily", "reason": "Professional-grade benzoyl peroxide treatment"}, {"productName": "Acne Moisturizer", "brand": "Face Reality", "category": "Moisturiser", "skinTypes": "Acne-prone,Oily,Combination", "reason": "Oil-free, acne-safe moisturizer formulated specifically for breakout-prone skin"}, {"productName": "AHA/BHA Exfoliating Cleanser", "brand": "Face Reality", "category": "Face Wash", "skinTypes": "Oily,Acne-prone,Combination", "reason": "Dual-acid professional cleanser — clears congestion at the wash step"}, {"productName": "Daily SPF 30 Plus", "brand": "Face Reality", "category": "SPF", "skinTypes": "Acne-prone,Oily,Combination", "reason": "Acne-safe SPF moisturizer combo — oil-free, professional formulation"}, {"productName": "Glycolic Serum 10%", "brand": "Face Reality", "category": "Serum", "skinTypes": "Acne-prone,Oily,Dull", "reason": "Professional-strength glycolic acid serum — resurfaces and brightens acne-prone skin"}, {"productName": "Hydrabalance Hydrating Gel", "brand": "Face Reality", "category": "Moisturiser", "skinTypes": "Oily,Acne-prone,Combination", "reason": "Oil-free acne-safe hydrating gel"}, {"productName": "Hydracalm Mask", "brand": "Face Reality", "category": "Mask", "skinTypes": "Dry,Sensitive,Acne-prone", "reason": "Professional acne-safe hydrating mask — deeply replenishes without clogging"}, {"productName": "Lactic Acid 8%", "brand": "Face Reality", "category": "Toner", "skinTypes": "Sensitive,Acne-prone,Dry", "reason": "Professional lactic acid exfoliant — gentler than glycolic, hydrating while resurfacing"}, {"productName": "Mandelic Acid Serum 8%", "brand": "Face Reality", "category": "Serum", "skinTypes": "Acne-prone,Sensitive", "reason": "Professional-grade mandelic acid — gentler than glycolic"}, {"productName": "Sulfur Spot Treatment", "brand": "Face Reality", "category": "Acne Treatment", "skinTypes": "Acne-prone,Sensitive,Oily", "reason": "Sulfur-based spot treatment — dries breakouts without over-drying skin"}, {"productName": "Ultra Gentle Cleanser", "brand": "Face Reality", "category": "Face Wash", "skinTypes": "Sensitive,Acne-prone", "reason": "Professional acne-safe cleanser, no pore-cloggers"}, {"productName": "Eye Duty Triple Remedy AM Gel Cream", "brand": "First Aid Beauty", "category": "Eye Cream", "skinTypes": "All", "reason": "Skincare product by First Aid Beauty"}, {"productName": "Face Cleanser", "brand": "First Aid Beauty", "category": "Face Wash", "skinTypes": "All", "reason": "Skincare product by First Aid Beauty"}, {"productName": "Hello FAB Coconut Skin Smoothie Priming Moisturizer", "brand": "First Aid Beauty", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by First Aid Beauty"}, {"productName": "KP Bump Eraser Body Scrub", "brand": "First Aid Beauty", "category": "Body", "skinTypes": "All", "reason": "Skincare product by First Aid Beauty"}, {"productName": "Ultra Repair Cream", "brand": "First Aid Beauty", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": "Colloidal oatmeal + ceramides, instant relief for dry skin"}, {"productName": "Ultra Repair Face Moisturizer", "brand": "First Aid Beauty", "category": "Moisturiser", "skinTypes": "Sensitive,Dry,Acne-prone", "reason": "Colloidal oatmeal + ceramides, fragrance-free, acne-safe"}, {"productName": "Ultra Repair Tinted Moisturizer SPF 30", "brand": "First Aid Beauty", "category": "SPF", "skinTypes": "Sensitive", "reason": "Broad-spectrum SPF 30 — daily UV protection"}, {"productName": "Ultra Repair Wild Oat Hydrating Toner", "brand": "First Aid Beauty", "category": "Toner", "skinTypes": "Sensitive", "reason": "Skincare product by First Aid Beauty"}, {"productName": "Invisible Shield Daily Sunscreen SPF 35", "brand": "Glossier", "category": "SPF", "skinTypes": "All,Oily,Combination", "reason": "Water-gel texture, no white cast, non-comedogenic"}, {"productName": "Milky Jelly Cleanser", "brand": "Glossier", "category": "Face Wash", "skinTypes": "All,Sensitive", "reason": "5 skin conditioners in a gentle pH-balanced formula"}, {"productName": "Priming Moisturizer", "brand": "Glossier", "category": "Moisturiser", "skinTypes": "All,Normal,Combination", "reason": "Skin-blurring lightweight daily moisturizer"}, {"productName": "Avocado Ceramide Recovery Serum", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "Dull", "reason": "Ceramides + hyaluronic acid — barrier repair and 24hr hydration"}, {"productName": "Banana Soufflé Moisture Cream", "brand": "Glow Recipe", "category": "Moisturiser", "skinTypes": "Dull", "reason": "Skincare product by Glow Recipe"}, {"productName": "Cloudberry Bright SPF 50 Sunscreen", "brand": "Glow Recipe", "category": "SPF", "skinTypes": "Dull", "reason": "Broad-spectrum SPF 50 — daily UV protection"}, {"productName": "Future Dew Serum", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "Oily,Combination,Normal", "reason": "Hyaluronic + niacinamide + bakuchiol, weightless glass-skin serum"}, {"productName": "Plum Plump Hyaluronic Acid Serum", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "Dull", "reason": "Hyaluronic acid — deep hydration and plumping for all skin types"}, {"productName": "Strawberry Smooth BHA+AHA Salicylic Serum", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "Acne-prone,Oily,Dull", "reason": "Skincare product by Glow Recipe"}, {"productName": "Watermelon Glow Niacinamide Dew Drops", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "Dull", "reason": "Niacinamide — pore-minimising, brightening, and barrier-supporting"}, {"productName": "Watermelon Glow PHA+BHA Pore-Tight Toner", "brand": "Glow Recipe", "category": "Toner", "skinTypes": "Acne-prone,Oily,Dull", "reason": "Skincare product by Glow Recipe"}, {"productName": "Watermelon Glow Sleeping Mask", "brand": "Glow Recipe", "category": "Mask", "skinTypes": "Dull", "reason": "Overnight watermelon + AHA brightening sleep mask"}, {"productName": "Invisible Pimple Patches", "brand": "Hero Cosmetics", "category": "Acne Treatment", "skinTypes": "Acne-prone,All", "reason": "Hydrocolloid patches absorb pus, protect from bacteria, no ingredients to worry about"}, {"productName": "Green Tea Seed Serum", "brand": "Innisfree", "category": "Serum", "skinTypes": "All,Oily,Combination", "reason": "Jeju green tea antioxidants, 5-layer hydration"}, {"productName": "Calendula Herbal-Extract Toner", "brand": "Kiehl's", "category": "Toner", "skinTypes": "All,Sensitive", "reason": "Alcohol-free calendula toner, soothes and balances"}, {"productName": "Clearly Corrective Dark Spot Corrector", "brand": "Kiehl's", "category": "Serum", "skinTypes": "All,Dull,Post-acne", "reason": "White birch + peony extract fades post-acne marks, non-comedogenic"}, {"productName": "Creamy Eye Treatment with Avocado", "brand": "Kiehl's", "category": "Eye Cream", "skinTypes": "Dry,Mature", "reason": "Rich avocado eye cream, deeply nourishing"}, {"productName": "Ultra Facial Cream", "brand": "Kiehl's", "category": "Moisturiser", "skinTypes": "All,Dry,Normal", "reason": "24hr hydration, squalane + glacial glycoprotein"}, {"productName": "Anthelios Clear Skin SPF 60", "brand": "La Roche-Posay", "category": "SPF", "skinTypes": "All", "reason": "Skincare product by La Roche-Posay"}, {"productName": "Anthelios Melt-in Milk Sunscreen SPF 60", "brand": "La Roche-Posay", "category": "SPF", "skinTypes": "All", "reason": "Skincare product by La Roche-Posay"}, {"productName": "Cicaplast Baume B5", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": "Cica (centella) — calming redness and repairing skin barrier"}, {"productName": "Cicaplast Baume B5+", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "Sensitive,Dry,Damaged", "reason": "Panthenol + madecassoside repair balm — dermatologist go-to for barrier recovery"}, {"productName": "Effaclar Clarifying Solution Toner", "brand": "La Roche-Posay", "category": "Toner", "skinTypes": "All", "reason": "Skincare product by La Roche-Posay"}, {"productName": "Effaclar Duo Acne Treatment", "brand": "La Roche-Posay", "category": "Acne Treatment", "skinTypes": "Acne-prone,Oily", "reason": "Skincare product by La Roche-Posay"}, {"productName": "Effaclar Medicated Gel Cleanser", "brand": "La Roche-Posay", "category": "Face Wash", "skinTypes": "All", "reason": "Skincare product by La Roche-Posay"}, {"productName": "Effaclar Purifying Foaming Gel", "brand": "La Roche-Posay", "category": "Face Wash", "skinTypes": "Oily,Acne-prone", "reason": "Zinc + LHA target congestion without stripping"}, {"productName": "Hyalu B5 Pure Hyaluronic Acid Serum", "brand": "La Roche-Posay", "category": "Serum", "skinTypes": "All", "reason": "Hyaluronic acid — deep hydration and plumping for all skin types"}, {"productName": "Retinol B3 Serum", "brand": "La Roche-Posay", "category": "Serum", "skinTypes": "Ageing", "reason": "Retinol — anti-ageing, smooths texture and reduces fine lines"}, {"productName": "Toleriane Double Repair Face Moisturizer", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": "Skincare product by La Roche-Posay"}, {"productName": "Toleriane Hydrating Gentle Cleanser", "brand": "La Roche-Posay", "category": "Face Wash", "skinTypes": "Sensitive", "reason": "Fragrance-free, microbiome-friendly, no pore-cloggers"}, {"productName": "Toleriane Sensitive Fluide", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": "Skincare product by La Roche-Posay"}, {"productName": "Toleriane Ultra Eye Cream", "brand": "La Roche-Posay", "category": "Eye Cream", "skinTypes": "Sensitive", "reason": "Skincare product by La Roche-Posay"}, {"productName": "Lip Sleeping Mask", "brand": "Laneige", "category": "Mask", "skinTypes": "All", "reason": "Overnight lip mask repairs and plumps while you sleep"}, {"productName": "Water Sleeping Mask", "brand": "Laneige", "category": "Moisturiser", "skinTypes": "All,Dry,Normal", "reason": "Overnight hydration boost, SLEEPSCENT technology"}, {"productName": "Drying Lotion", "brand": "Mario Badescu", "category": "Acne Treatment", "skinTypes": "Acne-prone,Oily", "reason": "Cult overnight spot treatment, dries blemishes fast"}, {"productName": "Facial Spray with Aloe", "brand": "Mario Badescu", "category": "Toner", "skinTypes": "All,Dry", "reason": "Refreshing aloe mist, sets makeup and hydrates"}, {"productName": "Acne Cleanser", "brand": "Murad", "category": "Face Wash", "skinTypes": "Acne-prone,Oily", "reason": "1.5% salicylic acid + glycolic acid, dermatologist developed"}, {"productName": "Acne Spot Treatment", "brand": "Murad", "category": "Acne Treatment", "skinTypes": "Acne-prone,Oily", "reason": "2% salicylic acid + sulfur, dries blemishes overnight"}, {"productName": "Supercharged Moisture Cream", "brand": "Murad", "category": "Moisturiser", "skinTypes": "All,Dry,Mature", "reason": "Hyaluronic acid trilogy + retinol alternative, acne-safe formula"}, {"productName": "Barrier+ Moisturizer", "brand": "Naturium", "category": "Moisturiser", "skinTypes": "Sensitive,Dry,All", "reason": "Ceramide + peptide barrier moisturizer — fragrance-free, non-comedogenic"}, {"productName": "Bright Eyes Illuminating Eye Cream", "brand": "Naturium", "category": "Eye Cream", "skinTypes": "All,Dark Circles,Puffiness", "reason": "Caffeine + niacinamide + peptides — brightens dark circles, non-comedogenic"}, {"productName": "Jelly Facial Cleanser", "brand": "Naturium", "category": "Face Wash", "skinTypes": "All,Oily,Combination", "reason": "Gentle glycerin-based jelly cleanser, fragrance-free, no pore-cloggers"}, {"productName": "Naturium Azelaic Acid Emulsion 10%", "brand": "Naturium", "category": "Acne Treatment", "skinTypes": "Acne-prone,Redness,Sensitive", "reason": "10% azelaic acid fades marks and calms redness, acne-safe base"}, {"productName": "Bright Boost Micro-Polish Exfoliating Cleanser", "brand": "Neutrogena", "category": "Toner", "skinTypes": "All", "reason": "Skincare product by Neutrogena"}, {"productName": "Healthy Skin Anti-Wrinkle Night Cream", "brand": "Neutrogena", "category": "Moisturiser", "skinTypes": "Ageing", "reason": "Skincare product by Neutrogena"}, {"productName": "Hydro Boost Eye Gel Cream", "brand": "Neutrogena", "category": "Eye Cream", "skinTypes": "All,Oily", "reason": "Lightweight hyaluronic gel, non-comedogenic eye cream"}, {"productName": "Mineral Ultra Sheer Sunscreen SPF 70", "brand": "Neutrogena", "category": "SPF", "skinTypes": "All", "reason": "Skincare product by Neutrogena"}, {"productName": "Oil-Free Acne Wash", "brand": "Neutrogena", "category": "Face Wash", "skinTypes": "Acne-prone,Oily", "reason": "Skincare product by Neutrogena"}, {"productName": "Oil-Free Moisture Broad Spectrum SPF 35", "brand": "Neutrogena", "category": "Moisturiser", "skinTypes": "Oily,Acne-prone,Combination", "reason": "Oil-free moisturizer with SPF 35, non-comedogenic"}, {"productName": "Rapid Wrinkle Repair Retinol Serum", "brand": "Neutrogena", "category": "Serum", "skinTypes": "Sensitive,Ageing", "reason": "Retinol — anti-ageing, smooths texture and reduces fine lines"}, {"productName": "Stubborn Acne AM Treatment", "brand": "Neutrogena", "category": "Acne Treatment", "skinTypes": "Acne-prone,Oily", "reason": "Skincare product by Neutrogena"}, {"productName": "Ultra Sheer Dry-Touch Sunscreen SPF 100", "brand": "Neutrogena", "category": "SPF", "skinTypes": "Dry", "reason": "Skincare product by Neutrogena"}, {"productName": "Ultra Sheer Dry-Touch Sunscreen SPF 55", "brand": "Neutrogena", "category": "SPF", "skinTypes": "All,Oily,Combination", "reason": "Lightweight, non-greasy, non-comedogenic SPF 55"}, {"productName": "10% Azelaic Acid Booster", "brand": "Paula's Choice", "category": "Toner", "skinTypes": "Acne-prone,Redness,Hyperpigmentation", "reason": "Azelaic acid fades marks and reduces redness"}, {"productName": "10% Niacinamide Booster", "brand": "Paula's Choice", "category": "Serum", "skinTypes": "Oily,Acne-prone,Combination", "reason": "Pure 10% niacinamide serum — pore-minimizing, oil control"}, {"productName": "BOOST C15 Super Booster", "brand": "Paula's Choice", "category": "Serum", "skinTypes": "All", "reason": "Skincare product by Paula's Choice"}, {"productName": "CLEAR Pore Normalizing Cleanser", "brand": "Paula's Choice", "category": "Face Wash", "skinTypes": "Acne-prone,Oily", "reason": "Skincare product by Paula's Choice"}, {"productName": "CLEAR Regular Strength Daily Skin Clearing Treatment", "brand": "Paula's Choice", "category": "Acne Treatment", "skinTypes": "All", "reason": "Skincare product by Paula's Choice"}, {"productName": "RESIST Anti-Aging Eye Gel", "brand": "Paula's Choice", "category": "Eye Cream", "skinTypes": "Ageing", "reason": "Skincare product by Paula's Choice"}, {"productName": "RESIST Hyaluronic Acid Booster", "brand": "Paula's Choice", "category": "Serum", "skinTypes": "All", "reason": "Hyaluronic acid — deep hydration and plumping for all skin types"}, {"productName": "SKIN BALANCING Ultra-Sheer Daily Defense SPF 30", "brand": "Paula's Choice", "category": "SPF", "skinTypes": "All", "reason": "Broad-spectrum SPF 30 — daily UV protection"}, {"productName": "Skin Perfecting 8% AHA Gel Exfoliant", "brand": "Paula's Choice", "category": "Toner", "skinTypes": "All", "reason": "Skincare product by Paula's Choice"}, {"productName": "SKIN RECOVERY Replenishing Moisturizer", "brand": "Paula's Choice", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by Paula's Choice"}, {"productName": "Cucumber Gel Mask", "brand": "Peter Thomas Roth", "category": "Mask", "skinTypes": "All,Sensitive,Oily", "reason": "Cooling cucumber gel mask soothes and hydrates"}, {"productName": "AOX+ Eye Gel", "brand": "SkinCeuticals", "category": "Eye Cream", "skinTypes": "All", "reason": "Skincare product by SkinCeuticals"}, {"productName": "C E Ferulic", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "All,Mature,Dull", "reason": "Gold standard vitamin C serum, 15% L-ascorbic acid"}, {"productName": "HA Intensifier", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "All,Mature", "reason": "Supports HA synthesis in skin, clinical-grade"}, {"productName": "Hydrating B5 Gel", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "All", "reason": "Skincare product by SkinCeuticals"}, {"productName": "Physical Fusion UV Defense SPF 50", "brand": "SkinCeuticals", "category": "SPF", "skinTypes": "All", "reason": "100% mineral SPF 50, tinted for all skin tones"}, {"productName": "Phyto Corrective Gel", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "All", "reason": "Skincare product by SkinCeuticals"}, {"productName": "Retinol 0.3", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "Ageing", "reason": "Retinol — anti-ageing, smooths texture and reduces fine lines"}, {"productName": "Simply Clean Gel Cleanser", "brand": "SkinCeuticals", "category": "Face Wash", "skinTypes": "All", "reason": "Skincare product by SkinCeuticals"}, {"productName": "Triple Lipid Restore 2:4:2", "brand": "SkinCeuticals", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by SkinCeuticals"}, {"productName": "Daily Physical Defense SPF 30", "brand": "SkinMedica", "category": "SPF", "skinTypes": "All,Sensitive,Mature", "reason": "Derm-developed mineral SPF — antioxidant-rich, non-comedogenic"}, {"productName": "HA5 Rejuvenate Hydrator", "brand": "SkinMedica", "category": "Moisturiser", "skinTypes": "All,Dry,Mature", "reason": "5 forms of hyaluronic acid — plumping, non-comedogenic, derm staple"}, {"productName": "Lytera 2.0 Pigment Correcting Serum", "brand": "SkinMedica", "category": "Serum", "skinTypes": "All,Dull,Post-acne,Hyperpigmentation", "reason": "Tranexamic acid + niacinamide — derm gold standard for stubborn dark spots"}, {"productName": "Retinol Complex Eye Cream", "brand": "SkinMedica", "category": "Eye Cream", "skinTypes": "Mature,All", "reason": "Derm-developed retinol eye cream — smooths crow's feet, non-comedogenic"}, {"productName": "Soothe Cleansing Milk", "brand": "SkinMedica", "category": "Face Wash", "skinTypes": "Sensitive,Dry,Mature", "reason": "Derm-developed milky cleanser — calms and hydrates while cleansing"}, {"productName": "TNS Advanced+ Serum", "brand": "SkinMedica", "category": "Moisturiser", "skinTypes": "Mature,All,Dull", "reason": "Growth factor serum — clinically proven to reduce fine lines, non-comedogenic"}, {"productName": "TNS Eye Repair", "brand": "SkinMedica", "category": "Serum", "skinTypes": "Mature,All", "reason": "Growth factors + retinol for the eye area — derm-developed, non-comedogenic"}, {"productName": "Ultra Sheer Micro-Exfoliating Lotion", "brand": "SkinMedica", "category": "Toner", "skinTypes": "All,Acne-prone,Dull", "reason": "AHA/BHA blend in a derm-developed exfoliating lotion — non-comedogenic"}, {"productName": "AHA BHA PHA 30 Days Miracle Foam Cleanser", "brand": "Some By Mi", "category": "Face Wash", "skinTypes": "Oily,Acne-prone,Combination", "reason": "Triple acid cleanser — clears congestion gently"}, {"productName": "AHA BHA PHA 30 Days Miracle Toner", "brand": "Some By Mi", "category": "Toner", "skinTypes": "Acne-prone,Oily,Combination", "reason": "Triple acid toner clears pores and refines texture"}, {"productName": "Apricot Scrub", "brand": "St. Ives", "category": "Body", "skinTypes": "Normal,Combination", "reason": "Exfoliating scrub with 100% natural walnut shell powder"}, {"productName": "C.E.O. 15% Vitamin C Brightening Serum", "brand": "Sunday Riley", "category": "Serum", "skinTypes": "All,Dull,Mature", "reason": "THD vitamin C + turmeric, brightens and firms skin"}, {"productName": "Good Genes All-In-One Lactic Acid Treatment", "brand": "Sunday Riley", "category": "Serum", "skinTypes": "All,Dull,Uneven", "reason": "Lactic acid exfoliant with licorice, instant glow"}, {"productName": "The Dewy Skin Cream", "brand": "Tatcha", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by Tatcha"}, {"productName": "The Essence Skincare Plumping Treatment", "brand": "Tatcha", "category": "Toner", "skinTypes": "All", "reason": "Skincare product by Tatcha"}, {"productName": "The Indigo Cream Soothing Skin Barrier Moisturizer", "brand": "Tatcha", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": "Skincare product by Tatcha"}, {"productName": "The Luminous Dewy Skin Mist", "brand": "Tatcha", "category": "Toner", "skinTypes": "All", "reason": "Skincare product by Tatcha"}, {"productName": "The Rice Wash Skin-Softening Cleanser", "brand": "Tatcha", "category": "Face Wash", "skinTypes": "All", "reason": "Skincare product by Tatcha"}, {"productName": "The Serum Stick Targeted Wrinkle Treatment", "brand": "Tatcha", "category": "Serum", "skinTypes": "Ageing", "reason": "Skincare product by Tatcha"}, {"productName": "The Water Cream", "brand": "Tatcha", "category": "Moisturiser", "skinTypes": "All", "reason": "Oil-free water-burst moisturizer, Japanese botanicals"}, {"productName": "AHA 30% + BHA 2% Peeling Solution", "brand": "The Ordinary", "category": "Toner", "skinTypes": "Acne-prone,Oily", "reason": "10min weekly peel — resurfaces and unclogs in one step"}, {"productName": "Alpha Arbutin 2% + HA", "brand": "The Ordinary", "category": "Serum", "skinTypes": "All", "reason": "Brightening alpha arbutin, reduces dark spots"}, {"productName": "Azelaic Acid Suspension 10%", "brand": "The Ordinary", "category": "Acne Treatment", "skinTypes": "All", "reason": "Azelaic acid — reduces blemishes, redness, and hyperpigmentation"}, {"productName": "Buffet Multi-Technology Peptide Serum", "brand": "The Ordinary", "category": "Serum", "skinTypes": "Ageing", "reason": "Peptide complex — firms, plumps, and reduces signs of ageing"}, {"productName": "Caffeine Solution 5% + EGCG", "brand": "The Ordinary", "category": "Serum", "skinTypes": "All", "reason": "Reduces puffiness and dark circles under eyes"}, {"productName": "Glycolic Acid 7% Toning Solution", "brand": "The Ordinary", "category": "Toner", "skinTypes": "All", "reason": "Daily glycolic toner improves texture and brightness"}, {"productName": "Hyaluronic Acid 2% + B5", "brand": "The Ordinary", "category": "Serum", "skinTypes": "All", "reason": "Multi-weight HA complex, deep and surface hydration"}, {"productName": "Lactic Acid 10% + HA", "brand": "The Ordinary", "category": "Toner", "skinTypes": "All", "reason": "Lactic acid — gentle exfoliant for brighter, smoother skin"}, {"productName": "Natural Moisturizing Factors + HA", "brand": "The Ordinary", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by The Ordinary"}, {"productName": "Retinal 0.2% Eye Cream", "brand": "The Ordinary", "category": "Serum", "skinTypes": "All,Mature,Acne-prone", "reason": "Retinaldehyde — 11x more potent than retinol, stable formula"}, {"productName": "Retinol 0.5% in Squalane", "brand": "The Ordinary", "category": "Serum", "skinTypes": "Ageing", "reason": "Stable retinol in squalane — anti-acne and anti-aging"}, {"productName": "Salicylic Acid 2% Anhydrous Solution", "brand": "The Ordinary", "category": "Acne Treatment", "skinTypes": "Acne-prone,Oily", "reason": "2% salicylic acid — unclogs pores and clears blemishes"}, {"productName": "Vitamin C Suspension 23% + HA 2%", "brand": "The Ordinary", "category": "Serum", "skinTypes": "Dull", "reason": "Vitamin C — antioxidant brightening and dark spot correction"}, {"productName": "Vitamin C Suspension 23% + HA Spheres 2%", "brand": "The Ordinary", "category": "Serum", "skinTypes": "All,Dull", "reason": "High-strength vitamin C suspension, brightening powerhouse"}, {"productName": "SOS Daily Rescue Facial Spray", "brand": "Tower 28", "category": "Toner", "skinTypes": "All", "reason": "Skincare product by Tower 28"}, {"productName": "MakeWaves Scalp + Body Serum", "brand": "Tower 28", "category": "Acne Treatment", "skinTypes": "Acne-prone,Sensitive,Body", "reason": "Hypochlorous acid for scalp and body — anti-inflammatory, SkinSafe certified"}, {"productName": "Waterfacial Moisturizer", "brand": "Tower 28", "category": "Moisturiser", "skinTypes": "Sensitive,Oily,Acne-prone", "reason": "Lightweight gel moisturizer — SkinSafe certified, NEA eczema seal, zero fragrance"}, {"productName": "Creamy Skin Cleanser", "brand": "Vanicream", "category": "Face Wash", "skinTypes": "Sensitive,Dry,Eczema", "reason": "Free of all common irritants — cleanser for reactive skin"}, {"productName": "Gentle Body Wash", "brand": "Vanicream", "category": "Body", "skinTypes": "Sensitive,Dry,Eczema", "reason": "Free of all common irritants, gentle daily body wash"}, {"productName": "Daily Facial Moisturizer", "brand": "Vanicream", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by Vanicream"}, {"productName": "Gentle Facial Wash", "brand": "Vanicream", "category": "Face Wash", "skinTypes": "Sensitive", "reason": "Skincare product by Vanicream"}, {"productName": "Lite Lotion", "brand": "Vanicream", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by Vanicream"}, {"productName": "Moisturizing Skin Cream", "brand": "Vanicream", "category": "Moisturiser", "skinTypes": "All", "reason": "Skincare product by Vanicream"}, {"productName": "Moisturizing Sunscreen SPF 50", "brand": "Vanicream", "category": "SPF", "skinTypes": "All", "reason": "Broad-spectrum SPF 50 — daily UV protection"}, {"productName": "Retinol Eye Cream", "brand": "Vanicream", "category": "Eye Cream", "skinTypes": "Ageing", "reason": "Retinol — anti-ageing, smooths texture and reduces fine lines"}, {"productName": "Bright On Mask Vitamin C", "brand": "Versed", "category": "Mask", "skinTypes": "All,Dull,Acne-prone", "reason": "Vitamin C + niacinamide glow mask — clean, acne-safe formula"}, {"productName": "Jelly Cleanser", "brand": "Versed", "category": "Face Wash", "skinTypes": "All,Acne-prone,Sensitive", "reason": "Clean, fragrance-free, pore-safe jelly formula"}, {"productName": "Press Restart Gentle Retinol Serum", "brand": "Versed", "category": "Serum", "skinTypes": "All,Acne-prone,Mature", "reason": "0.1% retinol encapsulated for slow release — acne-safe, gentle"}, {"productName": "Stressed? Balancing Gel Cream", "brand": "Versed", "category": "Moisturiser", "skinTypes": "Oily,Combination,Acne-prone", "reason": "Oil-free, non-comedogenic, niacinamide-forward"}, {"productName": "Adaptogen Deep Moisture Serum", "brand": "Youth To The People", "category": "Serum", "skinTypes": "All,Stressed,Acne-prone", "reason": "Ashwagandha + reishi mushroom + hyaluronic acid — zero pore-cloggers"}, {"productName": "Clearing + Live Kombucha Tonic", "brand": "Youth To The People", "category": "Mask", "skinTypes": "Acne-prone,Oily,Combination", "reason": "Live kombucha + niacinamide + willow bark, microbiome-balancing toner"}, {"productName": "Superfluid UV Defense SPF 50+ Moisturizer", "brand": "Youth To The People", "category": "Moisturiser", "skinTypes": "Oily,Combination,Acne-prone", "reason": "100% mineral SPF moisturizer — kale + adaptogen complex, zero pore-cloggers"}, {"productName": "Supergreens Facial Mask", "brand": "Youth To The People", "category": "Mask", "skinTypes": "All,Oily,Acne-prone", "reason": "Kale + spirulina + hyaluronic acid — detoxifying without stripping"}, {"productName": "Gentle Skin Cleanser", "brand": "CeraVe", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Toleriane Purifying Foaming Cleanser", "brand": "La Roche-Posay", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Anthelios Gentle Cleanser", "brand": "La Roche-Posay", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Special Cleansing Gel", "brand": "Dermalogica", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Precleanse Balm", "brand": "Dermalogica", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Calm Water Gel", "brand": "Dermalogica", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Ultracalming Cleanser", "brand": "Dermalogica", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Fresh Soy Face Cleanser", "brand": "Fresh", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Kiehl's Ultra Facial Cleanser", "brand": "Kiehl's", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Amino Acid Gentle Facial Wash", "brand": "Kiehl's", "category": "Face Wash", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Purity Made Simple Cleanser", "brand": "Philosophy", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Take The Day Off Cleansing Balm", "brand": "Clinique", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Liquid Facial Soap Mild", "brand": "Clinique", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Even Better Brightening Cleanser", "brand": "Clinique", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Clean It Zero Cleansing Balm", "brand": "Banila Co", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Salicylic Acid Daily Gentle Cleanser", "brand": "COSRX", "category": "Face Wash", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Advanced Snail Mucin Gel Cleanser", "brand": "COSRX", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Rice Brightening Facial Cleanser", "brand": "I'm From", "category": "Face Wash", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Mugwort Pore Clarifying Foam Cleanser", "brand": "I'm From", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Centella Asiatica Gel Cleanser", "brand": "Purito", "category": "Face Wash", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Dermatory Hypoallergenic Gentle Cleanser", "brand": "Dermatory", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Real Barrier Cleansing Oil", "brand": "Real Barrier", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Klairs Rich Moist Foaming Cleanser", "brand": "Klairs", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Anua Heartleaf Pore Control Cleansing Oil", "brand": "Anua", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Round Lab Birch Juice Moisturizing Cleanser", "brand": "Round Lab", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Numbuzin No.3 Skin Softening Serum Cleanser", "brand": "Numbuzin", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Cetaphil Gentle Skin Cleanser", "brand": "Cetaphil", "category": "Face Wash", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Cetaphil Oily Skin Cleanser", "brand": "Cetaphil", "category": "Face Wash", "skinTypes": "Oily", "reason": ""}, {"productName": "Neutrogena Ultra Gentle Hydrating Cleanser", "brand": "Neutrogena", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Neutrogena Oil-Free Acne Wash", "brand": "Neutrogena", "category": "Face Wash", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Neutrogena Deep Clean Facial Cleanser", "brand": "Neutrogena", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Aveeno Ultra-Calming Foaming Cleanser", "brand": "Aveeno", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "First Aid Beauty Pure Skin Face Cleanser", "brand": "First Aid Beauty", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Drunk Elephant Beste No. 9 Jelly Cleanser", "brand": "Drunk Elephant", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Tatcha The Rice Wash", "brand": "Tatcha", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Tatcha The Deep Cleanse", "brand": "Tatcha", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Glow Recipe Blueberry Bounce Gentle Cleanser", "brand": "Glow Recipe", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Summer Fridays Super Amino Gel Cleanser", "brand": "Summer Fridays", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Tower 28 SOS Daily Rescue Facial Spray", "brand": "Tower 28", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Youth To The People Superfood Cleanser", "brand": "Youth To The People", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "The Inkey List Salicylic Acid Cleanser", "brand": "The Inkey List", "category": "Face Wash", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "The Inkey List Oat Cleansing Balm", "brand": "The Inkey List", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Daily Moisturizing Lotion", "brand": "CeraVe", "category": "Moisturiser", "skinTypes": "\"Normal", "reason": ""}, {"productName": "Skin Renewing Night Cream", "brand": "CeraVe", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Ultra-Light Moisturizing Lotion SPF 15", "brand": "CeraVe", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Toleriane Double Repair Face Moisturiser", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Toleriane Double Repair UV Moisturiser SPF 30", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Toleriane Ultra Moisturiser", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Effaclar Mat Anti-Shine Moisturiser", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Hydraphase Intense Light", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "Combination", "reason": ""}, {"productName": "Ultra-Facial Cream", "brand": "Kiehl's", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Ultra-Facial Oil-Free Gel Cream", "brand": "Kiehl's", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Midnight Recovery Concentrate", "brand": "Kiehl's", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Powerful-Strength Line-Reducing Concentrate", "brand": "Kiehl's", "category": "Serum", "skinTypes": "All", "reason": ""}, {"productName": "Clinique Dramatically Different Moisturising Lotion+", "brand": "Clinique", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Moisture Surge 100H Auto-Replenishing Hydrator", "brand": "Clinique", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Smart Clinical Repair Wrinkle Correcting Cream", "brand": "Clinique", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Tatcha The Water Cream", "brand": "Tatcha", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Tatcha The Dewy Skin Cream", "brand": "Tatcha", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Drunk Elephant Lala Retro Whipped Cream", "brand": "Drunk Elephant", "category": "Moisturiser", "skinTypes": "Dry", "reason": ""}, {"productName": "Drunk Elephant Protini Polypeptide Cream", "brand": "Drunk Elephant", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Glow Recipe Watermelon Glow Pink Dream Body Lotion", "brand": "Glow Recipe", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Summer Fridays Cloud Dew Oil-Free Gel Cream", "brand": "Summer Fridays", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Cetaphil Moisturising Cream", "brand": "Cetaphil", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Cetaphil Moisturising Lotion", "brand": "Cetaphil", "category": "Moisturiser", "skinTypes": "\"Normal", "reason": ""}, {"productName": "Aveeno Calm + Restore Triple Oat Serum", "brand": "Aveeno", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Neutrogena Hydro Boost Water Gel", "brand": "Neutrogena", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Neutrogena Hydro Boost Gel-Cream", "brand": "Neutrogena", "category": "Moisturiser", "skinTypes": "Dry", "reason": ""}, {"productName": "Vanicream Moisturizing Skin Cream", "brand": "Vanicream", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "First Aid Beauty Ultra Repair Cream", "brand": "First Aid Beauty", "category": "Moisturiser", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Paula's Choice Omega+ Complex Moisturizer", "brand": "Paula's Choice", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Belif The True Cream Aqua Bomb", "brand": "Belif", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Belif The True Cream Moisturizing Bomb", "brand": "Belif", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Laneige Water Bank Blue Hyaluronic Cream", "brand": "Laneige", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "COSRX Oil-Free Ultra-Moisturizing Lotion", "brand": "COSRX", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "COSRX Advanced Snail 92 All In One Cream", "brand": "COSRX", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Innisfree Green Tea Seed Serum", "brand": "Innisfree", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Round Lab 1025 Dokdo Cream", "brand": "Round Lab", "category": "Moisturiser", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Dr. Jart+ Ceramidin Cream", "brand": "Dr. Jart+", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Dr. Jart+ Cicapair Tiger Grass Cream", "brand": "Dr. Jart+", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Klairs Rich Moist Soothing Cream", "brand": "Klairs", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Etude House Soon Jung 2x Barrier Intensive Cream", "brand": "Etude House", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Hada Labo Gokujyun Premium Lotion", "brand": "Hada Labo", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Bioderma Sensibio Rich", "brand": "Bioderma", "category": "Moisturiser", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Avène Skin Recovery Cream", "brand": "Avène", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Eucerin Original Healing Cream", "brand": "Eucerin", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Paula's Choice Resist Anti-Aging Moisturizer SPF 25", "brand": "Paula's Choice", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Niacinamide 10% + Zinc 1%", "brand": "The Ordinary", "category": "Serum", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Ascorbic Acid 8% + Alpha Arbutin 2%", "brand": "The Ordinary", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Granactive Retinoid 2% Emulsion", "brand": "The Ordinary", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Buffet", "brand": "The Ordinary", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Salicylic Acid 2% Solution", "brand": "The Ordinary", "category": "Serum", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Advanced Snail 96 Mucin Power Essence", "brand": "COSRX", "category": "Serum", "skinTypes": "All", "reason": ""}, {"productName": "Advanced Snail Peptide Eye Cream", "brand": "COSRX", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Vitamin C 15% + Ferulic Acid", "brand": "Paula's Choice", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Clinical 1% Retinol Treatment", "brand": "Paula's Choice", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Resist 1% Retinol Booster", "brand": "Paula's Choice", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Hyaluronic Acid Booster", "brand": "Paula's Choice", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Phloretin CF", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Phyto A+ Brightening Treatment", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "Hyperpigmentation", "reason": ""}, {"productName": "Retexturing Activator", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "All", "reason": ""}, {"productName": "Revitalift Derm Intensives 1.5% Pure Hyaluronic Acid Serum", "brand": "L'Oréal", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Revitalift 10% Pure Vitamin C Serum", "brand": "L'Oréal", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Revitalift Triple Power LZR Serum", "brand": "L'Oréal", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Age Perfect Cell Renewal Serum", "brand": "L'Oréal", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "TrueNature Time Resist Serum", "brand": "L'Oréal", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Vitamin C Dark Spot Corrector", "brand": "Olay", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Regenerist Micro-Sculpting Serum", "brand": "Olay", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Total Effects Tone Correcting Serum", "brand": "Olay", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Hyaluronic Acid + Vitamin C Serum", "brand": "Neutrogena", "category": "Serum", "skinTypes": "All", "reason": ""}, {"productName": "Rapid Wrinkle Repair Serum", "brand": "Neutrogena", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Bright Boost Illuminating Serum", "brand": "Neutrogena", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Clearly Corrective Dark Spot Solution", "brand": "Kiehl's", "category": "Serum", "skinTypes": "Hyperpigmentation", "reason": ""}, {"productName": "Vital Skin-Strengthening Super Serum", "brand": "Kiehl's", "category": "Serum", "skinTypes": "All", "reason": ""}, {"productName": "Retinol Fast Release Wrinkle-Reducing Night Serum", "brand": "Kiehl's", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "B5 Hyra-Gel Oil-Free Moisturizer", "brand": "Kiehl's", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Smart Dose Youth Activating Concentrate", "brand": "Clinique", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Fresh Line Source Radiance Serum", "brand": "Fresh", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Drunk Elephant T.L.C. Framboos Glycolic Night Serum", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Drunk Elephant C-Firma Fresh Day Serum", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Drunk Elephant B-Hydra Intensive Hydration Serum", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Drunk Elephant A-Passioni Retinol Cream", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Glow Recipe Watermelon Glow Niacinamide Dew Drops", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Glow Recipe Plum Plump Hyaluronic Serum", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Glow Recipe Avocado Ceramide Moisture Barrier Serum", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Summer Fridays CC Me Vitamin C Serum", "brand": "Summer Fridays", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "UV AOX Elements SPF 50", "brand": "EltaMD", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "UV Restore Broad-Spectrum SPF 40", "brand": "EltaMD", "category": "SPF", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Anthelios Melt-In Milk Sunscreen SPF 100", "brand": "La Roche-Posay", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Anthelios XL Anti-Shine SPF 50+", "brand": "La Roche-Posay", "category": "SPF", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Anthelios Ultra-Light SPF 60", "brand": "La Roche-Posay", "category": "SPF", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Anthelios Mineral SPF 50 Tinted", "brand": "La Roche-Posay", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Anthelios Cooling Water Lotion SPF 60", "brand": "La Roche-Posay", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Isntree Hyaluronic Acid Watery Sun Gel SPF 50+", "brand": "Isntree", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Beauty of Joseon Relief Sun Rice + Probiotics SPF 50+", "brand": "Beauty of Joseon", "category": "SPF", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Beauty of Joseon Glow Serum SPF 50+", "brand": "Beauty of Joseon", "category": "SPF", "skinTypes": "\"Dull", "reason": ""}, {"productName": "PURITO Comfy Water Sun Block SPF 50+", "brand": "Purito", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "PURITO Daily Go-To Sunscreen SPF 50+", "brand": "Purito", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Round Lab Birch Juice Moisturizing Sun Cream SPF 50+", "brand": "Round Lab", "category": "SPF", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Skin Aqua Tone Up UV Essence SPF 50+", "brand": "Skin Aqua", "category": "SPF", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Biore UV Aqua Rich Watery Essence SPF 50+", "brand": "Biore", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Neutrogena Ultra Sheer Dry-Touch Sunscreen SPF 100", "brand": "Neutrogena", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Neutrogena Invisible Daily Defense Sunscreen SPF 60", "brand": "Neutrogena", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Black Girl Sunscreen Moisturizing SPF 30", "brand": "Black Girl Sunscreen", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Supergoop Unseen Sunscreen SPF 40", "brand": "Supergoop", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Supergoop Play Everyday Lotion SPF 50", "brand": "Supergoop", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Supergoop Glow Screen SPF 40", "brand": "Supergoop", "category": "SPF", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Sun Bum Original SPF 50 Sunscreen Lotion", "brand": "Sun Bum", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "MDSolarSciences Mineral Moisture Defense SPF 50", "brand": "MDSolarSciences", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Colorescience Sunforgettable Total Protection Brush-On SPF 50", "brand": "Colorescience", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "COTZ Flawless Complexion SPF 50", "brand": "COTZ", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Innisfree Daily UV Defense Sunscreen SPF 36", "brand": "Innisfree", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Shiseido Urban Environment UV Protection Cream SPF 40", "brand": "Shiseido", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Alcohol-Free Toner", "brand": "Paula's Choice", "category": "Toner", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "BHA Liquid Exfoliant 2%", "brand": "Paula's Choice", "category": "Toner", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "8% AHA + 2% BHA Exfoliant", "brand": "Paula's Choice", "category": "Toner", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Weightless Body Treatment 2% BHA", "brand": "Paula's Choice", "category": "Toner", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "One Step Original Facial Cleansing Toner", "brand": "Pixi", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Glow Tonic", "brand": "Pixi", "category": "Toner", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Hydrating Milky Mist", "brand": "Pixi", "category": "Toner", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Witch Hazel Anti-Blemish Toner", "brand": "Thayers", "category": "Toner", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Rose Petal Facial Toner", "brand": "Thayers", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Unscented Witch Hazel Toner", "brand": "Thayers", "category": "Toner", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Power Essence", "brand": "Missha", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Time Revolution The First Treatment Essence", "brand": "Missha", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "First Care Activating Serum", "brand": "Sulwhasoo", "category": "Toner", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Bamboo 72H Hydrating Toner", "brand": "Kiehl's", "category": "Toner", "skinTypes": "\"Dry", "reason": ""}, {"productName": "AHA Toner", "brand": "COSRX", "category": "Toner", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Full Fit Propolis Synergy Toner", "brand": "COSRX", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Hyaluronic Acid Toner", "brand": "COSRX", "category": "Toner", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Tonymoly I'm Real Aloe Mask Sheet", "brand": "Tonymoly", "category": "Toner", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Wonder Pore Freshener", "brand": "Etude House", "category": "Toner", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Double Dare OMG Deep Cleansing Pore Mask", "brand": "Double Dare", "category": "Toner", "skinTypes": "Oily", "reason": ""}, {"productName": "TIRTIR Milk Skin Toner", "brand": "TIRTIR", "category": "Toner", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Mamonde Rose Water Toner", "brand": "Mamonde", "category": "Toner", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Abib Rebalancing Toner Skin Booster", "brand": "Abib", "category": "Toner", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Hydraphase Intense Eyes", "brand": "La Roche-Posay", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Age Perfect Hydra-Nutrition Eye Balm", "brand": "L'Oréal", "category": "Eye Cream", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Revitalift Triple Power Eye Cream", "brand": "L'Oréal", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Rapid Dark Circle Corrector Eye Serum", "brand": "Neutrogena", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Ultimate Eye Cream", "brand": "Kiehl's", "category": "Eye Cream", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Total Eye Lift", "brand": "Perricone MD", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Depuffer Eye Cream", "brand": "Glow Recipe", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Super Pure Niacinamide Brightening Eye Serum", "brand": "Inkey List", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Ageless Eye Gel", "brand": "Paula's Choice", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Elastin Eye Cream", "brand": "Neutrogena", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Banana Bright Eye Crème", "brand": "Ole Henriksen", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Dark Spot Corrector for Eye", "brand": "Peter Thomas Roth", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Eye Concentrate", "brand": "La Mer", "category": "Eye Cream", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Aztec Secret Indian Healing Clay", "brand": "Aztec Secret", "category": "Mask", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Overnight Lactic Acid Treatment", "brand": "Paula's Choice", "category": "Mask", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Radiance Renewal Mask", "brand": "Dermalogica", "category": "Mask", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Multivitamin Power Recovery Masque", "brand": "Dermalogica", "category": "Mask", "skinTypes": "\"Dull", "reason": ""}, {"productName": "GinZing Refreshing Eye Cream To Go", "brand": "Origins", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Charcoal Honey Mask", "brand": "Origins", "category": "Mask", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Drink Up Intensive Overnight Mask", "brand": "Origins", "category": "Mask", "skinTypes": "Dry", "reason": ""}, {"productName": "Waterbomb Mask", "brand": "Glow Recipe", "category": "Mask", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Avocado Melt Sleeping Mask", "brand": "Glow Recipe", "category": "Mask", "skinTypes": "Dry", "reason": ""}, {"productName": "Plum Plump Hyaluronic Serum + Mask", "brand": "Glow Recipe", "category": "Mask", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Overnight Dew Drops Sleeping Mask", "brand": "Laneige", "category": "Mask", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Vitamin C Sleep Mask", "brand": "Glow Recipe", "category": "Mask", "skinTypes": "Dull", "reason": ""}, {"productName": "Insta Clear Detox Sheet Mask", "brand": "Garnier", "category": "Mask", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Green Tea Hyaluronic Overnight Mask", "brand": "Innisfree", "category": "Mask", "skinTypes": "All", "reason": ""}, {"productName": "Honey Ceramide Full Moisture Cream", "brand": "COSRX", "category": "Mask", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Rice Water Bright Cleansing Foam", "brand": "The Face Shop", "category": "Mask", "skinTypes": "All", "reason": ""}, {"productName": "Real Nature Mask Sheet", "brand": "The Face Shop", "category": "Mask", "skinTypes": "All", "reason": ""}, {"productName": "Acne Free Clearing Defense SPF 30", "brand": "AcneFree", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "AcneFree Terminator 10 Acne Spot Treatment", "brand": "AcneFree", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Proactiv Emergency Blemish Relief", "brand": "Proactiv", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Kate Somerville EradiKate Acne Treatment", "brand": "Kate Somerville", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Mario Badescu Drying Lotion", "brand": "Mario Badescu", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Murad Rapid Relief Acne Spot Treatment", "brand": "Murad", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Peace Out Acne Healing Dots", "brand": "Peace Out", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Hero Cosmetics Mighty Patch Original", "brand": "Hero Cosmetics", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Hero Cosmetics Mighty Patch Invisible+", "brand": "Hero Cosmetics", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "COSRX Acne Pimple Master Patch", "brand": "COSRX", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Paula's Choice Clear Daily Skin Clearing Treatment", "brand": "Paula's Choice", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Differin Adapalene Gel 0.1%", "brand": "Differin", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Stridex Maximum Strength Pads", "brand": "Stridex", "category": "Acne Treatment", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Neutrogena On-The-Spot Acne Treatment", "brand": "Neutrogena", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Clean & Clear Advantage Acne Spot Treatment", "brand": "Clean & Clear", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "La Roche-Posay Effaclar Duo", "brand": "La Roche-Posay", "category": "Acne Treatment", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Cetaphil Pro Acne Prone Skin Restoring Gel Wash", "brand": "Cetaphil", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Innisfree Bija Cica Gel Cream", "brand": "Innisfree", "category": "Acne Treatment", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Some By Mi AHA BHA PHA 30 Days Miracle Toner", "brand": "Some By Mi", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Dr. G Brightening Peeling Gel", "brand": "Dr. G", "category": "Acne Treatment", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Daily Moisturizing Lotion Body", "brand": "CeraVe", "category": "Body", "skinTypes": "All", "reason": ""}, {"productName": "Psoriasis Moisturizing Cream", "brand": "CeraVe", "category": "Body", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "SA Body Lotion", "brand": "CeraVe", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Itch Relief Moisturizing Lotion", "brand": "Aveeno", "category": "Body", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Skin Relief Moisture Repair Cream", "brand": "Eucerin", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Original Healing Lotion", "brand": "Eucerin", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "NIVEA Soft Moisturizing Cream", "brand": "NIVEA", "category": "Body", "skinTypes": "All", "reason": ""}, {"productName": "NIVEA Cocoa Butter Body Lotion", "brand": "NIVEA", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Jergens Ultra Healing Dry Skin Moisturizer", "brand": "Jergens", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Vaseline Intensive Care Deep Restore Lotion", "brand": "Vaseline", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Gold Bond Ultimate Healing Skin Therapy Lotion", "brand": "Gold Bond", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Lubriderm Daily Moisture Lotion", "brand": "Lubriderm", "category": "Body", "skinTypes": "\"Normal", "reason": ""}, {"productName": "AmLactin Daily Moisturizing Body Lotion", "brand": "AmLactin", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Ceaphil Moisturising Body Lotion", "brand": "Cetaphil", "category": "Body", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Sol de Janeiro Brazilian Bum Bum Cream", "brand": "Sol de Janeiro", "category": "Body", "skinTypes": "All", "reason": ""}, {"productName": "Palmer's Cocoa Butter Formula", "brand": "Palmer's", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "St. Ives Oatmeal & Shea Butter Body Lotion", "brand": "St. Ives", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Scalp Revival Charcoal + Coconut Oil Micro-Exfoliating Shampoo", "brand": "Briogeo", "category": "Hair", "skinTypes": "All", "reason": ""}, {"productName": "Don't Despair Repair Deep Conditioning Hair Mask", "brand": "Briogeo", "category": "Hair", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Pureology Hydrate Shampoo", "brand": "Pureology", "category": "Hair", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Moroccanoil Treatment Original", "brand": "Moroccanoil", "category": "Hair", "skinTypes": "All", "reason": ""}, {"productName": "Olaplex No. 3 Hair Perfector", "brand": "Olaplex", "category": "Hair", "skinTypes": "\"Damaged", "reason": ""}, {"productName": "Olaplex No. 5 Bond Maintenance Conditioner", "brand": "Olaplex", "category": "Hair", "skinTypes": "\"Damaged", "reason": ""}, {"productName": "Olaplex No. 4 Bond Maintenance Shampoo", "brand": "Olaplex", "category": "Hair", "skinTypes": "\"Damaged", "reason": ""}, {"productName": "Olaplex No. 6 Bond Smoother", "brand": "Olaplex", "category": "Hair", "skinTypes": "\"Damaged", "reason": ""}, {"productName": "Olaplex No. 7 Bonding Oil", "brand": "Olaplex", "category": "Hair", "skinTypes": "All", "reason": ""}, {"productName": "Redken All Soft Shampoo", "brand": "Redken", "category": "Hair", "skinTypes": "Dry", "reason": ""}, {"productName": "Pantene Pro-V Repair & Protect Shampoo", "brand": "Pantene", "category": "Hair", "skinTypes": "Damaged", "reason": ""}, {"productName": "Head & Shoulders Classic Clean Shampoo", "brand": "Head & Shoulders", "category": "Hair", "skinTypes": "All", "reason": ""}, {"productName": "Nizoral Anti-Dandruff Shampoo", "brand": "Nizoral", "category": "Hair", "skinTypes": "All", "reason": ""}, {"productName": "Kérastase Nutritive Bain Satin Shampoo", "brand": "Kérastase", "category": "Hair", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Lip Sleeping Mask Berry", "brand": "Laneige", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Lip Sleeping Mask Vanilla", "brand": "Laneige", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Aquaphor Healing Ointment", "brand": "Aquaphor", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Vaseline Lip Therapy Original", "brand": "Vaseline", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "EOS Organic Lip Balm", "brand": "EOS", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Burt's Bees Beeswax Lip Balm", "brand": "Burt's Bees", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "ChapStick Classic Original", "brand": "ChapStick", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Fresh Sugar Lip Treatment SPF 15", "brand": "Fresh", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Sara Happ The Lip Slip One Luxe Balm", "brand": "Sara Happ", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Kiehl's Lip Balm #1", "brand": "Kiehl's", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Tatcha Kissu Lip Mask", "brand": "Tatcha", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Glow Recipe Watermelon Lip Pop", "brand": "Glow Recipe", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Summer Fridays Lip Butter Balm", "brand": "Summer Fridays", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Fenty Skin Plush Puddin Intensive Recovery Lip Mask", "brand": "Fenty Skin", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Rhode Peptide Lip Treatment", "brand": "Rhode", "category": "Lip", "skinTypes": "All", "reason": ""}, {"productName": "Hyaluronic Acid Serum 2%", "brand": "TruSkin", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Vitamin C Face Serum", "brand": "TruSkin", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Resveratrol B E Antioxidant Night Serum", "brand": "Skinceuticals", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "A.G.E. Interrupter Advanced", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Discoloration Defense Serum", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "Hyperpigmentation", "reason": ""}, {"productName": "10% Vitamin C with Ferulic Acid", "brand": "The Inkey List", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Retinol Eye Cream", "brand": "The Inkey List", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Hyaluronic Acid", "brand": "The Inkey List", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Polyglutamic Acid", "brand": "The Inkey List", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Tranexamic Acid Night Treatment", "brand": "The Inkey List", "category": "Serum", "skinTypes": "Hyperpigmentation", "reason": ""}, {"productName": "EUK 134 0.1%", "brand": "The Ordinary", "category": "Serum", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Glycolic Acid 7% Exfoliating Toner", "brand": "The Ordinary", "category": "Toner", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Multi-Peptide + HA Serum", "brand": "The Ordinary", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "The Inkey List Ceramide Eye Cream", "brand": "The Inkey List", "category": "Eye Cream", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Luna Sleeping Night Oil", "brand": "Sunday Riley", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "CEO Vitamin C Rich Antioxidant Serum", "brand": "Sunday Riley", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Ice Ceramide Moisturizing Cream", "brand": "Sunday Riley", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Auto Correct Brightening and Depuffing Eye Contour Cream", "brand": "Sunday Riley", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "U.F.O. Ultra-Clarifying Face Oil", "brand": "Sunday Riley", "category": "Serum", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Juno Antioxidant + Superfood Face Oil", "brand": "Sunday Riley", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Pink Honey Whipped Sensation Body Crème", "brand": "Sol de Janeiro", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "The GOAT Soap Original Bar", "brand": "The GOAT Soap", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Sunday Riley Saturn Sulfur Spot Treatment Mask", "brand": "Sunday Riley", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Tatcha The Serum", "brand": "Tatcha", "category": "Serum", "skinTypes": "All", "reason": ""}, {"productName": "Tatcha The Essence", "brand": "Tatcha", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Tatcha Ageless Eye Cream", "brand": "Tatcha", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Fresh Rose Deep Hydration Face Cream", "brand": "Fresh", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Fresh Kombucha Antioxidant Facial Treatment Essence", "brand": "Fresh", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Peter Thomas Roth FIRMx Peeling Gel", "brand": "Peter Thomas Roth", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Peter Thomas Roth Water Drench Hyaluronic Cloud Cream", "brand": "Peter Thomas Roth", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Ole Henriksen Truth Serum", "brand": "Ole Henriksen", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Ole Henriksen Banana Bright Vitamin C Serum", "brand": "Ole Henriksen", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Glow Recipe Strawberry BHA Pore-Smooth Blur Drops", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Glow Recipe Guava Vitamin C Dark Spot Serum", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "Hyperpigmentation", "reason": ""}, {"productName": "Glow Recipe Peach Slices Acne Spot Dots", "brand": "Glow Recipe", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Youth To The People Adaptogen Deep Moisture Cream", "brand": "Youth To The People", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Youth To The People Kombucha Power Serum", "brand": "Youth To The People", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Farmacy Honey Halo Ultra-Hydrating Ceramide Moisturizer", "brand": "Farmacy", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Farmacy Green Clean Balm", "brand": "Farmacy", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Farmacy Sleep Tight Firming Overnight Mask", "brand": "Farmacy", "category": "Mask", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Allies of Skin Peptides & Antioxidants Firming Daily Treatment", "brand": "Allies of Skin", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Allies of Skin Promise Keeper Blemish Facial", "brand": "Allies of Skin", "category": "Serum", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Bioderma Sensibio H2O Micellar Water", "brand": "Bioderma", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Avène Thermal Spring Water", "brand": "Avène", "category": "Toner", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Embryolisse Lait-Crème Concentré", "brand": "Embryolisse", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Weleda Skin Food Original Ultra-Rich Cream", "brand": "Weleda", "category": "Moisturiser", "skinTypes": "Dry", "reason": ""}, {"productName": "Burt's Bees Sensitive Facial Cleanser", "brand": "Burt's Bees", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Yes To Tomatoes Daily Clarifying Cleanser", "brand": "Yes To", "category": "Face Wash", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Yes To Cucumbers Soothing Daily Calming Moisturizer", "brand": "Yes To", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Kopari Ultra Restore Body Butter", "brand": "Kopari", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Frank Body Original Coffee Scrub", "brand": "Frank Body", "category": "Body", "skinTypes": "All", "reason": ""}, {"productName": "Tree Hut Shea Sugar Scrub", "brand": "Tree Hut", "category": "Body", "skinTypes": "All", "reason": ""}, {"productName": "St. Ives Fresh Skin Apricot Scrub", "brand": "St. Ives", "category": "Face Wash", "skinTypes": "\"Normal", "reason": ""}, {"productName": "Dove Beauty Bar", "brand": "Dove", "category": "Face Wash", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Olay Regenerist Micro-Sculpting Cream", "brand": "Olay", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Olay Total Effects 7-in-1 Anti-Aging Moisturizer", "brand": "Olay", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Pond's Cold Cream Cleanser", "brand": "Pond's", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Pond's Rejuveness Anti-Wrinkle Cream", "brand": "Pond's", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "RoC Retinol Correxion Line Smoothing Serum", "brand": "RoC", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "\"RoC Multi Correxion 5 in 1 Chest", "brand": "Neck & Face Cream\"", "category": "", "skinTypes": "Moisturiser", "reason": ""}, {"productName": "Murad Resurgence Retinol Youth Renewal Night Cream", "brand": "Murad", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Murad City Skin Overnight Detox Moisturizer", "brand": "Murad", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Josie Maran Argan Oil", "brand": "Josie Maran", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Caudalie Vinoperfect Radiance Serum", "brand": "Caudalie", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Caudalie Premier Cru The Cream", "brand": "Caudalie", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Kérastase Elixir Ultime Oil", "brand": "Kérastase", "category": "Hair", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Living Proof Perfect Hair Day Dry Shampoo", "brand": "Living Proof", "category": "Hair", "skinTypes": "All", "reason": ""}, {"productName": "Bumble and Bumble Hairdresser's Invisible Oil", "brand": "Bumble and Bumble", "category": "Hair", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Garnier Whole Blends Honey Treasures Repairing Shampoo", "brand": "Garnier", "category": "Hair", "skinTypes": "Damaged", "reason": ""}, {"productName": "Herbal Essences Bio:Renew Argan Oil of Morocco Shampoo", "brand": "Herbal Essences", "category": "Hair", "skinTypes": "Dry", "reason": ""}, {"productName": "Aussie Miracle Moist Shampoo", "brand": "Aussie", "category": "Hair", "skinTypes": "Dry", "reason": ""}, {"productName": "Pantene Gold Series Shampoo", "brand": "Pantene", "category": "Hair", "skinTypes": "\"Damaged", "reason": ""}, {"productName": "SheaMoisture Manuka Honey & Yogurt Hydrate + Repair Shampoo", "brand": "SheaMoisture", "category": "Hair", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Carol's Daughter Black Vanilla Moisture & Shine Shampoo", "brand": "Carol's Daughter", "category": "Hair", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Pattern Beauty Intensive Conditioner", "brand": "Pattern Beauty", "category": "Hair", "skinTypes": "\"Coily", "reason": ""}, {"productName": "Mielle Organics Rosemary Mint Scalp & Hair Strengthening Oil", "brand": "Mielle Organics", "category": "Hair", "skinTypes": "All", "reason": ""}, {"productName": "Cantu Shea Butter Leave-In Conditioning Repair Cream", "brand": "Cantu", "category": "Hair", "skinTypes": "\"Dry", "reason": ""}, {"productName": "The Mane Choice Manetabolism Plus Vitamins", "brand": "The Mane Choice", "category": "Hair", "skinTypes": "All", "reason": ""}, {"productName": "Calendula Deep Cleansing Foaming Face Wash", "brand": "Kiehl's", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Simply Clean Flexible Moisture Cleanser", "brand": "Dermalogica", "category": "Face Wash", "skinTypes": "\"Normal", "reason": ""}, {"productName": "Age Smart Multivitamin Thermafoliant", "brand": "Dermalogica", "category": "Face Wash", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Skin Smoothing Cream", "brand": "Dermalogica", "category": "Moisturiser", "skinTypes": "\"Normal", "reason": ""}, {"productName": "Active Moist", "brand": "Dermalogica", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Barrier Repair", "brand": "Dermalogica", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Phyto Replenish Body Oil", "brand": "Dermalogica", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Brightening Foam Cleanser", "brand": "Ole Henriksen", "category": "Face Wash", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Find Your Balance Pore-Clarifying Cleanser", "brand": "Kiehl's", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Rosebud Cleansing Butter", "brand": "Tatcha", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Hinoki Facial Cleanser", "brand": "Tatcha", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Perfect Cleanser All-In-One Facial Cleanser", "brand": "Peter Thomas Roth", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Glycolic Acid Resurfacing Cleanser 3.5%", "brand": "Murad", "category": "Face Wash", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Prebiotic Power Balancing Gel Cleanser", "brand": "First Aid Beauty", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Triple Action Microfoliant", "brand": "Dermalogica", "category": "Face Wash", "skinTypes": "\"Dull", "reason": ""}, {"productName": "SuperFoods Cleanser", "brand": "Youth To The People", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Superfood Antioxidant Cleanser", "brand": "Youth To The People", "category": "Face Wash", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Sea Buckthorn Cleansing Oil", "brand": "Pai Skincare", "category": "Face Wash", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "The Cream Cleanser", "brand": "Elemis", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Superfood Facial Oil", "brand": "Elemis", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Dynamic Resurfacing Facial Wash", "brand": "Elemis", "category": "Face Wash", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Glow Tonic Resurfacing Toner", "brand": "Elemis", "category": "Toner", "skinTypes": "Dull", "reason": ""}, {"productName": "Pro-Collagen Marine Cream", "brand": "Elemis", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Ultra Smart Pro-Collagen Eye Treatment", "brand": "Elemis", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Superfood Facial Day Cream", "brand": "Elemis", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Biotec Day Cream Sensitive", "brand": "Elemis", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Pomegranate Firming Face Wash", "brand": "St. Ives", "category": "Face Wash", "skinTypes": "\"Normal", "reason": ""}, {"productName": "Blackhead Clearing Green Tea Scrub", "brand": "St. Ives", "category": "Face Wash", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Neem Face Wash", "brand": "Himalaya", "category": "Face Wash", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Natural Glow Fairness Cream", "brand": "Himalaya", "category": "Moisturiser", "skinTypes": "Dull", "reason": ""}, {"productName": "PoreClarity Facial Cleansing Brush System", "brand": "Clarisonic", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Turmeric Brightening & Exfoliating Scrub", "brand": "Lotus Botanicals", "category": "Face Wash", "skinTypes": "Dull", "reason": ""}, {"productName": "Charcoal Detox Face Wash", "brand": "Garnier", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Micellar Cleansing Water All-In-1", "brand": "Garnier", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "SkinActive Clearly Brighter Anti-Dark Circle Eye Cream", "brand": "Garnier", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Vitamin C Brightening Eye Gel", "brand": "COSRX", "category": "Eye Cream", "skinTypes": "Dull", "reason": ""}, {"productName": "Snail White Face Serum", "brand": "Namu Life", "category": "Serum", "skinTypes": "All", "reason": ""}, {"productName": "Ten Perfecting Essence", "brand": "Innisfree", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Jeju Orchid Enriched Cream", "brand": "Innisfree", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Volcanic Pore Cleansing Foam", "brand": "Innisfree", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "No-Sebum Mineral Powder", "brand": "Innisfree", "category": "SPF", "skinTypes": "Oily", "reason": ""}, {"productName": "Soybean Energy Essence", "brand": "Innisfree", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Orchid Youth Fluid", "brand": "Innisfree", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Super Volcanic Pore Clay Mask", "brand": "Innisfree", "category": "Mask", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Mugwort 1.5% Salicylic Acid Calming Serum", "brand": "I'm From", "category": "Serum", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Vitamin Tree Water Gel", "brand": "I'm From", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Fig Boosting Serum", "brand": "I'm From", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Honey Mask", "brand": "I'm From", "category": "Mask", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Ginseng Serum", "brand": "I'm From", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Hydro Boost City Defense SPF 25", "brand": "Neutrogena", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Rapid Tone Repair Vitamin C Moisturiser", "brand": "Neutrogena", "category": "Moisturiser", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Cellular Transformation Moisture Cream", "brand": "Kiehl's", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Super Multi-Corrective Cream", "brand": "Kiehl's", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Midnight Recovery Botanical Cleansing Oil", "brand": "Kiehl's", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Future Pro Ceramide Recovery Sleeping Mask", "brand": "Clinique", "category": "Mask", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Repairwear Laser Focus Smoothing Serum", "brand": "Clinique", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "ID Bare Minerals SPF 15 Foundation", "brand": "bareMinerals", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Luminizing Fresh Glow Highlighter", "brand": "Kiehl's", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Avène Cicalfate Restorative Protective Cream", "brand": "Avène", "category": "Moisturiser", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Avène Rich Compensating Cream", "brand": "Avène", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Avène Hydrance Optimale Rich Hydrating Cream", "brand": "Avène", "category": "Moisturiser", "skinTypes": "Dry", "reason": ""}, {"productName": "Avène TriXéra Nutrition Melting Cream", "brand": "Avène", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Bioderma Atoderm Intensive Baume", "brand": "Bioderma", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Bioderma Hydrabio Gel-Crème", "brand": "Bioderma", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Bioderma Photoderm MAX SPF 50+ Aquafluid", "brand": "Bioderma", "category": "SPF", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Vichy Mineral 89 Daily Booster", "brand": "Vichy", "category": "Serum", "skinTypes": "All", "reason": ""}, {"productName": "Vichy LiftActiv Supreme Serum 10", "brand": "Vichy", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Vichy Normaderm PhytoAction Daily Deep-Cleansing Gel", "brand": "Vichy", "category": "Face Wash", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Vichy Aqualia Thermal Rich Cream", "brand": "Vichy", "category": "Moisturiser", "skinTypes": "Dry", "reason": ""}, {"productName": "Vichy Idéalia Life Serum", "brand": "Vichy", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Eucerin Q10 Anti-Wrinkle Face Cream SPF 15", "brand": "Eucerin", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Eucerin Hyaluron-Filler Day Cream", "brand": "Eucerin", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Eucerin DermoPure Triple Effect Serum", "brand": "Eucerin", "category": "Serum", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Weleda Almond Soothing Facial Oil", "brand": "Weleda", "category": "Serum", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Weleda Pomegranate Regenerating Night Cream", "brand": "Weleda", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Pai Rosehip BioRegenerate Oil", "brand": "Pai Skincare", "category": "Serum", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Pai Camellia & Rose Gentle Hydrating Cleanser", "brand": "Pai Skincare", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Pai Resurrection Girl Calming Jelly Cleanser", "brand": "Pai Skincare", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Acnecide Face Wash 5% Benzoyl Peroxide", "brand": "Acnecide", "category": "Face Wash", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "PanOxyl 10% Benzoyl Peroxide Creamy Wash", "brand": "PanOxyl", "category": "Face Wash", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "PanOxyl 4% Benzoyl Peroxide Creamy Wash", "brand": "PanOxyl", "category": "Face Wash", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Proactiv+ Skin Smoothing Exfoliator", "brand": "Proactiv", "category": "Toner", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Proactiv Repairing Treatment", "brand": "Proactiv", "category": "Serum", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Kate Somerville ExfoliKate Intensive Exfoliating Treatment", "brand": "Kate Somerville", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Kate Somerville Nourish Daily Moisturizer SPF 20", "brand": "Kate Somerville", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Kate Somerville Goat Milk Cleanser", "brand": "Kate Somerville", "category": "Face Wash", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Perricone MD Essential Fx Acyl-Glutathione Intensive Overnight Moisturizer", "brand": "Perricone MD", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Perricone MD Hyaluronic Intensive Moisturizer", "brand": "Perricone MD", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Perricone MD Vitamin C Ester Brightening Eye Serum", "brand": "Perricone MD", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Mario Badescu Vitamin C Serum", "brand": "Mario Badescu", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "\"Mario Badescu Facial Spray with Aloe", "brand": "Herbs and Rosewater\"", "category": "", "skinTypes": "Toner", "reason": ""}, {"productName": "Mario Badescu Glycolic Acid Toner", "brand": "Mario Badescu", "category": "Toner", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Mario Badescu Peptide Renewal Serum", "brand": "Mario Badescu", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Mario Badescu Aloe Moisturizer SPF 15", "brand": "Mario Badescu", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Origins Plantscription Multi-Powered Youth Serum", "brand": "Origins", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Origins Original Skin Renewal Serum", "brand": "Origins", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Origins Mega-Mushroom Relief & Resilience Soothing Treatment Lotion", "brand": "Origins", "category": "Toner", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Origins Mega-Mushroom Relief & Resilience Serum", "brand": "Origins", "category": "Serum", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Origins Ginzing Refreshing Eye Serum", "brand": "Origins", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Origins High Potency Night-A-Mins Resurfacing Cream", "brand": "Origins", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Ren Clean Skincare Evercalm Gentle Cleansing Gel", "brand": "Ren Clean Skincare", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Ren Clean Skincare Perfect Canvas Skin Prep Serum", "brand": "Ren Clean Skincare", "category": "Serum", "skinTypes": "All", "reason": ""}, {"productName": "Ren Clean Skincare Radiance Perfection Serum", "brand": "Ren Clean Skincare", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Ren Vita Mineral Emollient Rescue Cream", "brand": "Ren Clean Skincare", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Trilogy Certified Organic Rosehip Oil", "brand": "Trilogy", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Trilogy Hydrating Mist Toner", "brand": "Trilogy", "category": "Toner", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Herbivore Botanicals Lapis Blue Tansy Face Oil", "brand": "Herbivore Botanicals", "category": "Serum", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Herbivore Botanicals Emerald Deep Moisture Glow Oil", "brand": "Herbivore Botanicals", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Herbivore Botanicals Prism 20% AHA + 5% BHA Exfoliating Glow Serum", "brand": "Herbivore Botanicals", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Herbivore Botanicals Bakuchiol Retinol Alternative Serum", "brand": "Herbivore Botanicals", "category": "Serum", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Herbivore Botanicals Cloud Jelly Plumping Hyaluronic Serum", "brand": "Herbivore Botanicals", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Fenty Skin Total Cleans'r Remove-It-All Cleanser", "brand": "Fenty Skin", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Fenty Skin Fat Water Pore-Refining Toner Serum", "brand": "Fenty Skin", "category": "Toner", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Fenty Skin Hydra Vizor Invisible Moisturizer SPF 30", "brand": "Fenty Skin", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Fenty Skin Butta Drop Whipped Oil Body Cream", "brand": "Fenty Skin", "category": "Body", "skinTypes": "All", "reason": ""}, {"productName": "Fenty Skin Cookies N Clean Whipped Clay Detox Face Mask", "brand": "Fenty Skin", "category": "Mask", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Rare Beauty Find Comfort Body & Hair Mist", "brand": "Rare Beauty", "category": "Body", "skinTypes": "All", "reason": ""}, {"productName": "Tower 28 Super Dew Hydrating Gel", "brand": "Tower 28", "category": "Moisturiser", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Tower 28 Rescue Spray", "brand": "Tower 28", "category": "Toner", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Versed Sunday Facial Reset Mask", "brand": "Versed", "category": "Mask", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Versed Dew Point Moisturizing Gel-Cream", "brand": "Versed", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Versed Guards Up Daily Mineral Sunscreen SPF 35", "brand": "Versed", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Acure Brightening Vitamin C Serum", "brand": "Acure", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Acure Seriously Soothing Cleansing Cream", "brand": "Acure", "category": "Face Wash", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Acure Organics Brightening Facial Scrub", "brand": "Acure", "category": "Face Wash", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Acure Brightening Facial Toner", "brand": "Acure", "category": "Toner", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Andalou Naturals Brightening Turmeric + C Enlighten Serum", "brand": "Andalou Naturals", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Andalou Naturals 1000 Roses Floral Toner", "brand": "Andalou Naturals", "category": "Toner", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Burt's Bees Renewal Firming Moisturizing Cream", "brand": "Burt's Bees", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Burt's Bees Intense Hydration Day Lotion", "brand": "Burt's Bees", "category": "Moisturiser", "skinTypes": "Dry", "reason": ""}, {"productName": "Physicians Formula Organic Wear 100% Organic SPF 15 Foundation", "brand": "Physicians Formula", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "E.l.f. Holy Hydration! Face Cream", "brand": "e.l.f. Cosmetics", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "E.l.f. Hydrated Ever After Skin Care Mini Kit", "brand": "e.l.f. Cosmetics", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "E.l.f. Pore Refining Primer Serum", "brand": "e.l.f. Cosmetics", "category": "Serum", "skinTypes": "\"Oily", "reason": ""}, {"productName": "E.l.f. Daily Sunscreen SPF 45", "brand": "e.l.f. Cosmetics", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Revolution Skincare 2% Salicylic Acid Serum", "brand": "Revolution Skincare", "category": "Serum", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Revolution Skincare 0.3% Retinol Serum", "brand": "Revolution Skincare", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Revolution Skincare Hyaluronic Acid Serum", "brand": "Revolution Skincare", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Revolution Skincare SPF 50 Moisturiser", "brand": "Revolution Skincare", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "La Roche-Posay Cicaplast Baume B5+", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "La Roche-Posay Effaclar K+", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "La Roche-Posay Redermic R Retinol Cream", "brand": "La Roche-Posay", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "La Roche-Posay Serozinc Toning Mist", "brand": "La Roche-Posay", "category": "Toner", "skinTypes": "\"Oily", "reason": ""}, {"productName": "La Roche-Posay Hyalu B5 Pure Hyaluronic Acid Serum", "brand": "La Roche-Posay", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "La Roche-Posay Effaclar Clarifying Solution", "brand": "La Roche-Posay", "category": "Toner", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "CeraVe Healing Ointment", "brand": "CeraVe", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "CeraVe Eye Repair Cream", "brand": "CeraVe", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "CeraVe Skin Renewing Vitamin C Serum", "brand": "CeraVe", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "CeraVe Retinol Serum for Post-Acne Marks", "brand": "CeraVe", "category": "Serum", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "CeraVe Blemish Control Face Wash", "brand": "CeraVe", "category": "Face Wash", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Bioderma Sebium Gel Moussant Purifying Cleansing Gel", "brand": "Bioderma", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Bioderma Sebium Pore Refiner", "brand": "Bioderma", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Bioderma Sensibio Forte", "brand": "Bioderma", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Bioderma Pigmentbio Night Renewer", "brand": "Bioderma", "category": "Serum", "skinTypes": "Hyperpigmentation", "reason": ""}, {"productName": "Bioderma Photoderm Nude Touch SPF 50+", "brand": "Bioderma", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "NUXE Huile Prodigieuse Multi-Purpose Dry Oil", "brand": "NUXE", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "NUXE Rêve de Miel Ultra-Comforting Face Cream", "brand": "NUXE", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "NUXE Merveillance Expert Anti-Wrinkle Cream", "brand": "NUXE", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "\"Caudalie Beauty Elixir Prep", "brand": "Set", "category": "", "skinTypes": "", "reason": ""}, {"productName": "Caudalie Resveratrol Lift Firming Cashmere Cream", "brand": "Caudalie", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Caudalie Vinopure Pore Minimizing Serum", "brand": "Caudalie", "category": "Serum", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Caudalie Vinoclean Foam Cleanser", "brand": "Caudalie", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Origins Checks and Balances Frothy Face Wash", "brand": "Origins", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Origins Clear Improvement Active Charcoal Mask", "brand": "Origins", "category": "Mask", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Dermalogica Daily Microfoliant SPF 20", "brand": "Dermalogica", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Murad Environmental Shield Essential-C Day Moisture SPF 30", "brand": "Murad", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Murad Hydration Nutrient-Charged Water Gel", "brand": "Murad", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Murad AHA/BHA Exfoliating Cleanser", "brand": "Murad", "category": "Face Wash", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Murad Vita-C Triple Exfoliating Facial", "brand": "Murad", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Murad Retinol Youth Renewal Eye Serum", "brand": "Murad", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Peter Thomas Roth Un-Wrinkle Turbo Face Serum", "brand": "Peter Thomas Roth", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Peter Thomas Roth Peptide 21 Wrinkle Resist Moisturizer", "brand": "Peter Thomas Roth", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Peter Thomas Roth Firm X 10% Glycolic Exfoliating Cleanser", "brand": "Peter Thomas Roth", "category": "Face Wash", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Peter Thomas Roth Max Sheer All Day Moisture Defense Lotion SPF 30", "brand": "Peter Thomas Roth", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Skinceuticals Physical Fusion UV Defense SPF 50", "brand": "SkinCeuticals", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Skinceuticals Daily Moisture", "brand": "SkinCeuticals", "category": "Moisturiser", "skinTypes": "\"Normal", "reason": ""}, {"productName": "SkinCeuticals Blemish + Age Defense", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "SkinCeuticals Silymarin CF", "brand": "SkinCeuticals", "category": "Serum", "skinTypes": "\"Oily", "reason": ""}, {"productName": "SkinCeuticals Ultra Facial UV Defense SPF 50+", "brand": "SkinCeuticals", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Sunday Riley Good Genes Lactic Acid Treatment", "brand": "Sunday Riley", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Sunday Riley Martian Mattifying Melting Water-Gel Toner", "brand": "Sunday Riley", "category": "Toner", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Sunday Riley Tidal Brightening Enzyme Water Cream", "brand": "Sunday Riley", "category": "Moisturiser", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Tatcha The One Step Camellia Cleansing Oil", "brand": "Tatcha", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Tatcha The Silk Peony Melting Eye Cream", "brand": "Tatcha", "category": "Eye Cream", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Tatcha The Rice Polish Foaming Enzyme Powder", "brand": "Tatcha", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Tatcha Luminance Skinscreen SPF 35", "brand": "Tatcha", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Drunk Elephant T.L.C. Happi Scalp Scrub", "brand": "Drunk Elephant", "category": "Hair", "skinTypes": "All", "reason": ""}, {"productName": "Drunk Elephant Beste No 9 Jelly Cleanser", "brand": "Drunk Elephant", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Drunk Elephant Umbra Tinte Physical Daily Defense SPF 30", "brand": "Drunk Elephant", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Drunk Elephant Umbra Sheer Physical Daily Defense SPF 30", "brand": "Drunk Elephant", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Drunk Elephant Sili Body Lotion", "brand": "Drunk Elephant", "category": "Body", "skinTypes": "All", "reason": ""}, {"productName": "Drunk Elephant E-Rase Milki Micellar Water", "brand": "Drunk Elephant", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Drunk Elephant Shaba Complex Eye Serum", "brand": "Drunk Elephant", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Drunk Elephant Virgin Marula Luxury Facial Oil", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Drunk Elephant D-Bronzi Anti-Pollution Sunshine Drops", "brand": "Drunk Elephant", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Glow Recipe Banana Soufflé Moisture Cream", "brand": "Glow Recipe", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Glow Recipe Kiwi + C Brightening Serum", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Glow Recipe Blueberry Bounce Firming Serum", "brand": "Glow Recipe", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Glow Recipe Guava Vitamin C Dark Spot Toner", "brand": "Glow Recipe", "category": "Toner", "skinTypes": "Hyperpigmentation", "reason": ""}, {"productName": "Summer Fridays Jet Lag Mask", "brand": "Summer Fridays", "category": "Mask", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Summer Fridays ShadeDrops Broad Spectrum SPF 30", "brand": "Summer Fridays", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Summer Fridays Dream Oasis Deep Hydration Serum", "brand": "Summer Fridays", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Summer Fridays Overtime Mask", "brand": "Summer Fridays", "category": "Mask", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Youth To The People Age Prevention Superfood Cream SPF 30", "brand": "Youth To The People", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Youth To The People Yerba Mate Resurfacing Energy Facial", "brand": "Youth To The People", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Farmacy Honeymoon Glow AHA Resurfacing Night Serum", "brand": "Farmacy", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Farmacy Whipped Greens Oil-Free Gel Cleanser", "brand": "Farmacy", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Farmacy Daily Greens Oil-Free Moisturizer", "brand": "Farmacy", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Farmacy Very Dew Lightweight Moisturizer SPF 25", "brand": "Farmacy", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Laneige Cream Skin Toner", "brand": "Laneige", "category": "Toner", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Laneige Radian-C Vitamin C Brightening Serum", "brand": "Laneige", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Laneige Neo Cushion Foundation SPF 42", "brand": "Laneige", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Laneige Clear-V Toning Essence", "brand": "Laneige", "category": "Toner", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Laneige Cica Sleeping Mask", "brand": "Laneige", "category": "Mask", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Dr. Jart+ Vital Hydra Solution Biome Serum", "brand": "Dr. Jart+", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Dr. Jart+ Dermask Micro Jet Focuspot", "brand": "Dr. Jart+", "category": "Mask", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Dr. Jart+ Peptidin Radiance Serum", "brand": "Dr. Jart+", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Dr. Jart+ Ceramidin Body Lotion", "brand": "Dr. Jart+", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Dr. Jart+ Every Sun Day Sun Fluid SPF 50+", "brand": "Dr. Jart+", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Missha Time Revolution Night Repair Probio Ampoule", "brand": "Missha", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Missha M Perfect Cover BB Cream SPF 42", "brand": "Missha", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Sulwhasoo Concentrated Ginseng Renewing Eye Cream", "brand": "Sulwhasoo", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Sulwhasoo Concentrated Ginseng Renewing Cream", "brand": "Sulwhasoo", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Sulwhasoo Snowise Brightening Serum", "brand": "Sulwhasoo", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Hada Labo Shirojyun Premium Whitening Lotion", "brand": "Hada Labo", "category": "Toner", "skinTypes": "Dull", "reason": ""}, {"productName": "Hada Labo Gokujyun Ultimate Moisturizing Eye Cream", "brand": "Hada Labo", "category": "Eye Cream", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Hada Labo Koi-Gokujyun Premium Milky Lotion", "brand": "Hada Labo", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Anua Heartleaf 77% Soothing Toner", "brand": "Anua", "category": "Toner", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Anua Heartleaf Quercetinol Pore Deep Cleansing Foam", "brand": "Anua", "category": "Face Wash", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Anua Niacinamide 10% + TXA 4% Serum", "brand": "Anua", "category": "Serum", "skinTypes": "Hyperpigmentation", "reason": ""}, {"productName": "TIRTIR Mask Fit Red Cushion", "brand": "TIRTIR", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "TIRTIR Milk Skin Barrier Toner", "brand": "TIRTIR", "category": "Toner", "skinTypes": "\"Dry", "reason": ""}, {"productName": "TIRTIR Ceramic Cream", "brand": "TIRTIR", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Numbuzin No.5 Vitamin Niacinamide 90 Serum", "brand": "Numbuzin", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Numbuzin No.1 Pore Cleansing Gel", "brand": "Numbuzin", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Abib Mild Acidic pH Sheet Mask Yuja Fit", "brand": "Abib", "category": "Mask", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Abib Mild Acidic pH Sheet Mask Aqua Fit", "brand": "Abib", "category": "Mask", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Abib Jericho Rose Ampoule Tone Up", "brand": "Abib", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Abib Heartleaf Calming Essence Cotton Sheet Mask", "brand": "Abib", "category": "Mask", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Beauty of Joseon Revive Eye Serum", "brand": "Beauty of Joseon", "category": "Eye Cream", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Beauty of Joseon Dynasty Cream", "brand": "Beauty of Joseon", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Beauty of Joseon Matte Sun Stick", "brand": "Beauty of Joseon", "category": "SPF", "skinTypes": "Oily", "reason": ""}, {"productName": "Beauty of Joseon Calming Serum: Green Tea + Panthenol", "brand": "Beauty of Joseon", "category": "Serum", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Beauty of Joseon Radiance Cleansing Balm", "brand": "Beauty of Joseon", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Klairs Freshly Juiced Vitamin C Drop", "brand": "Klairs", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Klairs Supple Preparation All Over Lotion", "brand": "Klairs", "category": "Toner", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Klairs Midnight Blue Calming Cream", "brand": "Klairs", "category": "Moisturiser", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Klairs Unscented Vitamin E Mask", "brand": "Klairs", "category": "Mask", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Some By Mi 30 Days Miracle Cream", "brand": "Some By Mi", "category": "Moisturiser", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Some By Mi Hyal-Luronic Acid Triple Moisture Serum", "brand": "Some By Mi", "category": "Serum", "skinTypes": "Dry", "reason": ""}, {"productName": "Some By Mi Retinol Intense Reactivating Serum", "brand": "Some By Mi", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Etude House Soon Jung Hydro Barrier Cream", "brand": "Etude House", "category": "Moisturiser", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Etude House SoonJung 5-Panthensoside Cica Serum", "brand": "Etude House", "category": "Serum", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Roundlab 1025 Dokdo Toner", "brand": "Round Lab", "category": "Toner", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Round Lab Birch Juice Moisturizing Serum", "brand": "Round Lab", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Purito From Green Vitamin C Serum", "brand": "Purito", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Purito Oat-in Calming Gel Cream", "brand": "Purito", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Isntree Onion Newpair Eye Cream", "brand": "Isntree", "category": "Eye Cream", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Isntree Hyaluronic Acid Aqua Gel Cream", "brand": "Isntree", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Skin1004 Madagascar Centella Asiatica Ampoule", "brand": "Skin1004", "category": "Serum", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Skin1004 Madagascar Centella Tone Brightening Capsule Ampoule", "brand": "Skin1004", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Skin1004 Zombie Beauty Hyalu-Cica Water-Fit Sun Serum SPF50+", "brand": "Skin1004", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Tocobo Cotton Soft Sun Stick SPF50+", "brand": "Tocobo", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Tocobo Glass Toning SPF50+ Lotion", "brand": "Tocobo", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "medicube Pore Tightening Serum", "brand": "medicube", "category": "Serum", "skinTypes": "\"Oily", "reason": ""}, {"productName": "medicube Red Erasing Serum", "brand": "medicube", "category": "Serum", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "medicube Age R Toning Cream", "brand": "medicube", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Torriden Dive-In Low Molecular Hyaluronic Acid Serum", "brand": "Torriden", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Torriden Solid-In Ceramide Toner", "brand": "Torriden", "category": "Toner", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Neogen Dermalogy Real Vitamin C Serum", "brand": "Neogen", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Neogen Dermalogy Real Cica Milk Foam", "brand": "Neogen", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Neogen Dermalogy Real Essential Enzyme Powder Wash", "brand": "Neogen", "category": "Face Wash", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Neogen Dermalogy White Truffle Serum in Oil Drop", "brand": "Neogen", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Heimish All Clean Balm", "brand": "Heimish", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Heimish Marine Care Eye Cream", "brand": "Heimish", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Holika Holika Aloe 99% Soothing Gel", "brand": "Holika Holika", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "The Face Shop Rice Water Bright Light Cleansing Oil", "brand": "The Face Shop", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "The Face Shop The Therapy Royal Made Anti-Aging Serum", "brand": "The Face Shop", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Tony Moly Master Lab Hyaluronic Acid Sheet Mask", "brand": "Tonymoly", "category": "Mask", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Nature Republic Aloe Vera 92% Soothing Gel", "brand": "Nature Republic", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "G9Skin Vitamin C Brightening Serum", "brand": "G9Skin", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Nacific Phyto Niacin Whitening Essence", "brand": "Nacific", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Nacific Fresh Herb Origin Essence", "brand": "Nacific", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Isntree Hyaluronic Acid Toner Plus", "brand": "Isntree", "category": "Toner", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Mixsoon Bean Ferment Essence", "brand": "Mixsoon", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Mixsoon Centella Asiatica Serum", "brand": "Mixsoon", "category": "Serum", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Cosrx The Hyaluronic Acid 3 Serum", "brand": "COSRX", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "COSRX Vitamin C 23 Serum", "brand": "COSRX", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "COSRX Peptide Balance Dual Serum", "brand": "COSRX", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "COSRX Hyaluronic Acid Intensive Cream", "brand": "COSRX", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "COSRX Master Patch Intensive", "brand": "COSRX", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "COSRX Master Patch Compact", "brand": "COSRX", "category": "Acne Treatment", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Etude House Real Art Cleansing Oil Perfect", "brand": "Etude House", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Skinfood Black Sugar Mask Wash Off", "brand": "Skinfood", "category": "Mask", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Skinfood Egg White Pore Mask", "brand": "Skinfood", "category": "Mask", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Skinfood Royal Honey Essential Eye Cream", "brand": "Skinfood", "category": "Eye Cream", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Elizavecca Milky Piggy Carbonated Bubble Clay Mask", "brand": "Elizavecca", "category": "Mask", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Elizavecca CER-100 Hair Muscle Protein Treatment", "brand": "Elizavecca", "category": "Hair", "skinTypes": "Damaged", "reason": ""}, {"productName": "It's Skin Power 10 Formula WH Effector", "brand": "It's Skin", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "It's Skin Prestige D'escargot Cream", "brand": "It's Skin", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Weleda Almond Sensitive Skin Facial Cream", "brand": "Weleda", "category": "Moisturiser", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Weleda Skin Food Youth Nourishing Oil", "brand": "Weleda", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "REN Vita Mineral Active 7 Eye Gel", "brand": "Ren Clean Skincare", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "REN Radiance Ready Perfecting Serum", "brand": "Ren Clean Skincare", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "REN Clean Screen Mineral SPF 30", "brand": "Ren Clean Skincare", "category": "SPF", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Omorovicza Thermal Cleansing Balm", "brand": "Omorovicza", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Omorovicza Moor Mud Purifying Masque", "brand": "Omorovicza", "category": "Mask", "skinTypes": "\"Oily", "reason": ""}, {"productName": "La Mer The Moisturizing Soft Cream", "brand": "La Mer", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "La Mer The Moisturizing Gel Cream", "brand": "La Mer", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "La Mer The Cleansing Foam", "brand": "La Mer", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "La Mer The Eye Concentrate", "brand": "La Mer", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "La Mer The Serum", "brand": "La Mer", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "La Mer Genaissance de La Mer The Serum Essence", "brand": "La Mer", "category": "Toner", "skinTypes": "Ageing", "reason": ""}, {"productName": "SK-II Facial Treatment Essence", "brand": "SK-II", "category": "Toner", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "SK-II Facial Treatment Gentle Cleanser", "brand": "SK-II", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "SK-II Skinpower Cream", "brand": "SK-II", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "SK-II Brightening Derm Circles Eye Cream", "brand": "SK-II", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Chanel Le Lift Pro Crème Régénération", "brand": "Chanel", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Chanel Sublimage La Crème", "brand": "Chanel", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Chanel Hydra Beauty Micro Serum", "brand": "Chanel", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Chanel La Mousse Purifying Cream-To-Foam Cleanser", "brand": "Chanel", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Chanel UV Essentiel Complete UV Protection SPF 50", "brand": "Chanel", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Sisley Paris Ecological Compound Day and Night", "brand": "Sisley Paris", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Sisley Paris Black Rose Cream Mask", "brand": "Sisley Paris", "category": "Mask", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Augustinus Bader The Cream", "brand": "Augustinus Bader", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Augustinus Bader The Rich Cream", "brand": "Augustinus Bader", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Augustinus Bader The Serum", "brand": "Augustinus Bader", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Augustinus Bader The Cleansing Balm", "brand": "Augustinus Bader", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Augustinus Bader The Body Cream", "brand": "Augustinus Bader", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Tata Harper Resurfacing Serum", "brand": "Tata Harper", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Tata Harper Rejuvenating Serum", "brand": "Tata Harper", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Tata Harper Hyaluronic Acid Intensifier", "brand": "Tata Harper", "category": "Serum", "skinTypes": "Dry", "reason": ""}, {"productName": "Tata Harper Superkind Moisturizer", "brand": "Tata Harper", "category": "Moisturiser", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Tata Harper Nourishing Oil Cleanser", "brand": "Tata Harper", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Golde Turmeric Toning Drops", "brand": "Golde", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Golde Pure Rosehip Facial Oil", "brand": "Golde", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Versed Skin Soak Rich Moisture Cream", "brand": "Versed", "category": "Moisturiser", "skinTypes": "Dry", "reason": ""}, {"productName": "Versed Weekend Glow Exfoliating Serum", "brand": "Versed", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Good Molecules Niacinamide Brightening Toner", "brand": "Good Molecules", "category": "Toner", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Good Molecules Discoloration Correcting Serum", "brand": "Good Molecules", "category": "Serum", "skinTypes": "Hyperpigmentation", "reason": ""}, {"productName": "Good Molecules Hyaluronic Acid Serum", "brand": "Good Molecules", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Good Molecules Overnight Exfoliating Treatment", "brand": "Good Molecules", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Good Molecules Yerba Mate Wake-Up Eye Cream", "brand": "Good Molecules", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Naturium Niacinamide 12% Plus Zinc 2%", "brand": "Naturium", "category": "Serum", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Naturium Retinaldehyde Serum 0.05%", "brand": "Naturium", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Naturium Multi-Peptide Eye Serum 18%", "brand": "Naturium", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Naturium Vitamin C Complex Serum 22%", "brand": "Naturium", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Naturium The Glow Getter Multi-Oil Hydrating Body Wash", "brand": "Naturium", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "The Ordinary Mandelic Acid 10% + HA", "brand": "The Ordinary", "category": "Serum", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "The Ordinary Pycnogenol 5%", "brand": "The Ordinary", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "The Ordinary Marine Hyaluronics", "brand": "The Ordinary", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "The Ordinary 100% Plant-Derived Squalane", "brand": "The Ordinary", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "The Ordinary Argireline Solution 10%", "brand": "The Ordinary", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "The Ordinary Matrixyl 10% + HA", "brand": "The Ordinary", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "The Ordinary Niacinamide 5% Face Mist", "brand": "The Ordinary", "category": "Toner", "skinTypes": "\"Oily", "reason": ""}, {"productName": "The Ordinary Hyaluronic Acid 2% + B5 Hydrating Serum", "brand": "The Ordinary", "category": "Serum", "skinTypes": "Dry", "reason": ""}, {"productName": "The Inkey List Beta-hydroxy Acid (BHA) Serum", "brand": "The Inkey List", "category": "Serum", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "The Inkey List Glycolic Acid Toner", "brand": "The Inkey List", "category": "Toner", "skinTypes": "\"Dull", "reason": ""}, {"productName": "The Inkey List Vitamin C and EGF Brightening Serum", "brand": "The Inkey List", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "The Inkey List Azelaic Acid Serum", "brand": "The Inkey List", "category": "Serum", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "The Inkey List Bakuchiol Moisturizer", "brand": "The Inkey List", "category": "Moisturiser", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "The Inkey List Brighten-i Eye Cream", "brand": "The Inkey List", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Revolution Skincare 5% Niacinamide Serum", "brand": "Revolution Skincare", "category": "Serum", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Revolution Skincare Glycolic Acid Toner", "brand": "Revolution Skincare", "category": "Toner", "skinTypes": "Dull", "reason": ""}, {"productName": "Revolution Skincare 1% Retinol Serum", "brand": "Revolution Skincare", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Revolution Skincare Hyaluronic Acid Moisturiser", "brand": "Revolution Skincare", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "INKEY list Peptide Moisturizer", "brand": "The Inkey List", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Neutrogena Pore Refining Toner", "brand": "Neutrogena", "category": "Toner", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Neutrogena Bright Boost Illuminating Serum", "brand": "Neutrogena", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Neutrogena Rapid Wrinkle Repair Retinol Oil", "brand": "Neutrogena", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Neutrogena Norwegian Formula Hand Cream", "brand": "Neutrogena", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "L'Oréal Paris Collagen Moisture Filler Daily Moisturizer", "brand": "L'Oréal", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "L'Oréal Paris Skin Expert Pure Clay Mask", "brand": "L'Oréal", "category": "Mask", "skinTypes": "\"Oily", "reason": ""}, {"productName": "L'Oréal Paris Age Perfect Cell Renewal Rosy Tone Moisturizer", "brand": "L'Oréal", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "L'Oréal Paris Extraordinary Oil", "brand": "L'Oréal", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Olay Regenerist Micro-Sculpting Eye Swirl", "brand": "Olay", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Olay Luminous Tone Perfecting Cream", "brand": "Olay", "category": "Moisturiser", "skinTypes": "Dull", "reason": ""}, {"productName": "Olay Regenerist Retinol 24 Max Night Moisturizer", "brand": "Olay", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Pond's Luminous Finish BB+ Cream SPF 15", "brand": "Pond's", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Aveeno Positively Radiant Daily Moisturizer SPF 30", "brand": "Aveeno", "category": "SPF", "skinTypes": "Dull", "reason": ""}, {"productName": "Aveeno Clear Complexion Daily Moisturizer", "brand": "Aveeno", "category": "Moisturiser", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Aveeno Absolutely Ageless Daily Moisturizer SPF 30", "brand": "Aveeno", "category": "SPF", "skinTypes": "Ageing", "reason": ""}, {"productName": "Jergens Natural Glow Self Tanner Daily Moisturizer", "brand": "Jergens", "category": "Body", "skinTypes": "All", "reason": ""}, {"productName": "Lubriderm Advanced Therapy Moisturizing Lotion", "brand": "Lubriderm", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Vaseline Intensive Care Cocoa Radiant Lotion", "brand": "Vaseline", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Gold Bond Ultimate Softening Foot Cream", "brand": "Gold Bond", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Burt's Bees Lemon Butter Cuticle Cream", "brand": "Burt's Bees", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Palmer's Skin Therapy Oil Face", "brand": "Palmer's", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Bio-Oil Skincare Oil", "brand": "Bio-Oil", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Mederma Advanced Scar Gel", "brand": "Mederma", "category": "Body", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Dermalogica Active Clay Cleanser", "brand": "Dermalogica", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Dermalogica Stabilizing Repair Cream", "brand": "Dermalogica", "category": "Moisturiser", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Dermalogica Rapid Reveal Peel", "brand": "Dermalogica", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Dermalogica Age Smart SuperRich Repair", "brand": "Dermalogica", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Dermalogica Intensive Moisture Balance", "brand": "Dermalogica", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Dermalogica Phyto Replenish Oil", "brand": "Dermalogica", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Dermalogica Prisma Protect SPF 30", "brand": "Dermalogica", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "First Aid Beauty Hello FAB Coconut Skin Smoothie Priming Moisturizer", "brand": "First Aid Beauty", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "First Aid Beauty FAB Skin Lab Resurfacing Liquid AHA", "brand": "First Aid Beauty", "category": "Toner", "skinTypes": "\"Dull", "reason": ""}, {"productName": "First Aid Beauty FAB Skin Lab Vitamin C Serum", "brand": "First Aid Beauty", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Neutrogena Hydro Boost Eye Gel-Cream", "brand": "Neutrogena", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "Neutrogena Skin Firming Serum with Retinol", "brand": "Neutrogena", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "CeraVe Resurfacing Retinol Serum", "brand": "CeraVe", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "CeraVe Hydrating Toner", "brand": "CeraVe", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "La Roche-Posay Hydraphase HA Riche Cream", "brand": "La Roche-Posay", "category": "Moisturiser", "skinTypes": "Dry", "reason": ""}, {"productName": "La Roche-Posay Anthelios Invisible Fluid SPF 50+", "brand": "La Roche-Posay", "category": "SPF", "skinTypes": "Oily", "reason": ""}, {"productName": "La Roche-Posay Lipikar Balm AP+M", "brand": "La Roche-Posay", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Avène Cleanance Comedomed Anti-Imperfections Concentrate", "brand": "Avène", "category": "Serum", "skinTypes": "Acne-prone", "reason": ""}, {"productName": "Avène Cleanance Hydra Soothing Cream", "brand": "Avène", "category": "Moisturiser", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Eucerin Dry Skin Replenishing Cream 5% Urea", "brand": "Eucerin", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Eucerin Sun Oil Control Dry Touch Fluid SPF 50+", "brand": "Eucerin", "category": "SPF", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Nivea Cellular Expert Filler Serum", "brand": "NIVEA", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Nivea Q10 Power Anti-Wrinkle Day Cream SPF 15", "brand": "NIVEA", "category": "SPF", "skinTypes": "Ageing", "reason": ""}, {"productName": "Dove DermaSeries Dry Skin Relief Face Cream", "brand": "Dove", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Aveeno Smart Essentials Daily Nourishing Moisturizer SPF 15", "brand": "Aveeno", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Garnier SkinActive Micellar Cleansing Water Oil-Infused", "brand": "Garnier", "category": "Face Wash", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Garnier SkinActive Green Labs Hyalu-Melon Replumping Serum Cream", "brand": "Garnier", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Garnier Vitamin C Serum", "brand": "Garnier", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "Maybelline Instant Anti-Age Eraser Eye Treatment", "brand": "Maybelline", "category": "Eye Cream", "skinTypes": "All", "reason": ""}, {"productName": "L'Oréal Paris Revitalift 1.5% Pure Hyaluronic Acid Serum", "brand": "L'Oréal", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "L'Oréal Paris Age Perfect Rosy Tone Eye Brightener", "brand": "L'Oréal", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "L'Oréal Paris Collagen Day Cream SPF 15", "brand": "L'Oréal", "category": "SPF", "skinTypes": "Ageing", "reason": ""}, {"productName": "Olay Daily Facials 4-in-1 Water Activated Cleansing Cloths", "brand": "Olay", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Vaseline Intensive Care Advanced Repair Unscented Lotion", "brand": "Vaseline", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Jergens Original Scent Daily Moisturizer", "brand": "Jergens", "category": "Body", "skinTypes": "\"Normal", "reason": ""}, {"productName": "St. Ives Renewing Collagen & Elastin Body Lotion", "brand": "St. Ives", "category": "Body", "skinTypes": "Ageing", "reason": ""}, {"productName": "Bioderma Atoderm Shower Oil", "brand": "Bioderma", "category": "Body", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Avène XeraCalm A.D. Lipid-Replenishing Cream", "brand": "Avène", "category": "Body", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Eucerin AtopiControl Acute Care Cream", "brand": "Eucerin", "category": "Body", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Aveeno Eczema Therapy Daily Moisturizing Cream", "brand": "Aveeno", "category": "Body", "skinTypes": "Sensitive", "reason": ""}, {"productName": "CeraVe Itch Relief Moisturizing Lotion", "brand": "CeraVe", "category": "Body", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Gold Bond Healing Hand Cream", "brand": "Gold Bond", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "O'Keeffe's Working Hands Hand Cream", "brand": "O'Keeffe's", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Burt's Bees Hand Repair Cream", "brand": "Burt's Bees", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Neutrogena Norwegian Formula Hand Cream Fragrance Free", "brand": "Neutrogena", "category": "Body", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Olay Regenerist Whip Light Moisturizer SPF 25", "brand": "Olay", "category": "SPF", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Olay Total Effects 7-in-1 Anti-Aging Moisturizer SPF 30", "brand": "Olay", "category": "SPF", "skinTypes": "Ageing", "reason": ""}, {"productName": "RoC Retinol Correxion Anti-Aging Eye Cream Treatment", "brand": "RoC", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "RoC Multi Correxion Revive + Glow Serum", "brand": "RoC", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Boots No7 Lift & Luminate Triple Action Serum", "brand": "No7", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Boots No7 Early Defence Glow Activating Serum", "brand": "No7", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Boots No7 Protect & Perfect Intense Advanced Serum", "brand": "No7", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Boots No7 Beautiful Skin Moisturiser Dry Skin", "brand": "No7", "category": "Moisturiser", "skinTypes": "Dry", "reason": ""}, {"productName": "Boots No7 Instant Results Nourishing Hyaluronic Mask", "brand": "No7", "category": "Mask", "skinTypes": "Dry", "reason": ""}, {"productName": "Soap & Glory Scrub Your Nose In It", "brand": "Soap & Glory", "category": "Face Wash", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Soap & Glory The Righteous Butter Body Lotion", "brand": "Soap & Glory", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "Soap & Glory Original Pink Body Butter", "brand": "Soap & Glory", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "The Body Shop Vitamin C Glow-Boosting Moisturiser", "brand": "The Body Shop", "category": "Moisturiser", "skinTypes": "\"Dull", "reason": ""}, {"productName": "The Body Shop Vitamin E Moisture Cream", "brand": "The Body Shop", "category": "Moisturiser", "skinTypes": "\"Normal", "reason": ""}, {"productName": "The Body Shop Drops of Youth Bouncy Eye Mask", "brand": "The Body Shop", "category": "Eye Cream", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "The Body Shop Aloe Calming Facial Cleanser", "brand": "The Body Shop", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "The Body Shop Edelweiss Daily Serum", "brand": "The Body Shop", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "The Body Shop Drops of Youth Youth Essence Lotion", "brand": "The Body Shop", "category": "Toner", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Clarins Double Serum Complete Age Control Concentrate", "brand": "Clarins", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Clarins Super Restorative Day Cream", "brand": "Clarins", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Clarins Extra-Firming Cream Dry Skin", "brand": "Clarins", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Clarins Multi-Active Day Moisturizer", "brand": "Clarins", "category": "Moisturiser", "skinTypes": "\"Normal", "reason": ""}, {"productName": "Clarins Hydra-Essentiel Silky Cream", "brand": "Clarins", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Clarins Milky Boost Hydrating Toning Lotion", "brand": "Clarins", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Clinique Take The Day Off Micellar Milk", "brand": "Clinique", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Clinique iD Dramatically Different Moisturizing Gel", "brand": "Clinique", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Clinique Repairwear Laser Focus All-Smooth Serum", "brand": "Clinique", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Clinique Even Better Clinical Radical Dark Spot Corrector", "brand": "Clinique", "category": "Serum", "skinTypes": "Hyperpigmentation", "reason": ""}, {"productName": "Clinique Smart Clinical Repair Wrinkle Correcting Eye Cream", "brand": "Clinique", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Lancome Genifique Youth Activating Serum", "brand": "Lancôme", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Lancome Advanced Genifique Sensitive Dual Concentrate", "brand": "Lancôme", "category": "Serum", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "Lancome Renergie H.C.F. Triple Serum", "brand": "Lancôme", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Lancome Absolue Precious Cells Advanced Regenerating & Brightening Soft Cream", "brand": "Lancôme", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Lancome Bi-Facil Double-Action Eye Makeup Remover", "brand": "Lancôme", "category": "Face Wash", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Yves Saint Laurent Pure Shots Eyes Reborn Serum", "brand": "YSL Beauty", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "Giorgio Armani Acqua Di Gioia Moisture Rich Glow Lotion", "brand": "Giorgio Armani", "category": "Moisturiser", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Dior Capture Totale Super Potent Serum", "brand": "Dior", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Dior Hydra Life Sorbet Crème Moisturizer", "brand": "Dior", "category": "Moisturiser", "skinTypes": "\"Oily", "reason": ""}, {"productName": "Guerlain Abeille Royale Double R Serum", "brand": "Guerlain", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Charlotte Tilbury Magic Cream Moisturiser", "brand": "Charlotte Tilbury", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Charlotte Tilbury Charlotte's Magic Serum Crystal Elixir", "brand": "Charlotte Tilbury", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Charlotte Tilbury Magic Midnight Facial Moisturiser", "brand": "Charlotte Tilbury", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Pat McGrath Labs Skin Fetish Balm & Glow Kit", "brand": "Pat McGrath", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "NARS Cosmetics Pure Radiant Tinted Moisturizer SPF 30", "brand": "NARS", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Make Up For Ever Step 1 Skin Equalizer Primer", "brand": "Make Up For Ever", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Bobbi Brown Skin Long-Wear Weightless Foundation SPF 15", "brand": "Bobbi Brown", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "IT Cosmetics CC+ Cream with SPF 50+", "brand": "IT Cosmetics", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Bare Minerals Complexion Rescue Tinted Hydrating Gel Cream SPF 30", "brand": "bareMinerals", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Colorescience Total Eye 3-in-1 Renewal Therapy SPF 35", "brand": "Colorescience", "category": "Eye Cream", "skinTypes": "Ageing", "reason": ""}, {"productName": "MDSolarSciences MD Daily Moisturizer SPF 30", "brand": "MDSolarSciences", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Shiseido Ultimune Power Infusing Serum", "brand": "Shiseido", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Shiseido Vital Perfection Uplifting and Firming Cream", "brand": "Shiseido", "category": "Moisturiser", "skinTypes": "Ageing", "reason": ""}, {"productName": "Shiseido Synchro Skin Self-Refreshing Moisturizer", "brand": "Shiseido", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Shiseido Waso Color-Smart Day Moisturizer SPF 30", "brand": "Shiseido", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Kanebo Sensai Silky Purifying Mousse", "brand": "Kanebo", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Clé de Peau Beauté La Crème", "brand": "Clé de Peau Beauté", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Aunt Jackie's Curl La La Defining Curl Custard", "brand": "Aunt Jackies", "category": "Hair", "skinTypes": "Curly", "reason": ""}, {"productName": "Miss Jessie's Jelly Soft Curls Gel", "brand": "Miss Jessies", "category": "Hair", "skinTypes": "\"Curly", "reason": ""}, {"productName": "Creme of Nature Argan Oil Perfect 7 Leave-In Treatment", "brand": "Creme of Nature", "category": "Hair", "skinTypes": "\"Damaged", "reason": ""}, {"productName": "OGX Biotin & Collagen Shampoo", "brand": "OGX", "category": "Hair", "skinTypes": "\"Fine", "reason": ""}, {"productName": "OGX Coconut Milk Shampoo", "brand": "OGX", "category": "Hair", "skinTypes": "\"Dry", "reason": ""}, {"productName": "TRESemme Moisture Rich Shampoo", "brand": "TRESemme", "category": "Hair", "skinTypes": "Dry", "reason": ""}, {"productName": "Garnier Fructis Sleek & Shine Shampoo", "brand": "Garnier", "category": "Hair", "skinTypes": "\"Frizzy", "reason": ""}, {"productName": "Head & Shoulders Green Apple Shampoo", "brand": "Head & Shoulders", "category": "Hair", "skinTypes": "All", "reason": ""}, {"productName": "Nizoral A-D Anti-Dandruff Shampoo", "brand": "Nizoral", "category": "Hair", "skinTypes": "\"Dandruff", "reason": ""}, {"productName": "Selsun Blue Medicated Maximum Strength Shampoo", "brand": "Selsun Blue", "category": "Hair", "skinTypes": "\"Dandruff", "reason": ""}, {"productName": "Nioxin System 2 Cleanser Shampoo", "brand": "Nioxin", "category": "Hair", "skinTypes": "\"Thinning", "reason": ""}, {"productName": "The Ordinary Multi-Peptide Serum for Hair Density", "brand": "The Ordinary", "category": "Hair", "skinTypes": "Thinning", "reason": ""}, {"productName": "Minoxidil 5% Topical Foam", "brand": "Rogaine", "category": "Hair", "skinTypes": "Thinning", "reason": ""}, {"productName": "Medik8 Crystal Retinal 3", "brand": "Medik8", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Medik8 Surface Radiance Cleanse", "brand": "Medik8", "category": "Face Wash", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Medik8 Hydr8 B5 Intense", "brand": "Medik8", "category": "Serum", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Medik8 C-Tetra Luxe Vitamin C Serum", "brand": "Medik8", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Medik8 Press & Clear Exfoliating BHA Tonic", "brand": "Medik8", "category": "Toner", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Medik8 Daily Radiance Vitamin C Cream", "brand": "Medik8", "category": "Moisturiser", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Obagi Professional-C Serum 10%", "brand": "Obagi", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "iS Clinical Active Serum", "brand": "iS Clinical", "category": "Serum", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "iS Clinical Eclipse SPF 50+", "brand": "iS Clinical", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "Dr. Dennis Gross Alpha Beta Universal Daily Peel", "brand": "Dr. Dennis Gross", "category": "Serum", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Dr. Dennis Gross Vitamin C Brightening Serum", "brand": "Dr. Dennis Gross", "category": "Serum", "skinTypes": "Dull", "reason": ""}, {"productName": "SkinBetter Science AlphaRet Overnight Cream", "brand": "SkinBetter Science", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Biologique Recherche P50 1970 Lotion", "brand": "Biologique Recherche", "category": "Toner", "skinTypes": "\"Dull", "reason": ""}, {"productName": "GlamGlow Supermud Clearing Treatment", "brand": "GlamGlow", "category": "Mask", "skinTypes": "\"Acne-prone", "reason": ""}, {"productName": "Rodan + Fields Redefine Macro Exfoliator", "brand": "Rodan Fields", "category": "Face Wash", "skinTypes": "\"Dull", "reason": ""}, {"productName": "Emma Hardie Moringa Cleansing Balm", "brand": "Emma Hardie", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Liz Earle Cleanse & Polish Hot Cloth Cleanser", "brand": "Liz Earle", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Liz Earle Skin Repair Light Moisturiser", "brand": "Liz Earle", "category": "Moisturiser", "skinTypes": "\"Normal", "reason": ""}, {"productName": "Lancome Genifique Youth Activating Serum", "brand": "Lancome", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "Lancome Renergie HCF Triple Serum", "brand": "Lancome", "category": "Serum", "skinTypes": "Ageing", "reason": ""}, {"productName": "Charlotte Tilbury Magic Serum Crystal Elixir", "brand": "Charlotte Tilbury", "category": "Serum", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "NARS Pure Radiant Tinted Moisturizer SPF 30", "brand": "NARS", "category": "SPF", "skinTypes": "All", "reason": ""}, {"productName": "L Occitane Immortelle Divine Cream", "brand": "L Occitane", "category": "Moisturiser", "skinTypes": "\"Ageing", "reason": ""}, {"productName": "L Occitane Shea Body Lotion", "brand": "L Occitane", "category": "Body", "skinTypes": "Dry", "reason": ""}, {"productName": "NUXE Reve de Miel Ultra-Comforting Face Cream", "brand": "NUXE", "category": "Moisturiser", "skinTypes": "\"Dry", "reason": ""}, {"productName": "Caudalie Beauty Elixir Prep Set Glow Face Mist", "brand": "Caudalie", "category": "Toner", "skinTypes": "All", "reason": ""}, {"productName": "Fenty Skin Total Cleans'r Cleanser", "brand": "Fenty Skin", "category": "Face Wash", "skinTypes": "All", "reason": ""}, {"productName": "Avene Thermal Spring Water", "brand": "Avene", "category": "Toner", "skinTypes": "Sensitive", "reason": ""}, {"productName": "Embryolisse Lait-Creme Concentre", "brand": "Embryolisse", "category": "Moisturiser", "skinTypes": "All", "reason": ""}, {"productName": "Dove Beauty Bar Sensitive Skin", "brand": "Dove", "category": "Face Wash", "skinTypes": "\"Sensitive", "reason": ""}, {"productName": "St Ives Oatmeal & Shea Butter Body Lotion", "brand": "St. Ives", "category": "Body", "skinTypes": "\"Dry", "reason": ""}];
+const JUNK_PATTERNS = ["cera quente", "cera fria", "cera depilat", "depiroll", "depi roll", "tampax", "lingette", "dentifrice", "gaviscon", "nanuk", "bodyspray", "shampooing", "shampoing", "après-shampooing", "mascarilla de pelo", "color boost shamp", "elseve color", "ultra doux shamp", "gliss shamp", "violet déjaunisseur", "color riche lipstick", "68yn5t", "mixa bébé", "creme öl dusche", "pflege", "baby öl", "cera di cupra", "cera para cabelo", "baume après-rasage", "cloro de", "savon bouton", "axe dark", "pintalabios", "cera brillo", "cera en gel", "cera cabello", "stick lèvres anti", "huile extraordinaire cheveux", "masque nutritif technique", "shampooing raviveur", "shampooing couleur", "shampoo trick", "anti fungal trick", "anti bacterial trick", "squid fur", "olay shave gel", "olay fresh outlast", "olay body wash", "olay regenerist nghit", "derma skin clear", "deep润", "čokoládovo", "lingettes famil", "l'oréal espresso", "soin global crème jour", "crystal tears serum mira", "crème pour la peau cien", "palette intensive", "formule 2 en 1 elseve", "ph5 lait démaquillant", "créme activ nelly", "body shampoo cocooning", "vlcc 3d", "himalaya himalaya", "johnson2", "johnsons sensitive shampoo", "clear men herbal", "fast clear garnier", "neutrogena soothing clear", "solution micellaire skincactive", "bb clear", "get real face", "squid fur", "cera ve baby", "vanicream soap", "olay total effect", "essence ultîme diamond", "herbal essences real botanicals", "mascarilla de pelo"];
+
+
+// ── Nuclear Clean ───────────────────────────────────────────────────────────
+function AdminNuclearClean({ onBack }) {
+  const [phase, setPhase] = React.useState("confirm");
+  const [log, setLog] = React.useState([]);
+  const [stats, setStats] = React.useState({ cleaned: 0, deleted: 0, added: 0, skipped: 0 });
+  const stopRef = React.useRef(false);
+
+  function addLog(msg, type="info") { setLog(l => [...l.slice(-200), { msg, type }]); }
+
+  function isJunk(productName, brand) {
+    const combo = ((productName||"")+" "+(brand||"")).toLowerCase();
+    return JUNK_PATTERNS.some(p => combo.includes(p));
+  }
+
+  async function runNuclearClean() {
+    setPhase("running"); stopRef.current=false;
+    const s={cleaned:0,deleted:0,added:0,skipped:0};
+    addLog("Loading Firestore products…","info");
+    const snap=await getDocs(collection(db,"products"));
+    const firestoreDocs=snap.docs.map(d=>({id:d.id,...d.data()}));
+    addLog(`Found ${firestoreDocs.length} products`,"info");
+    addLog("Step 1: Deleting junk products…","info");
+    for (const p of firestoreDocs) {
+      if (stopRef.current) break;
+      if (isJunk(p.productName,p.brand)) {
+        try { await deleteDoc(doc(db,"products",p.id)); addLog(`🗑 Deleted: "${p.productName}"`, "warn"); s.deleted++; }
+        catch(e) { addLog(`✗ Could not delete "${p.productName}": ${e.message}`,"error"); }
+      }
+    }
+    addLog(`Deleted ${s.deleted} junk products`,"ok");
+    const snap2=await getDocs(collection(db,"products"));
+    const surviving=snap2.docs.map(d=>({id:d.id,...d.data()}));
+    addLog("Step 2: Cleaning and normalizing…","info");
+    for (const seed of NUCLEAR_CLEAN_PRODUCTS) {
+      if (stopRef.current) break;
+      const nameLow=seed.productName.toLowerCase().trim(), brandLow=(seed.brand||"").toLowerCase().trim();
+      let match=surviving.find(p=>p.productName?.toLowerCase().trim()===nameLow&&(!brandLow||(p.brand||"").toLowerCase().includes(brandLow)));
+      if (!match) match=surviving.find(p=>p.productName?.toLowerCase().trim()===nameLow);
+      if (match) {
+        const updates={productName:seed.productName,brand:seed.brand||match.brand||"",updatedAt:Date.now()};
+        if (seed.category) updates.category=seed.category;
+        if (seed.skinTypes) updates.skinTypes=seed.skinTypes.split(",").map(s=>s.trim()).filter(Boolean);
+        if (seed.reason) updates.reason=seed.reason;
+        try { await updateDoc(doc(db,"products",match.id),updates); addLog(`✓ Cleaned: "${seed.productName}"`,"ok"); s.cleaned++; }
+        catch(e) { addLog(`✗ Failed: "${seed.productName}": ${e.message}`,"error"); }
+      } else {
+        try {
+          await addDoc(collection(db,"products"),{productName:seed.productName,brand:seed.brand||"",category:seed.category||"",skinTypes:seed.skinTypes?seed.skinTypes.split(",").map(s=>s.trim()).filter(Boolean):[],reason:seed.reason||"",approved:false,hidden:false,scanCount:0,communityRating:0,ingredients:"",image:"",adminImage:"",buyUrl:"",barcode:"",poreScore:0,createdAt:Date.now(),updatedAt:Date.now()});
+          addLog(`+ Added: "${seed.productName}"`,"info"); s.added++;
+        } catch(e) { addLog(`✗ Could not add "${seed.productName}": ${e.message}`,"error"); s.skipped++; }
+      }
+      await new Promise(r=>setTimeout(r,80));
+    }
+    setStats(s); setPhase("done");
+    addLog(`\n✅ Done! Cleaned: ${s.cleaned} | Deleted: ${s.deleted} | Added: ${s.added} | Failed: ${s.skipped}`,"ok");
+  }
+
+  const logColors={info:"#9AACBC",ok:"#2C7A5C",warn:"#8B6914",error:"#AA4F57"};
+
+  if (phase==="confirm") return (
+    <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+      <button onClick={onBack} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",padding:0}}>← Back to Cleanup</button>
+      <div style={{background:T.surface,borderRadius:"1rem",padding:"1.25rem",border:`2px solid ${T.rose}44`}}>
+        <div style={{fontSize:"1rem",fontWeight:"700",color:T.rose,fontFamily:"'Inter',sans-serif",marginBottom:"0.5rem"}}>☢️ Nuclear Clean</div>
+        <div style={{fontSize:"0.75rem",color:T.textMid,fontFamily:"'Inter',sans-serif",lineHeight:1.6,marginBottom:"1rem"}}>
+          <b>• Deletes</b> junk/foreign/non-skincare products<br/>
+          <b>• Overwrites</b> category, skinTypes, reason with clean data<br/>
+          <b>• Adds</b> missing products from the 1,136-product curated list<br/><br/>
+          <b style={{color:T.sage}}>✓ Preserved:</b> scanCount, communityRating, images, ingredients, approved<br/>
+          <b style={{color:T.rose}}>✗ Overwritten:</b> productName (normalized), brand, category, skinTypes, reason
         </div>
-      )}
+        <div style={{background:T.amber+"18",border:`1px solid ${T.amber}44`,borderRadius:"0.6rem",padding:"0.65rem 0.85rem",fontSize:"0.68rem",color:T.amber,fontFamily:"'Inter',sans-serif",marginBottom:"1rem"}}>
+          ⚠️ Export a CSV backup first (Cleanup → ⬇️ Export CSV) before running this.
+        </div>
+        <button onClick={runNuclearClean} style={{width:"100%",padding:"0.75rem",background:T.rose,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.82rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+          ☢️ Run Nuclear Clean
+        </button>
+      </div>
+    </div>
+  );
 
-      <div style={{background:T.surfaceAlt,borderRadius:"0.75rem",padding:"0.75rem 1rem",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.6}}>
-        <b style={{color:T.textMid}}>How it works:</b> For each product, Claude searches the web for the official INCI ingredient list and a clean image. Ingredients are written to Firestore and pore scores are recalculated automatically. Images are uploaded to Firebase Storage for permanent URLs. Rate: ~1 product per 2 seconds.
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+      <div style={{background:T.surface,borderRadius:"1rem",padding:"1rem",border:`1px solid ${T.border}`}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.75rem"}}>
+          <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>{phase==="running"?"☢️ Running…":"✅ Nuclear Clean Complete"}</div>
+          {phase==="running"&&<button onClick={()=>stopRef.current=true} style={{padding:"0.35rem 0.75rem",background:T.rose+"18",color:T.rose,border:`1px solid ${T.rose}33`,borderRadius:"0.5rem",fontSize:"0.68rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Stop</button>}
+        </div>
+        {phase==="done"&&(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:"0.5rem",marginBottom:"0.75rem"}}>
+            {[["✓ Cleaned",stats.cleaned,T.sage],["🗑 Deleted",stats.deleted,T.rose],["+ Added",stats.added,T.accent],["✗ Failed",stats.skipped,T.amber]].map(([label,val,color])=>(
+              <div key={label} style={{background:T.surfaceAlt,borderRadius:"0.6rem",padding:"0.5rem",textAlign:"center"}}>
+                <div style={{fontSize:"1.1rem",fontWeight:"700",color,fontFamily:"'Inter',sans-serif"}}>{val}</div>
+                <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{background:"#0C1220",borderRadius:"0.75rem",padding:"0.75rem",height:"320px",overflowY:"auto",fontFamily:"monospace",fontSize:"0.62rem",lineHeight:1.7}}>
+          {log.map((l,i)=><div key={i} style={{color:logColors[l.type]||"#9AACBC",whiteSpace:"pre-wrap"}}>{l.msg}</div>)}
+          {phase==="running"&&<div style={{color:T.amber}}>⟳ working…</div>}
+        </div>
+        {phase==="done"&&(
+          <div style={{marginTop:"0.75rem",display:"flex",gap:"0.5rem"}}>
+            <button onClick={onBack} style={{flex:1,padding:"0.6rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.75rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back to Cleanup</button>
+            <div style={{flex:1,padding:"0.6rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.65rem",color:T.textMid,fontFamily:"'Inter',sans-serif",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center"}}>Next: ✨ AI Enrich</div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -12713,6 +10689,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
   if (section === "imagepicker") return <AdminImagePicker products={products} setProducts={setProducts} onBack={()=>setSection(null)}/>;
   if (section === "bulk") return <AdminBulkImageUpload onBack={()=>setSection(null)}/>;
   if (section === "enrich") return <AdminEnrichPipeline onBack={()=>setSection(null)}/>;
+  if (section === "nuclear") return <AdminNuclearClean onBack={()=>setSection(null)}/>;
 
 
   return (
@@ -12784,6 +10761,11 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
           style={{padding:"0.7rem",background:"#7C3AED",border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
           <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>✨ AI Enrich</div>
           <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.7)",marginTop:"2px"}}>Auto-fill ingredients + images</div>
+        </button>
+        <button onClick={()=>setSection("nuclear")}
+          style={{padding:"0.7rem",background:T.rose,border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>☢️ Nuclear Clean</div>
+          <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.7)",marginTop:"2px"}}>Reset fields, keep scan history</div>
         </button>
         <button onClick={()=>setSection("imagepicker")}
           style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
