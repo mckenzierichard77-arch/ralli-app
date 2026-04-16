@@ -6957,6 +6957,8 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
     }
 
     setPrefilling(false);
+    // Always keep the original id — never let prefill overwrite it
+    result.id = p.id;
     return result;
   }
 
@@ -9012,10 +9014,19 @@ function AdminProductHub() {
   }
 
   async function uploadImage(file, productId) {
-    const ext = file.type.split("/")[1]||"jpg";
-    const ref = storageRef(storage, `products/${productId}/image.${ext}`);
-    await uploadBytes(ref, file, { contentType: file.type });
-    return await getDownloadURL(ref);
+    if (!productId || productId.length < 5) throw new Error("Invalid product ID: " + productId);
+    // Normalize mime type and extension
+    let mime = file.type || "image/jpeg";
+    if (mime === "image/jpg") mime = "image/jpeg";
+    const extMap = {"image/jpeg":"jpg","image/png":"png","image/webp":"webp","image/heic":"jpg","image/heif":"jpg"};
+    const ext = extMap[mime] || "jpg";
+    const path = `products/${productId}/admin_image.${ext}`;
+    const ref = storageRef(storage, path);
+    await uploadBytes(ref, file, { contentType: mime });
+    const url = await getDownloadURL(ref);
+    // Also write directly to Firestore so it's saved even if user forgets to hit Save
+    await updateDoc(doc(db, "products", productId), { adminImage: url, image: url, updatedAt: Date.now() });
+    return url;
   }
 
   async function handleImgUpload(file, isSwipe=false) {
@@ -9035,6 +9046,7 @@ function AdminProductHub() {
     const src = isSwipe ? swipeEdit : editing;
     const score = isSwipe ? swipeLiveScore : liveScore;
     if (!src) return;
+    if (!src.id || src.id.length < 5) { alert("Save failed: invalid product ID. Please go back and reopen the product."); return; }
     if (isSwipe) setSwipeSaving(true); else setSaving(true);
     try {
       const updates = {
@@ -9428,7 +9440,7 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
                 💄 Sephora
               </a>
             )}
-            <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Upload from device or tap a link to find an image, copy the URL, then paste below.</div>
+            <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Upload from device — or tap Google Images / Sephora to find one, save it to your camera roll, then upload.</div>
             {(src.adminImage||src.image)&&<button onClick={()=>setSrc(e=>({...e,adminImage:"",image:""}))} style={{padding:"0.3rem 0.6rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.6rem",color:T.rose,cursor:"pointer",fontFamily:"'Inter',sans-serif",alignSelf:"flex-start"}}>Remove image</button>}
           </div>
         </div>
