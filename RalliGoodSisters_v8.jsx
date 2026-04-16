@@ -6920,6 +6920,46 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
     const r = analyzeIngredients(p.ingredients);
     return r.avgScore != null ? Math.round(r.avgScore) : 99;
   };
+  // ── Auto-prefill from OBF + generate links ──
+  async function prefillProduct(p) {
+    setPrefilling(true);
+    const result = { ...p };
+
+    // Always generate links
+    const q = encodeURIComponent(`${p.brand||""} ${p.productName||""}`.trim());
+    result.buyUrl = result.buyUrl || `https://www.amazon.com/s?k=${q}&i=beauty&tag=ralliapp-20`;
+    result.googleSearch = `https://www.google.com/search?q=${encodeURIComponent((p.brand||"")+" "+(p.productName||"")+" ingredients site:incidecoder.com OR site:sephora.com")}`;
+    result.inciSearch = `https://incidecoder.com/search?query=${encodeURIComponent((p.brand||"")+" "+(p.productName||""))}`;
+
+    // Try OBF for ingredients if missing
+    if (!(result.ingredients||"").trim()) {
+      try {
+        // Try barcode first
+        if (p.barcode && !/^seed_/.test(p.barcode)) {
+          const r = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${p.barcode}.json`, {signal:AbortSignal.timeout(5000)});
+          const d = await r.json();
+          if (d.status===1) {
+            const ing = d.product?.ingredients_text_en || d.product?.ingredients_text || "";
+            if (ing.length > 10) result.ingredients = ing;
+          }
+        }
+        // Try name search
+        if (!result.ingredients) {
+          const searchQ = encodeURIComponent(`${p.brand||""} ${p.productName||""}`.trim());
+          const r = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${searchQ}&search_simple=1&action=process&json=1&page_size=3&fields=product_name,brands,ingredients_text,ingredients_text_en`, {signal:AbortSignal.timeout(5000)});
+          const d = await r.json();
+          const brandLow = (p.brand||"").toLowerCase().split(" ")[0];
+          const hit = (d.products||[]).find(x=>(x.brands||"").toLowerCase().includes(brandLow)) || (d.products||[])[0];
+          const ing = hit?.ingredients_text_en || hit?.ingredients_text || "";
+          if (ing.length > 10) result.ingredients = ing;
+        }
+      } catch(e) { console.warn("OBF fetch failed", e); }
+    }
+
+    setPrefilling(false);
+    return result;
+  }
+
   const hasImg = p => { const img = (p.adminImage||p.image||p.productImage||"").trim(); return img.startsWith("http"); };
   const skinMatched = skinType.length
     ? (products||[]).filter(p => getLiveScore(p) <= 1 && hasImg(p) && p.skinTypes?.some(s => skinType.includes(s) || s === "All"))
@@ -8903,6 +8943,7 @@ function AdminProductHub() {
   const addImgRef = React.useRef(null);
 
   const imgInputRef = React.useRef(null);
+  const [prefilling, setPrefilling] = React.useState(false);
 
   const CATEGORIES = ["Face Wash","Moisturiser","Serum","SPF","Toner","Eye Cream","Mask","Acne Treatment","Body","Hair","Lip"];
   const SKIN_TYPES = ["All","Oily","Dry","Sensitive","Combination","Normal","Acne-prone","Ageing","Dull","Hyperpigmentation"];
@@ -8944,9 +8985,15 @@ function AdminProductHub() {
     ready: products.filter(p=>hasImg(p)&&hasIng(p)).length,
   };
 
-  function openEdit(p) {
-    setEditing({ ...p, skinTypes: Array.isArray(p.skinTypes)?p.skinTypes:(p.skinTypes||"").split(",").map(s=>s.trim()).filter(Boolean) });
+  async function openEdit(p) {
+    const base = { ...p, skinTypes: Array.isArray(p.skinTypes)?p.skinTypes:(p.skinTypes||"").split(",").map(s=>s.trim()).filter(Boolean) };
+    setEditing(base);
     setLiveScore(p.poreScore??null);
+    const filled = await prefillProduct(p);
+    setEditing(e => e?.id===p.id ? { ...e, ...filled, skinTypes: Array.isArray(p.skinTypes)?p.skinTypes:(p.skinTypes||"").split(",").map(s=>s.trim()).filter(Boolean) } : e);
+    if (filled.ingredients) {
+      try { const a=analyzeIngredients(filled.ingredients); if(a?.avgScore!=null) setLiveScore(Math.round(a.avgScore)); } catch {}
+    }
   }
 
   function handleIngChange(val, isSwipe=false) {
@@ -9006,9 +9053,18 @@ function AdminProductHub() {
       await updateDoc(doc(db,"products",src.id), updates);
       setProducts(ps=>ps.map(p=>p.id===src.id?{...p,...updates}:p));
       if (isSwipe) {
-        setSwipeIdx(i => i+1);
-        const next = swipeQueue[swipeIdx+1];
-        if (next) { setSwipeEdit({...next,skinTypes:Array.isArray(next.skinTypes)?next.skinTypes:[]}); setSwipeLiveScore(next.poreScore??null); }
+        const nextIdx = swipeIdx + 1;
+        setSwipeIdx(nextIdx);
+        const next = swipeQueue[nextIdx];
+        if (next) {
+          const base = {...next, skinTypes:Array.isArray(next.skinTypes)?next.skinTypes:[]};
+          setSwipeEdit(base);
+          setSwipeLiveScore(next.poreScore??null);
+          prefillProduct(next).then(filled => {
+            setSwipeEdit(e => e?.id===next.id ? {...e,...filled,skinTypes:base.skinTypes} : e);
+            if (filled.ingredients) { try { const a=analyzeIngredients(filled.ingredients); if(a?.avgScore!=null) setSwipeLiveScore(Math.round(a.avgScore)); } catch {} }
+          });
+        }
       } else {
         setSavedId(src.id); setEditing(null); setTimeout(()=>setSavedId(null),2500);
       }
@@ -9016,17 +9072,32 @@ function AdminProductHub() {
     if (isSwipe) setSwipeSaving(false); else setSaving(false);
   }
 
-  function skipSwipe() {
-    setSwipeIdx(i=>i+1);
-    const next = swipeQueue[swipeIdx+1];
-    if (next) { setSwipeEdit({...next,skinTypes:Array.isArray(next.skinTypes)?next.skinTypes:[]}); setSwipeLiveScore(next.poreScore??null); }
+  async function skipSwipe() {
+    const nextIdx = swipeIdx + 1;
+    setSwipeIdx(nextIdx);
+    const next = swipeQueue[nextIdx];
+    if (next) {
+      const base = {...next, skinTypes:Array.isArray(next.skinTypes)?next.skinTypes:[]};
+      setSwipeEdit(base);
+      setSwipeLiveScore(next.poreScore??null);
+      const filled = await prefillProduct(next);
+      setSwipeEdit(e => e?.id===next.id ? {...e,...filled,skinTypes:base.skinTypes} : e);
+      if (filled.ingredients) { try { const a=analyzeIngredients(filled.ingredients); if(a?.avgScore!=null) setSwipeLiveScore(Math.round(a.avgScore)); } catch {} }
+    }
   }
 
-  function startSwipe() {
+  async function startSwipe() {
     setSwipeIdx(0);
-    const first = swipeQueue[0];
-    if (first) { setSwipeEdit({...first,skinTypes:Array.isArray(first.skinTypes)?first.skinTypes:[]}); setSwipeLiveScore(first.poreScore??null); }
     setMode("swipe");
+    const first = swipeQueue[0];
+    if (first) {
+      const base = {...first, skinTypes:Array.isArray(first.skinTypes)?first.skinTypes:[]};
+      setSwipeEdit(base);
+      setSwipeLiveScore(first.poreScore??null);
+      const filled = await prefillProduct(first);
+      setSwipeEdit(e => e?.id===first.id ? {...e,...filled,skinTypes:base.skinTypes} : e);
+      if (filled.ingredients) { try { const a=analyzeIngredients(filled.ingredients); if(a?.avgScore!=null) setSwipeLiveScore(Math.round(a.avgScore)); } catch {} }
+    }
   }
 
   async function saveNewProduct() {
@@ -9163,8 +9234,25 @@ function AdminProductHub() {
             {/* Ingredients + score */}
             <div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.3rem"}}>
-                <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",textTransform:"uppercase",letterSpacing:"0.05em"}}>Ingredients</div>
+                <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",textTransform:"uppercase",letterSpacing:"0.05em"}}>
+                  Ingredients {prefilling&&<span style={{color:T.amber,marginLeft:"0.3rem"}}>⟳ fetching…</span>}
+                </div>
                 {swipeLiveScore!==null&&<div style={{fontSize:"0.78rem",fontWeight:"700",color:scoreColor(swipeLiveScore),fontFamily:"'Inter',sans-serif"}}>Pore score: {swipeLiveScore}/5</div>}
+              </div>
+              {/* Quick links */}
+              <div style={{display:"flex",gap:"0.3rem",marginBottom:"0.4rem",flexWrap:"wrap"}}>
+                {swipeEdit?.inciSearch&&<a href={swipeEdit.inciSearch} target="_blank" rel="noopener noreferrer"
+                  style={{padding:"0.25rem 0.55rem",background:"#E8F4FD",color:"#1A73E8",borderRadius:"0.4rem",fontSize:"0.6rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
+                  🔬 INCI Decoder
+                </a>}
+                {swipeEdit?.googleSearch&&<a href={swipeEdit.googleSearch} target="_blank" rel="noopener noreferrer"
+                  style={{padding:"0.25rem 0.55rem",background:"#FEF3E2",color:"#EA8600",borderRadius:"0.4rem",fontSize:"0.6rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
+                  🔍 Google ingredients
+                </a>}
+                {swipeEdit?.buyUrl&&<a href={swipeEdit.buyUrl} target="_blank" rel="noopener noreferrer"
+                  style={{padding:"0.25rem 0.55rem",background:"#FFF3E0",color:"#E65100",borderRadius:"0.4rem",fontSize:"0.6rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
+                  🛒 Amazon
+                </a>}
               </div>
               <textarea value={swipeEdit?.ingredients||""} onChange={e=>handleIngChange(e.target.value,true)} rows={4}
                 placeholder="Paste INCI ingredient list…"
@@ -9425,14 +9513,28 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
           <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Ingredients</div>
           {score!==null&&<div style={{fontSize:"0.78rem",fontWeight:"700",color:scoreColor(score),fontFamily:"'Inter',sans-serif"}}>Pore score: {score}/5</div>}
         </div>
+        {/* Quick search links */}
+        <div style={{display:"flex",gap:"0.35rem",marginBottom:"0.4rem",flexWrap:"wrap"}}>
+          {src.inciSearch&&<a href={src.inciSearch} target="_blank" rel="noopener noreferrer"
+            style={{padding:"0.3rem 0.65rem",background:"#E8F4FD",color:"#1A73E8",borderRadius:"0.4rem",fontSize:"0.65rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
+            🔬 INCI Decoder
+          </a>}
+          {src.googleSearch&&<a href={src.googleSearch} target="_blank" rel="noopener noreferrer"
+            style={{padding:"0.3rem 0.65rem",background:"#FEF3E2",color:"#EA8600",borderRadius:"0.4rem",fontSize:"0.65rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
+            🔍 Google ingredients
+          </a>}
+        </div>
         <textarea value={src.ingredients||""} onChange={e=>onIngChange(e.target.value)} rows={5}
           placeholder="Paste full INCI ingredient list…"
           style={{width:"100%",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.68rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box",lineHeight:1.5}}/>
         <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginTop:"0.2rem"}}>Copy from brand website, Sephora, or incidecoder.com</div>
       </div>
-      {/* Buy URL */}
+      {/* Buy URL + Amazon link */}
       <div>
-        <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Buy URL (optional)</div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.25rem"}}>
+          <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Buy URL (optional)</div>
+          {src.buyUrl&&<a href={src.buyUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:"0.6rem",color:T.accent,fontFamily:"'Inter',sans-serif"}}>Preview ↗</a>}
+        </div>
         <input value={src.buyUrl||""} onChange={e=>setSrc(s=>({...s,buyUrl:e.target.value}))} placeholder="https://…"
           style={{width:"100%",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.72rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
       </div>
