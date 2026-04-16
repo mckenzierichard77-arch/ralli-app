@@ -9014,7 +9014,7 @@ function AdminProductHub() {
   }
 
   async function uploadImage(file, productId) {
-    if (!productId || productId.length < 5) throw new Error("Invalid product ID: " + productId);
+    if (!productId || productId.length < 10) throw new Error("Invalid product ID: " + productId);
     // Normalize mime type and extension
     let mime = file.type || "image/jpeg";
     if (mime === "image/jpg") mime = "image/jpeg";
@@ -9046,7 +9046,7 @@ function AdminProductHub() {
     const src = isSwipe ? swipeEdit : editing;
     const score = isSwipe ? swipeLiveScore : liveScore;
     if (!src) return;
-    if (!src.id || src.id.length < 5) {
+    if (!src.id || src.id.length < 10) {
       if (isSwipe) { skipSwipe(); return; } // skip bad products in swipe mode
       alert("Save failed: invalid product ID (" + src.id + "). This product may be corrupted — delete it from Firestore.");
       return;
@@ -10247,6 +10247,18 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
           style={{padding:"0.7rem",background:T.rose,border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
           <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>☢️ Nuclear Clean</div>
           <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.7)",marginTop:"2px"}}>Reset fields, keep scan history</div>
+        </button>
+        <button onClick={async()=>{
+          const snap = await getDocs(collection(db,"products"));
+          const bad = snap.docs.filter(d=>d.id.length<10);
+          if(!bad.length){alert("No corrupted products found!");return;}
+          if(!window.confirm(`Delete ${bad.length} corrupted product(s) with bad IDs (${bad.map(d=>d.id).join(", ")})?`))return;
+          await Promise.all(bad.map(d=>deleteDoc(doc(db,"products",d.id))));
+          alert(`Deleted ${bad.length} corrupted products.`);
+        }}
+          style={{padding:"0.7rem",background:"#7C3AED",border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>🧹 Purge Bad IDs</div>
+          <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.7)",marginTop:"2px"}}>Delete corrupted docs (c3, c4…)</div>
         </button>
         <button onClick={()=>setSection("imagepicker")}
           style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
