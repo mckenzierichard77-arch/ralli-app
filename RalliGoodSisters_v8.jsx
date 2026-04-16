@@ -8873,17 +8873,43 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
 // ── Admin Products Tab ──────────────────────────────────────────────────────
 // Simple product manager: filter, edit inline, export/upload CSV
 function AdminProductHub() {
-  const [products, setProducts] = React.useState([]);
-  const [loading, setLoading]   = React.useState(true);
-  const [filter, setFilter]     = React.useState("all"); // all | noimage | noingredients | both
-  const [search, setSearch]     = React.useState("");
-  const [editing, setEditing]   = React.useState(null); // product being edited
-  const [saving, setSaving]     = React.useState(false);
-  const [saved, setSaved]       = React.useState(null);
+  const [products, setProducts]   = React.useState([]);
+  const [loading, setLoading]     = React.useState(true);
+  const [mode, setMode]           = React.useState("list"); // list | swipe | add
+  const [filter, setFilter]       = React.useState("all");
+  const [sort, setSort]           = React.useState("scans");
+  const [search, setSearch]       = React.useState("");
+  const [editing, setEditing]     = React.useState(null);
+  const [saving, setSaving]       = React.useState(false);
+  const [savedId, setSavedId]     = React.useState(null);
+  const [uploadingImg, setUploadingImg] = React.useState(false);
+  const [liveScore, setLiveScore] = React.useState(null);
 
-  React.useEffect(() => { loadProducts(); }, []);
+  // Swipe mode
+  const [swipeIdx, setSwipeIdx]   = React.useState(0);
+  const [swipeFilter, setSwipeFilter] = React.useState("both"); // what to swipe through
+  const [swipeSaving, setSwipeSaving] = React.useState(false);
+  const [swipeEdit, setSwipeEdit] = React.useState(null);
+  const [swipeLiveScore, setSwipeLiveScore] = React.useState(null);
+  const swipeImgRef = React.useRef(null);
 
-  async function loadProducts() {
+  // Add product mode
+  const [addSearch, setAddSearch] = React.useState("");
+  const [addForm, setAddForm]     = React.useState({ productName:"", brand:"", category:"", skinTypes:[], ingredients:"", buyUrl:"", reason:"" });
+  const [addImg, setAddImg]       = React.useState(null); // {file, preview}
+  const [addScore, setAddScore]   = React.useState(null);
+  const [addSaving, setAddSaving] = React.useState(false);
+  const [addDone, setAddDone]     = React.useState(false);
+  const addImgRef = React.useRef(null);
+
+  const imgInputRef = React.useRef(null);
+
+  const CATEGORIES = ["Face Wash","Moisturiser","Serum","SPF","Toner","Eye Cream","Mask","Acne Treatment","Body","Hair","Lip"];
+  const SKIN_TYPES = ["All","Oily","Dry","Sensitive","Combination","Normal","Acne-prone","Ageing","Dull","Hyperpigmentation"];
+
+  React.useEffect(() => { load(); }, []);
+
+  async function load() {
     setLoading(true);
     try {
       const snap = await getDocs(collection(db, "products"));
@@ -8892,247 +8918,536 @@ function AdminProductHub() {
     setLoading(false);
   }
 
-  // ── Helpers ──
-  const hasImg = p => {
-    const url = (p.adminImage || p.image || "").trim();
-    return url.length > 8 && !url.includes("openbeautyfacts") && !url.startsWith("blob:");
-  };
-  const hasIng = p => (p.ingredients || "").trim().length > 10;
+  const hasImg = p => { const u=(p.adminImage||p.image||"").trim(); return u.length>8&&!u.includes("openbeautyfacts")&&!u.startsWith("blob:"); };
+  const hasIng = p => (p.ingredients||"").trim().length > 10;
 
-  // ── Filters ──
-  const filtered = products.filter(p => {
-    if (filter === "noimage")       return !hasImg(p);
-    if (filter === "noingredients") return !hasIng(p);
-    if (filter === "both")          return !hasImg(p) && !hasIng(p);
-    if (filter === "ready")         return hasImg(p) && hasIng(p);
-    return true;
-  }).filter(p => {
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
-    return (p.productName||"").toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q);
-  });
+  const filtered = products
+    .filter(p => {
+      if (filter==="noimage")       return !hasImg(p);
+      if (filter==="noingredients") return !hasIng(p);
+      if (filter==="both")          return !hasImg(p)&&!hasIng(p);
+      if (filter==="ready")         return hasImg(p)&&hasIng(p);
+      return true;
+    })
+    .filter(p => { if(!search.trim()) return true; const q=search.toLowerCase(); return (p.productName||"").toLowerCase().includes(q)||(p.brand||"").toLowerCase().includes(q); })
+    .sort((a,b) => { if(sort==="scans") return (b.scanCount||0)-(a.scanCount||0); if(sort==="name") return (a.productName||"").localeCompare(b.productName||""); return (b.updatedAt||0)-(a.updatedAt||0); });
+
+  const swipeQueue = products
+    .filter(p => { if(swipeFilter==="both") return !hasImg(p)&&!hasIng(p); if(swipeFilter==="noimage") return !hasImg(p); if(swipeFilter==="noingredients") return !hasIng(p); return true; })
+    .sort((a,b) => (b.scanCount||0)-(a.scanCount||0));
 
   const counts = {
-    all:            products.length,
-    noimage:        products.filter(p => !hasImg(p)).length,
-    noingredients:  products.filter(p => !hasIng(p)).length,
-    both:           products.filter(p => !hasImg(p) && !hasIng(p)).length,
-    ready:          products.filter(p => hasImg(p) && hasIng(p)).length,
+    all: products.length,
+    noimage: products.filter(p=>!hasImg(p)).length,
+    noingredients: products.filter(p=>!hasIng(p)).length,
+    both: products.filter(p=>!hasImg(p)&&!hasIng(p)).length,
+    ready: products.filter(p=>hasImg(p)&&hasIng(p)).length,
   };
 
-  // ── Export CSV ──
-  async function exportCsv() {
-    const snap = await getDocs(collection(db, "products"));
-    const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    function esc(v) {
-      v = (v == null ? "" : String(v)).replace(/\r?\n/g, " ");
-      return (v.includes(",") || v.includes('"')) ? `"${v.replace(/"/g,'""')}"` : v;
-    }
-    const headers = ["productName","brand","imageUrl","ingredients","category","skinTypes","buyUrl","barcode","reason"];
-    const lines = [headers.join(",")];
-    rows.forEach(r => {
-      lines.push([
-        esc(r.productName), esc(r.brand),
-        esc(r.adminImage || r.image || ""),
-        esc(r.ingredients || ""),
-        esc(r.category || ""),
-        esc(Array.isArray(r.skinTypes) ? r.skinTypes.join(",") : r.skinTypes || ""),
-        esc(r.buyUrl || ""),
-        esc(r.barcode || ""),
-        esc(r.reason || ""),
-      ].join(","));
-    });
-    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-    a.download = "ralli_products.csv"; a.click();
+  function openEdit(p) {
+    setEditing({ ...p, skinTypes: Array.isArray(p.skinTypes)?p.skinTypes:(p.skinTypes||"").split(",").map(s=>s.trim()).filter(Boolean) });
+    setLiveScore(p.poreScore??null);
   }
 
-  // ── Save inline edit ──
-  async function saveEdit() {
-    if (!editing) return;
-    setSaving(true);
+  function handleIngChange(val, isSwipe=false) {
+    if (isSwipe) {
+      setSwipeEdit(e=>({...e,ingredients:val}));
+      try { if(val.trim().length>10){const a=analyzeIngredients(val);if(a?.avgScore!=null)setSwipeLiveScore(Math.round(a.avgScore));}else setSwipeLiveScore(null); } catch { setSwipeLiveScore(null); }
+    } else {
+      setEditing(e=>({...e,ingredients:val}));
+      try { if(val.trim().length>10){const a=analyzeIngredients(val);if(a?.avgScore!=null)setLiveScore(Math.round(a.avgScore));}else setLiveScore(null); } catch { setLiveScore(null); }
+    }
+  }
+
+  function handleAddIngChange(val) {
+    setAddForm(f=>({...f,ingredients:val}));
+    try { if(val.trim().length>10){const a=analyzeIngredients(val);if(a?.avgScore!=null)setAddScore(Math.round(a.avgScore));}else setAddScore(null); } catch { setAddScore(null); }
+  }
+
+  async function uploadImage(file, productId) {
+    const ext = file.type.split("/")[1]||"jpg";
+    const ref = storageRef(storage, `products/${productId}/image.${ext}`);
+    await uploadBytes(ref, file, { contentType: file.type });
+    return await getDownloadURL(ref);
+  }
+
+  async function handleImgUpload(file, isSwipe=false) {
+    if (!file) return;
+    if (isSwipe) {
+      setSwipeSaving(true);
+      try { const url=await uploadImage(file,swipeEdit.id); setSwipeEdit(e=>({...e,adminImage:url,image:url})); } catch(e) { alert("Upload failed: "+e.message); }
+      setSwipeSaving(false);
+    } else {
+      setUploadingImg(true);
+      try { const url=await uploadImage(file,editing.id); setEditing(e=>({...e,adminImage:url,image:url})); } catch(e) { alert("Upload failed: "+e.message); }
+      setUploadingImg(false);
+    }
+  }
+
+  async function save(isSwipe=false) {
+    const src = isSwipe ? swipeEdit : editing;
+    const score = isSwipe ? swipeLiveScore : liveScore;
+    if (!src) return;
+    if (isSwipe) setSwipeSaving(true); else setSaving(true);
     try {
       const updates = {
-        productName:  editing.productName,
-        brand:        editing.brand,
-        category:     editing.category,
-        skinTypes:    typeof editing.skinTypes === "string"
-                        ? editing.skinTypes.split(",").map(s=>s.trim()).filter(Boolean)
-                        : editing.skinTypes || [],
-        reason:       editing.reason,
-        ingredients:  editing.ingredients,
-        adminImage:   editing.adminImage,
-        buyUrl:       editing.buyUrl,
-        approved:     editing.approved || false,
-        hidden:       editing.hidden || false,
-        updatedAt:    Date.now(),
+        productName: (src.productName||"").trim(),
+        brand:       (src.brand||"").trim(),
+        category:    src.category||"",
+        skinTypes:   Array.isArray(src.skinTypes)?src.skinTypes:(src.skinTypes||"").split(",").map(s=>s.trim()).filter(Boolean),
+        reason:      (src.reason||"").trim(),
+        ingredients: (src.ingredients||"").trim(),
+        buyUrl:      (src.buyUrl||"").trim(),
+        approved:    true,
+        updatedAt:   Date.now(),
       };
-      if (updates.ingredients) {
-        try { const a = analyzeIngredients(updates.ingredients); if (a?.avgScore!=null) updates.poreScore=Math.round(a.avgScore); } catch {}
+      if (src.adminImage) { updates.adminImage=src.adminImage; updates.image=src.adminImage; }
+      if (score!==null) updates.poreScore=score;
+      await updateDoc(doc(db,"products",src.id), updates);
+      setProducts(ps=>ps.map(p=>p.id===src.id?{...p,...updates}:p));
+      if (isSwipe) {
+        setSwipeIdx(i => i+1);
+        const next = swipeQueue[swipeIdx+1];
+        if (next) { setSwipeEdit({...next,skinTypes:Array.isArray(next.skinTypes)?next.skinTypes:[]}); setSwipeLiveScore(next.poreScore??null); }
+      } else {
+        setSavedId(src.id); setEditing(null); setTimeout(()=>setSavedId(null),2500);
       }
-      await updateDoc(doc(db, "products", editing.id), updates);
-      setProducts(ps => ps.map(p => p.id === editing.id ? { ...p, ...updates } : p));
-      setSaved(editing.id);
-      setEditing(null);
-      setTimeout(() => setSaved(null), 2000);
-    } catch(e) { alert("Save failed: " + e.message); }
-    setSaving(false);
+    } catch(e) { alert("Save failed: "+e.message); }
+    if (isSwipe) setSwipeSaving(false); else setSaving(false);
   }
 
-  const CATEGORIES = ["Face Wash","Moisturiser","Serum","SPF","Toner","Eye Cream","Mask","Acne Treatment","Body","Hair","Lip"];
+  function skipSwipe() {
+    setSwipeIdx(i=>i+1);
+    const next = swipeQueue[swipeIdx+1];
+    if (next) { setSwipeEdit({...next,skinTypes:Array.isArray(next.skinTypes)?next.skinTypes:[]}); setSwipeLiveScore(next.poreScore??null); }
+  }
+
+  function startSwipe() {
+    setSwipeIdx(0);
+    const first = swipeQueue[0];
+    if (first) { setSwipeEdit({...first,skinTypes:Array.isArray(first.skinTypes)?first.skinTypes:[]}); setSwipeLiveScore(first.poreScore??null); }
+    setMode("swipe");
+  }
+
+  async function saveNewProduct() {
+    if (!addForm.productName.trim()||!addForm.brand.trim()) { alert("Product name and brand are required"); return; }
+    setAddSaving(true);
+    try {
+      const newDoc = {
+        productName:   addForm.productName.trim(),
+        brand:         addForm.brand.trim(),
+        category:      addForm.category||"",
+        skinTypes:     addForm.skinTypes||[],
+        ingredients:   addForm.ingredients.trim(),
+        buyUrl:        addForm.buyUrl.trim(),
+        reason:        addForm.reason.trim(),
+        poreScore:     addScore||0,
+        approved:      true,
+        hidden:        false,
+        scanCount:     0,
+        communityRating: 0,
+        image:         "",
+        adminImage:    "",
+        barcode:       "",
+        createdAt:     Date.now(),
+        updatedAt:     Date.now(),
+      };
+      const ref = await addDoc(collection(db,"products"), newDoc);
+      // Upload image if selected
+      if (addImg?.file) {
+        const url = await uploadImage(addImg.file, ref.id);
+        await updateDoc(doc(db,"products",ref.id), { adminImage:url, image:url });
+        newDoc.adminImage=url; newDoc.image=url;
+      }
+      setProducts(ps=>[{id:ref.id,...newDoc},...ps]);
+      setAddDone(true);
+      setAddForm({productName:"",brand:"",category:"",skinTypes:[],ingredients:"",buyUrl:"",reason:""});
+      setAddImg(null); setAddScore(null); setAddSearch("");
+      setTimeout(()=>setAddDone(false),3000);
+    } catch(e) { alert("Failed to add: "+e.message); }
+    setAddSaving(false);
+  }
+
+  const scoreColor = s => s<=1?T.sage:s<=2?"#5B8C3E":s<=3?T.amber:T.rose;
+
+  async function exportCsv() {
+    function esc(v){v=(v==null?"":String(v)).replace(/\r?\n/g," ");return(v.includes(",")||v.includes('"'))?`"${v.replace(/"/g,'""')}"`:v;}
+    const headers=["productName","brand","imageUrl","ingredients","category","skinTypes","buyUrl","barcode","reason"];
+    const lines=[headers.join(","),...products.map(r=>[esc(r.productName),esc(r.brand),esc(r.adminImage||r.image||""),esc(r.ingredients||""),esc(r.category||""),esc(Array.isArray(r.skinTypes)?r.skinTypes.join(","):r.skinTypes||""),esc(r.buyUrl||""),esc(r.barcode||""),esc(r.reason||"")].join(","))];
+    const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([lines.join("\n")],{type:"text/csv"})); a.download="ralli_products.csv"; a.click();
+  }
 
   if (loading) return <div style={{padding:"2rem",textAlign:"center",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Loading products…</div>;
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // EDIT DRAWER (list mode)
+  // ─────────────────────────────────────────────────────────────────────────
+  if (editing) return (
+    <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+      <button onClick={()=>setEditing(null)} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",padding:0}}>← Back</button>
+      {renderEditForm({src:editing,setSrc:setEditing,score:liveScore,onIngChange:v=>handleIngChange(v,false),onImgUpload:f=>handleImgUpload(f,false),uploading:uploadingImg,imgRef:imgInputRef,onSave:()=>save(false),onCancel:()=>setEditing(null),saving,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin:(t)=>setEditing(e=>{const c=e.skinTypes||[];return{...e,skinTypes:c.includes(t)?c.filter(s=>s!==t):[...c,t]};})})}
+    </div>
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SWIPE MODE
+  // ─────────────────────────────────────────────────────────────────────────
+  if (mode==="swipe") {
+    const current = swipeQueue[swipeIdx];
+    if (!current || swipeIdx >= swipeQueue.length) return (
+      <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+        <button onClick={()=>setMode("list")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",padding:0}}>← Back</button>
+        <div style={{background:T.sage+"18",border:`1px solid ${T.sage}44`,borderRadius:"1rem",padding:"2rem",textAlign:"center"}}>
+          <div style={{fontSize:"1.5rem",marginBottom:"0.5rem"}}>🎉</div>
+          <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.sage,fontFamily:"'Inter',sans-serif"}}>All done!</div>
+          <div style={{fontSize:"0.72rem",color:T.textMid,fontFamily:"'Inter',sans-serif",marginTop:"0.25rem"}}>You've gone through all {swipeQueue.length} products in this queue.</div>
+          <button onClick={()=>{setMode("list");setSwipeIdx(0);}} style={{marginTop:"1rem",padding:"0.6rem 1.5rem",background:T.accent,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.75rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Back to list</button>
+        </div>
+      </div>
+    );
+
+    return (
+      <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+        {/* Header */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <button onClick={()=>setMode("list")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",padding:0}}>← Exit</button>
+          <div style={{fontSize:"0.72rem",color:T.textMid,fontFamily:"'Inter',sans-serif"}}>{swipeIdx+1} of {swipeQueue.length}</div>
+          <button onClick={skipSwipe} style={{background:"none",border:"none",color:T.textLight,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",padding:0}}>Skip →</button>
+        </div>
+
+        {/* Progress bar */}
+        <div style={{height:"3px",background:T.surfaceAlt,borderRadius:"999px"}}>
+          <div style={{height:"100%",background:T.accent,width:`${((swipeIdx)/swipeQueue.length)*100}%`,borderRadius:"999px",transition:"width 0.3s"}}/>
+        </div>
+
+        {/* Product card */}
+        <div style={{background:T.surface,borderRadius:"1rem",border:`1px solid ${T.border}`,overflow:"hidden"}}>
+          {/* Image area */}
+          <div style={{height:"180px",background:T.surfaceAlt,position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            {swipeEdit?.adminImage||swipeEdit?.image
+              ? <img src={swipeEdit?.adminImage||swipeEdit?.image} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+              : <div style={{fontSize:"3rem",opacity:0.3}}>📷</div>
+            }
+            <button onClick={()=>swipeImgRef.current?.click()}
+              style={{position:"absolute",bottom:"0.6rem",right:"0.6rem",padding:"0.45rem 0.85rem",background:"rgba(0,0,0,0.7)",color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.68rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+              {swipeSaving?"Uploading…":"📱 Upload image"}
+            </button>
+            <input ref={swipeImgRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>handleImgUpload(e.target.files[0],true)}/>
+          </div>
+
+          <div style={{padding:"1rem",display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+            {/* Name + brand */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
+              {[["Name","productName"],["Brand","brand"]].map(([label,field])=>(
+                <div key={field}>
+                  <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem",textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</div>
+                  <input value={swipeEdit?.[field]||""} onChange={e=>setSwipeEdit(s=>({...s,[field]:e.target.value}))}
+                    style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.72rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
+                </div>
+              ))}
+            </div>
+
+            {/* Category pills */}
+            <div>
+              <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.3rem",textTransform:"uppercase",letterSpacing:"0.05em"}}>Category</div>
+              <div style={{display:"flex",gap:"0.25rem",flexWrap:"wrap"}}>
+                {CATEGORIES.map(c=>(
+                  <button key={c} onClick={()=>setSwipeEdit(s=>({...s,category:c}))}
+                    style={{padding:"0.25rem 0.55rem",background:swipeEdit?.category===c?T.accent:T.surfaceAlt,color:swipeEdit?.category===c?"#fff":T.textMid,border:`1px solid ${swipeEdit?.category===c?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.6rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:swipeEdit?.category===c?"600":"400"}}>
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Ingredients + score */}
+            <div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.3rem"}}>
+                <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",textTransform:"uppercase",letterSpacing:"0.05em"}}>Ingredients</div>
+                {swipeLiveScore!==null&&<div style={{fontSize:"0.78rem",fontWeight:"700",color:scoreColor(swipeLiveScore),fontFamily:"'Inter',sans-serif"}}>Pore score: {swipeLiveScore}/5</div>}
+              </div>
+              <textarea value={swipeEdit?.ingredients||""} onChange={e=>handleIngChange(e.target.value,true)} rows={4}
+                placeholder="Paste INCI ingredient list…"
+                style={{width:"100%",padding:"0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.65rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box"}}/>
+            </div>
+
+            {/* Actions */}
+            <div style={{display:"flex",gap:"0.5rem"}}>
+              <button onClick={()=>save(true)} disabled={swipeSaving}
+                style={{flex:2,padding:"0.7rem",background:swipeSaving?"#ccc":T.sage,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:swipeSaving?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
+                {swipeSaving?"Saving…":"✓ Save & Next"}
+              </button>
+              <button onClick={skipSwipe}
+                style={{flex:1,padding:"0.7rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.75rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                Skip
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ADD PRODUCT MODE
+  // ─────────────────────────────────────────────────────────────────────────
+  if (mode==="add") return (
+    <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+      <button onClick={()=>setMode("list")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",padding:0}}>← Back</button>
+
+      <div style={{background:T.surface,borderRadius:"1rem",border:`1px solid ${T.border}`,padding:"1rem",display:"flex",flexDirection:"column",gap:"0.85rem"}}>
+        <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>+ Add New Product</div>
+
+        {addDone && <div style={{background:T.sage+"18",border:`1px solid ${T.sage}44`,borderRadius:"0.6rem",padding:"0.6rem 0.85rem",fontSize:"0.72rem",color:T.sage,fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>✓ Product added successfully!</div>}
+
+        {/* Image upload */}
+        <div>
+          <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.4rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Product Image</div>
+          <div style={{display:"flex",gap:"0.75rem",alignItems:"center"}}>
+            <div style={{width:"70px",height:"70px",borderRadius:"0.6rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+              {addImg?.preview ? <img src={addImg.preview} style={{width:"100%",height:"100%",objectFit:"cover"}}/> : <span style={{fontSize:"1.5rem"}}>📷</span>}
+            </div>
+            <button onClick={()=>addImgRef.current?.click()}
+              style={{padding:"0.55rem 1rem",background:T.accent,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+              📱 Pick image
+            </button>
+            <input ref={addImgRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f)setAddImg({file:f,preview:URL.createObjectURL(f)});}}/>
+          </div>
+        </div>
+
+        {/* Name + Brand */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
+          {[["Product Name *","productName"],["Brand *","brand"]].map(([label,field])=>(
+            <div key={field}>
+              <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</div>
+              <input value={addForm[field]||""} onChange={e=>setAddForm(f=>({...f,[field]:e.target.value}))}
+                style={{width:"100%",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
+            </div>
+          ))}
+        </div>
+
+        {/* Category */}
+        <div>
+          <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Category</div>
+          <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
+            {CATEGORIES.map(c=>(
+              <button key={c} onClick={()=>setAddForm(f=>({...f,category:c}))}
+                style={{padding:"0.3rem 0.65rem",background:addForm.category===c?T.accent:T.surfaceAlt,color:addForm.category===c?"#fff":T.textMid,border:`1px solid ${addForm.category===c?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.65rem",fontWeight:addForm.category===c?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                {c}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Skin types */}
+        <div>
+          <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Skin Types</div>
+          <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
+            {SKIN_TYPES.map(s=>{const active=(addForm.skinTypes||[]).includes(s);return(
+              <button key={s} onClick={()=>setAddForm(f=>({...f,skinTypes:active?f.skinTypes.filter(x=>x!==s):[...f.skinTypes,s]}))}
+                style={{padding:"0.3rem 0.65rem",background:active?T.sage:T.surfaceAlt,color:active?"#fff":T.textMid,border:`1px solid ${active?T.sage:T.border}`,borderRadius:"999px",fontSize:"0.65rem",fontWeight:active?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                {s}
+              </button>
+            );})}
+          </div>
+        </div>
+
+        {/* Ingredients */}
+        <div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.25rem"}}>
+            <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Ingredients</div>
+            {addScore!==null&&<div style={{fontSize:"0.78rem",fontWeight:"700",color:scoreColor(addScore),fontFamily:"'Inter',sans-serif"}}>Pore score: {addScore}/5</div>}
+          </div>
+          <textarea value={addForm.ingredients} onChange={e=>handleAddIngChange(e.target.value)} rows={4}
+            placeholder="Paste INCI ingredient list from brand website, Sephora, or incidecoder.com…"
+            style={{width:"100%",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.68rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box"}}/>
+        </div>
+
+        {/* Buy URL */}
+        <div>
+          <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Buy URL (optional)</div>
+          <input value={addForm.buyUrl} onChange={e=>setAddForm(f=>({...f,buyUrl:e.target.value}))} placeholder="https://…"
+            style={{width:"100%",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.72rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
+        </div>
+
+        <button onClick={saveNewProduct} disabled={addSaving||!addForm.productName.trim()||!addForm.brand.trim()}
+          style={{padding:"0.75rem",background:addSaving||!addForm.productName.trim()||!addForm.brand.trim()?"#ccc":T.accent,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.82rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+          {addSaving?"Adding…":"+ Add Product"}
+        </button>
+      </div>
+    </div>
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LIST MODE
+  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
 
-      {/* ── Header actions ── */}
-      <div style={{display:"flex",gap:"0.5rem",alignItems:"center",flexWrap:"wrap"}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…"
-          style={{flex:1,minWidth:"140px",padding:"0.55rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface}}/>
-        <button onClick={exportCsv}
-          style={{padding:"0.55rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"}}>
-          ⬇️ Export CSV
+      {/* Mode switcher */}
+      <div style={{display:"flex",gap:"0.5rem"}}>
+        <button onClick={()=>setMode("list")}
+          style={{flex:1,padding:"0.55rem",background:mode==="list"?T.accent:T.surfaceAlt,color:mode==="list"?"#fff":T.textMid,border:`1px solid ${mode==="list"?T.accent:T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+          📋 List
         </button>
-        <button onClick={loadProducts}
-          style={{padding:"0.55rem 0.75rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-          ↺
+        <button onClick={startSwipe}
+          style={{flex:1,padding:"0.55rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+          👆 Swipe ({counts.both} missing)
+        </button>
+        <button onClick={()=>setMode("add")}
+          style={{flex:1,padding:"0.55rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+          ＋ Add New
         </button>
       </div>
 
-      {/* ── Filter pills ── */}
-      <div style={{display:"flex",gap:"0.35rem",flexWrap:"wrap"}}>
-        {[
-          ["all",           `All (${counts.all})`],
-          ["noimage",       `No image (${counts.noimage})`,       T.rose],
-          ["noingredients", `No ingredients (${counts.noingredients})`, T.amber],
-          ["both",          `Both missing (${counts.both})`,      "#7C3AED"],
-          ["ready",         `Complete (${counts.ready})`,         T.sage],
-        ].map(([id, label, color]) => (
-          <button key={id} onClick={() => setFilter(id)}
-            style={{
-              padding:"0.35rem 0.75rem",
-              background: filter===id ? (color||T.accent) : T.surfaceAlt,
-              color: filter===id ? "#fff" : T.textMid,
-              border: `1px solid ${filter===id ? (color||T.accent) : T.border}`,
-              borderRadius:"999px", fontSize:"0.68rem", fontWeight: filter===id?"600":"400",
-              cursor:"pointer", fontFamily:"'Inter',sans-serif"
-            }}>
+      {/* Swipe filter selector */}
+      <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
+        <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Swipe queue:</div>
+        {[["both","Missing both"],["noimage","No image"],["noingredients","No ingredients"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setSwipeFilter(id)}
+            style={{padding:"0.25rem 0.6rem",background:swipeFilter===id?T.accent:T.surfaceAlt,color:swipeFilter===id?"#fff":T.textMid,border:`1px solid ${swipeFilter===id?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.6rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
             {label}
           </button>
         ))}
       </div>
 
-      {/* ── Product list ── */}
+      {/* Search + actions */}
+      <div style={{display:"flex",gap:"0.5rem",alignItems:"center"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…"
+          style={{flex:1,padding:"0.55rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface}}/>
+        <button onClick={exportCsv} style={{padding:"0.55rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>⬇️</button>
+        <button onClick={load} style={{padding:"0.55rem 0.75rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>↺</button>
+      </div>
+
+      {/* Sort */}
+      <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
+        <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginRight:"0.2rem"}}>Sort:</div>
+        {[["scans","Most scanned"],["name","A–Z"],["recent","Recent"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setSort(id)}
+            style={{padding:"0.25rem 0.6rem",background:sort===id?T.accent:T.surfaceAlt,color:sort===id?"#fff":T.textMid,border:`1px solid ${sort===id?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.62rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:sort===id?"600":"400"}}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Filter pills */}
+      <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
+        {[["all",`All (${counts.all})`,null],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage]].map(([id,label,color])=>(
+          <button key={id} onClick={()=>setFilter(id)}
+            style={{padding:"0.3rem 0.7rem",background:filter===id?(color||T.accent):T.surfaceAlt,color:filter===id?"#fff":T.textMid,border:`1px solid ${filter===id?(color||T.accent):T.border}`,borderRadius:"999px",fontSize:"0.65rem",fontWeight:filter===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Product list */}
       <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
-        {filtered.length === 0 && (
-          <div style={{padding:"2rem",textAlign:"center",color:T.textLight,fontSize:"0.78rem",fontFamily:"'Inter',sans-serif"}}>
-            No products match this filter.
-          </div>
-        )}
-        {filtered.map(p => {
-          const isEditing = editing?.id === p.id;
-          const imgOk = hasImg(p);
-          const ingOk = hasIng(p);
-
-          if (isEditing) return (
-            <div key={p.id} style={{background:T.surface,border:`2px solid ${T.accent}`,borderRadius:"0.85rem",padding:"1rem"}}>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem",marginBottom:"0.5rem"}}>
-                {[
-                  ["Product Name", "productName"],
-                  ["Brand", "brand"],
-                  ["Buy URL", "buyUrl"],
-                  ["Image URL", "adminImage"],
-                ].map(([label, field]) => (
-                  <div key={field}>
-                    <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>{label}</div>
-                    <input value={editing[field]||""} onChange={e=>setEditing({...editing,[field]:e.target.value})}
-                      style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.7rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
-                  </div>
-                ))}
-              </div>
-              <div style={{marginBottom:"0.5rem"}}>
-                <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>Category</div>
-                <select value={editing.category||""} onChange={e=>setEditing({...editing,category:e.target.value})}
-                  style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.7rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt}}>
-                  <option value="">— select —</option>
-                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <div style={{marginBottom:"0.5rem"}}>
-                <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>Skin Types (comma-separated)</div>
-                <input value={Array.isArray(editing.skinTypes)?editing.skinTypes.join(","):editing.skinTypes||""} onChange={e=>setEditing({...editing,skinTypes:e.target.value})}
-                  style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.7rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
-              </div>
-              <div style={{marginBottom:"0.5rem"}}>
-                <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>Reason (1 line)</div>
-                <input value={editing.reason||""} onChange={e=>setEditing({...editing,reason:e.target.value})}
-                  style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.7rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
-              </div>
-              <div style={{marginBottom:"0.75rem"}}>
-                <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem"}}>Ingredients</div>
-                <textarea value={editing.ingredients||""} onChange={e=>setEditing({...editing,ingredients:e.target.value})} rows={4}
-                  style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.65rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box"}}/>
-              </div>
-              <div style={{display:"flex",gap:"0.5rem"}}>
-                <button onClick={saveEdit} disabled={saving}
-                  style={{flex:1,padding:"0.55rem",background:T.accent,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.75rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                  {saving ? "Saving…" : "Save"}
-                </button>
-                <button onClick={()=>setEditing(null)}
-                  style={{padding:"0.55rem 1rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.75rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                  Cancel
-                </button>
-              </div>
-            </div>
-          );
-
+        {filtered.length===0&&<div style={{padding:"2rem",textAlign:"center",color:T.textLight,fontSize:"0.78rem",fontFamily:"'Inter',sans-serif"}}>No products match this filter.</div>}
+        {filtered.map(p=>{
+          const imgOk=hasImg(p), ingOk=hasIng(p), scans=p.scanCount||0;
           return (
-            <div key={p.id}
-              style={{background:saved===p.id?T.sage+"18":T.surface,border:`1px solid ${saved===p.id?T.sage:T.border}`,borderRadius:"0.75rem",padding:"0.65rem 0.85rem",display:"flex",alignItems:"center",gap:"0.65rem",cursor:"pointer",transition:"border 0.2s"}}
-              onClick={()=>setEditing({...p, skinTypes: Array.isArray(p.skinTypes)?p.skinTypes.join(","):p.skinTypes||""})}>
-
-              {/* Image thumbnail */}
-              <div style={{width:"40px",height:"40px",borderRadius:"0.4rem",background:T.surfaceAlt,flexShrink:0,overflow:"hidden",border:`1px solid ${T.border}`}}>
-                {imgOk
-                  ? <img src={p.adminImage||p.image} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
-                  : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1rem"}}>📷</div>
-                }
+            <div key={p.id} onClick={()=>openEdit(p)}
+              style={{background:savedId===p.id?T.sage+"18":T.surface,border:`1px solid ${savedId===p.id?T.sage:T.border}`,borderRadius:"0.75rem",padding:"0.65rem 0.85rem",display:"flex",alignItems:"center",gap:"0.65rem",cursor:"pointer"}}>
+              <div style={{width:"44px",height:"44px",borderRadius:"0.5rem",background:T.surfaceAlt,flexShrink:0,overflow:"hidden",border:`1px solid ${T.border}`}}>
+                {imgOk?<img src={p.adminImage||p.image} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>:<div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1.1rem"}}>📷</div>}
               </div>
-
-              {/* Info */}
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
-                <div style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{p.brand}{p.category ? ` · ${p.category}` : ""}</div>
+                <div style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
+                  {p.brand}{p.category?` · ${p.category}`:""}{scans>0&&<span style={{color:T.accent,fontWeight:"600"}}> · {scans} scans</span>}
+                </div>
               </div>
-
-              {/* Status pills */}
-              <div style={{display:"flex",gap:"0.25rem",flexShrink:0}}>
-                <span style={{fontSize:"0.58rem",padding:"0.15rem 0.4rem",borderRadius:"999px",background:imgOk?T.sage+"22":T.rose+"22",color:imgOk?T.sage:T.rose,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>
-                  {imgOk?"img ✓":"no img"}
-                </span>
-                <span style={{fontSize:"0.58rem",padding:"0.15rem 0.4rem",borderRadius:"999px",background:ingOk?T.sage+"22":T.amber+"22",color:ingOk?T.sage:T.amber,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>
-                  {ingOk?"ing ✓":"no ing"}
-                </span>
+              <div style={{display:"flex",flexDirection:"column",gap:"0.2rem",alignItems:"flex-end",flexShrink:0}}>
+                <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:imgOk?T.sage+"22":T.rose+"22",color:imgOk?T.sage:T.rose,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{imgOk?"img ✓":"no img"}</span>
+                <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:ingOk?T.sage+"22":T.amber+"22",color:ingOk?T.sage:T.amber,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{ingOk?"ing ✓":"no ing"}</span>
               </div>
-
-              <div style={{fontSize:"0.65rem",color:T.textLight,flexShrink:0}}>✏️</div>
+              <div style={{fontSize:"0.65rem",color:T.textLight,flexShrink:0}}>›</div>
             </div>
           );
         })}
       </div>
 
-      {filtered.length > 0 && (
-        <div style={{textAlign:"center",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",paddingBottom:"1rem"}}>
-          Showing {filtered.length} of {products.length} products · Tap any product to edit
-        </div>
-      )}
+      {filtered.length>0&&<div style={{textAlign:"center",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",paddingBottom:"2rem"}}>{filtered.length} of {products.length} products · tap to edit</div>}
     </div>
   );
 }
 
-// Keep AdminManageProducts as a thin alias so existing references don't break
+// Shared edit form renderer
+function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgRef,onSave,onCancel,saving,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin}) {
+  if (!src) return null;
+  return (
+    <div style={{background:T.surface,borderRadius:"1rem",border:`2px solid ${T.accent}`,padding:"1rem",display:"flex",flexDirection:"column",gap:"0.85rem"}}>
+      {/* Image */}
+      <div>
+        <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.4rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Product Image</div>
+        <div style={{display:"flex",gap:"0.75rem",alignItems:"flex-start"}}>
+          <div style={{width:"80px",height:"80px",borderRadius:"0.6rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            {src.adminImage||src.image?<img src={src.adminImage||src.image} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>:<span style={{fontSize:"1.5rem"}}>📷</span>}
+          </div>
+          <div style={{flex:1,display:"flex",flexDirection:"column",gap:"0.4rem"}}>
+            <button onClick={()=>imgRef.current?.click()} disabled={uploading}
+              style={{padding:"0.6rem 1rem",background:uploading?"#ccc":T.accent,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.75rem",fontWeight:"700",cursor:uploading?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
+              {uploading?"Uploading…":"📱 Upload from Device"}
+            </button>
+            <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Stored permanently in Firebase — never breaks.</div>
+            {(src.adminImage||src.image)&&<button onClick={()=>setSrc(e=>({...e,adminImage:"",image:""}))} style={{padding:"0.3rem 0.6rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.6rem",color:T.rose,cursor:"pointer",fontFamily:"'Inter',sans-serif",alignSelf:"flex-start"}}>Remove</button>}
+          </div>
+        </div>
+        <input ref={imgRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>onImgUpload(e.target.files[0])}/>
+      </div>
+      {/* Name + Brand */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
+        {[["Product Name","productName"],["Brand","brand"]].map(([label,field])=>(
+          <div key={field}>
+            <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</div>
+            <input value={src[field]||""} onChange={e=>setSrc(s=>({...s,[field]:e.target.value}))}
+              style={{width:"100%",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
+          </div>
+        ))}
+      </div>
+      {/* Category */}
+      <div>
+        <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Category</div>
+        <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
+          {CATEGORIES.map(c=><button key={c} onClick={()=>setSrc(s=>({...s,category:c}))} style={{padding:"0.3rem 0.65rem",background:src.category===c?T.accent:T.surfaceAlt,color:src.category===c?"#fff":T.textMid,border:`1px solid ${src.category===c?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.65rem",fontWeight:src.category===c?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>{c}</button>)}
+        </div>
+      </div>
+      {/* Skin types */}
+      <div>
+        <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Skin Types</div>
+        <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
+          {SKIN_TYPES.map(s=>{const active=(src.skinTypes||[]).includes(s);return<button key={s} onClick={()=>toggleSkin(s)} style={{padding:"0.3rem 0.65rem",background:active?T.sage:T.surfaceAlt,color:active?"#fff":T.textMid,border:`1px solid ${active?T.sage:T.border}`,borderRadius:"999px",fontSize:"0.65rem",fontWeight:active?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>{s}</button>;})}
+        </div>
+      </div>
+      {/* Ingredients */}
+      <div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.25rem"}}>
+          <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Ingredients</div>
+          {score!==null&&<div style={{fontSize:"0.78rem",fontWeight:"700",color:scoreColor(score),fontFamily:"'Inter',sans-serif"}}>Pore score: {score}/5</div>}
+        </div>
+        <textarea value={src.ingredients||""} onChange={e=>onIngChange(e.target.value)} rows={5}
+          placeholder="Paste full INCI ingredient list…"
+          style={{width:"100%",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.68rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box",lineHeight:1.5}}/>
+        <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginTop:"0.2rem"}}>Copy from brand website, Sephora, or incidecoder.com</div>
+      </div>
+      {/* Buy URL */}
+      <div>
+        <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.25rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Buy URL (optional)</div>
+        <input value={src.buyUrl||""} onChange={e=>setSrc(s=>({...s,buyUrl:e.target.value}))} placeholder="https://…"
+          style={{width:"100%",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.72rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
+      </div>
+      {/* Save */}
+      <div style={{display:"flex",gap:"0.5rem"}}>
+        <button onClick={onSave} disabled={saving} style={{flex:1,padding:"0.75rem",background:saving?"#ccc":T.accent,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.82rem",fontWeight:"700",cursor:saving?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>{saving?"Saving…":"✓ Save Product"}</button>
+        <button onClick={onCancel} style={{padding:"0.75rem 1.25rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.78rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// Keep AdminManageProducts as alias
 function AdminManageProducts(props) { return <AdminProductHub/>; }
+
 
 
 
