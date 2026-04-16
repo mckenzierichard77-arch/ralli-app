@@ -10282,9 +10282,12 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
         </button>
         <button onClick={async()=>{
           const snap = await getDocs(collection(db,"products"));
-          const bad = snap.docs.filter(d=>d.id.length<10);
-          if(!bad.length){alert("No corrupted products found!");return;}
-          if(!window.confirm(`Delete ${bad.length} corrupted product(s) with bad IDs (${bad.map(d=>d.id).join(", ")})?`))return;
+          const allDocs = snap.docs;
+          const bad = allDocs.filter(d=>d.id.length<20);
+          const veryBad = allDocs.filter(d=>d.id.length<5);
+          if(!bad.length){alert(`No short IDs found. All ${allDocs.length} products have normal IDs.`);return;}
+          const idList = bad.slice(0,20).map(d=>d.id+"("+d.data().productName?.slice(0,15)+")").join(", ");
+          if(!window.confirm(`Found ${bad.length} products with short IDs:\n${idList}\n\nDelete all of them?`))return;
           await Promise.all(bad.map(d=>deleteDoc(doc(db,"products",d.id))));
           alert(`Deleted ${bad.length} corrupted products.`);
         }}
