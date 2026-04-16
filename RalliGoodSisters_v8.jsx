@@ -9182,96 +9182,35 @@ function AdminProductHub() {
         {/* Header */}
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <button onClick={()=>setMode("list")} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",padding:0}}>← Exit</button>
-          <div style={{fontSize:"0.72rem",color:T.textMid,fontFamily:"'Inter',sans-serif"}}>{swipeIdx+1} of {swipeQueue.length}</div>
+          <div style={{fontSize:"0.72rem",color:T.textMid,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{swipeIdx+1} of {swipeQueue.length} {prefilling&&<span style={{color:T.amber}}>⟳</span>}</div>
           <button onClick={skipSwipe} style={{background:"none",border:"none",color:T.textLight,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",padding:0}}>Skip →</button>
         </div>
 
         {/* Progress bar */}
         <div style={{height:"3px",background:T.surfaceAlt,borderRadius:"999px"}}>
-          <div style={{height:"100%",background:T.accent,width:`${((swipeIdx)/swipeQueue.length)*100}%`,borderRadius:"999px",transition:"width 0.3s"}}/>
+          <div style={{height:"100%",background:T.accent,width:`${(swipeIdx/swipeQueue.length)*100}%`,borderRadius:"999px",transition:"width 0.3s"}}/>
         </div>
 
-        {/* Product card */}
-        <div style={{background:T.surface,borderRadius:"1rem",border:`1px solid ${T.border}`,overflow:"hidden"}}>
-          {/* Image area */}
-          <div style={{height:"180px",background:T.surfaceAlt,position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
-            {swipeEdit?.adminImage||swipeEdit?.image
-              ? <img src={swipeEdit?.adminImage||swipeEdit?.image} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
-              : <div style={{fontSize:"3rem",opacity:0.3}}>📷</div>
-            }
-            <button onClick={()=>swipeImgRef.current?.click()}
-              style={{position:"absolute",bottom:"0.6rem",right:"0.6rem",padding:"0.45rem 0.85rem",background:"rgba(0,0,0,0.7)",color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.68rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-              {swipeSaving?"Uploading…":"📱 Upload image"}
-            </button>
-            <input ref={swipeImgRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>handleImgUpload(e.target.files[0],true)}/>
-          </div>
-
-          <div style={{padding:"1rem",display:"flex",flexDirection:"column",gap:"0.75rem"}}>
-            {/* Name + brand */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
-              {[["Name","productName"],["Brand","brand"]].map(([label,field])=>(
-                <div key={field}>
-                  <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.2rem",textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</div>
-                  <input value={swipeEdit?.[field]||""} onChange={e=>setSwipeEdit(s=>({...s,[field]:e.target.value}))}
-                    style={{width:"100%",padding:"0.4rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.72rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surfaceAlt,boxSizing:"border-box"}}/>
-                </div>
-              ))}
-            </div>
-
-            {/* Category pills */}
-            <div>
-              <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.3rem",textTransform:"uppercase",letterSpacing:"0.05em"}}>Category</div>
-              <div style={{display:"flex",gap:"0.25rem",flexWrap:"wrap"}}>
-                {CATEGORIES.map(c=>(
-                  <button key={c} onClick={()=>setSwipeEdit(s=>({...s,category:c}))}
-                    style={{padding:"0.25rem 0.55rem",background:swipeEdit?.category===c?T.accent:T.surfaceAlt,color:swipeEdit?.category===c?"#fff":T.textMid,border:`1px solid ${swipeEdit?.category===c?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.6rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:swipeEdit?.category===c?"600":"400"}}>
-                    {c}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Ingredients + score */}
-            <div>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.3rem"}}>
-                <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",textTransform:"uppercase",letterSpacing:"0.05em"}}>
-                  Ingredients {prefilling&&<span style={{color:T.amber,marginLeft:"0.3rem"}}>⟳ fetching…</span>}
-                </div>
-                {swipeLiveScore!==null&&<div style={{fontSize:"0.78rem",fontWeight:"700",color:scoreColor(swipeLiveScore),fontFamily:"'Inter',sans-serif"}}>Pore score: {swipeLiveScore}/5</div>}
-              </div>
-              {/* Quick links */}
-              <div style={{display:"flex",gap:"0.3rem",marginBottom:"0.4rem",flexWrap:"wrap"}}>
-                {swipeEdit?.inciSearch&&<a href={swipeEdit.inciSearch} target="_blank" rel="noopener noreferrer"
-                  style={{padding:"0.25rem 0.55rem",background:"#E8F4FD",color:"#1A73E8",borderRadius:"0.4rem",fontSize:"0.6rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
-                  🔬 INCI Decoder
-                </a>}
-                {swipeEdit?.googleSearch&&<a href={swipeEdit.googleSearch} target="_blank" rel="noopener noreferrer"
-                  style={{padding:"0.25rem 0.55rem",background:"#FEF3E2",color:"#EA8600",borderRadius:"0.4rem",fontSize:"0.6rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
-                  🔍 Google ingredients
-                </a>}
-                {swipeEdit?.buyUrl&&<a href={swipeEdit.buyUrl} target="_blank" rel="noopener noreferrer"
-                  style={{padding:"0.25rem 0.55rem",background:"#FFF3E0",color:"#E65100",borderRadius:"0.4rem",fontSize:"0.6rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
-                  🛒 Amazon
-                </a>}
-              </div>
-              <textarea value={swipeEdit?.ingredients||""} onChange={e=>handleIngChange(e.target.value,true)} rows={4}
-                placeholder="Paste INCI ingredient list…"
-                style={{width:"100%",padding:"0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.65rem",fontFamily:"monospace",color:T.text,background:T.surfaceAlt,resize:"vertical",boxSizing:"border-box"}}/>
-            </div>
-
-            {/* Actions */}
-            <div style={{display:"flex",gap:"0.5rem"}}>
-              <button onClick={()=>save(true)} disabled={swipeSaving}
-                style={{flex:2,padding:"0.7rem",background:swipeSaving?"#ccc":T.sage,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.78rem",fontWeight:"700",cursor:swipeSaving?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
-                {swipeSaving?"Saving…":"✓ Save & Next"}
-              </button>
-              <button onClick={skipSwipe}
-                style={{flex:1,padding:"0.7rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.75rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                Skip
-              </button>
-            </div>
-          </div>
-        </div>
+        {/* Same full edit form as list mode */}
+        {renderEditForm({
+          src: swipeEdit,
+          setSrc: setSwipeEdit,
+          score: swipeLiveScore,
+          onIngChange: v => handleIngChange(v, true),
+          onImgUpload: f => handleImgUpload(f, true),
+          uploading: swipeSaving,
+          imgRef: swipeImgRef,
+          onSave: () => save(true),
+          onCancel: skipSwipe,
+          saving: swipeSaving,
+          saveLabel: "✓ Save & Next",
+          cancelLabel: "Skip →",
+          CATEGORIES,
+          SKIN_TYPES,
+          scoreColor,
+          toggleSkin: t => setSwipeEdit(e => { const c=e.skinTypes||[]; return {...e, skinTypes:c.includes(t)?c.filter(s=>s!==t):[...c,t]}; }),
+          prefilling,
+        })}
       </div>
     );
   }
@@ -9461,7 +9400,7 @@ function AdminProductHub() {
 }
 
 // Shared edit form renderer
-function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgRef,onSave,onCancel,saving,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin}) {
+function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgRef,onSave,onCancel,saving,saveLabel,cancelLabel,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin,prefilling=false}) {
   if (!src) return null;
   return (
     <div style={{background:T.surface,borderRadius:"1rem",border:`2px solid ${T.accent}`,padding:"1rem",display:"flex",flexDirection:"column",gap:"0.85rem"}}>
@@ -9478,7 +9417,21 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
               {uploading?"Uploading…":"📱 Upload from Device"}
             </button>
             <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Stored permanently in Firebase — never breaks.</div>
-            {(src.adminImage||src.image)&&<button onClick={()=>setSrc(e=>({...e,adminImage:"",image:""}))} style={{padding:"0.3rem 0.6rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.6rem",color:T.rose,cursor:"pointer",fontFamily:"'Inter',sans-serif",alignSelf:"flex-start"}}>Remove</button>}
+            <div style={{display:"flex",gap:"0.35rem",flexWrap:"wrap"}}>
+              {src.productName&&src.brand&&(
+                <a href={`https://www.google.com/search?q=${encodeURIComponent((src.brand||"")+" "+(src.productName||"")+" product image")}&tbm=isch`} target="_blank" rel="noopener noreferrer"
+                  style={{padding:"0.3rem 0.65rem",background:"#E8F4FD",color:"#1A73E8",borderRadius:"0.4rem",fontSize:"0.62rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
+                  🖼 Google image search
+                </a>
+              )}
+              {src.productName&&src.brand&&(
+                <a href={`https://www.sephora.com/search?keyword=${encodeURIComponent((src.brand||"")+" "+(src.productName||""))}`} target="_blank" rel="noopener noreferrer"
+                  style={{padding:"0.3rem 0.65rem",background:"#FCE4EC",color:"#C2185B",borderRadius:"0.4rem",fontSize:"0.62rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
+                  💄 Sephora
+                </a>
+              )}
+            </div>
+            {(src.adminImage||src.image)&&<button onClick={()=>setSrc(e=>({...e,adminImage:"",image:""}))} style={{padding:"0.3rem 0.6rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.6rem",color:T.rose,cursor:"pointer",fontFamily:"'Inter',sans-serif",alignSelf:"flex-start"}}>Remove image</button>}
           </div>
         </div>
         <input ref={imgRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>onImgUpload(e.target.files[0])}/>
@@ -9513,16 +9466,33 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
           <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Ingredients</div>
           {score!==null&&<div style={{fontSize:"0.78rem",fontWeight:"700",color:scoreColor(score),fontFamily:"'Inter',sans-serif"}}>Pore score: {score}/5</div>}
         </div>
-        {/* Quick search links */}
-        <div style={{display:"flex",gap:"0.35rem",marginBottom:"0.4rem",flexWrap:"wrap"}}>
-          {src.inciSearch&&<a href={src.inciSearch} target="_blank" rel="noopener noreferrer"
-            style={{padding:"0.3rem 0.65rem",background:"#E8F4FD",color:"#1A73E8",borderRadius:"0.4rem",fontSize:"0.65rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
-            🔬 INCI Decoder
-          </a>}
-          {src.googleSearch&&<a href={src.googleSearch} target="_blank" rel="noopener noreferrer"
-            style={{padding:"0.3rem 0.65rem",background:"#FEF3E2",color:"#EA8600",borderRadius:"0.4rem",fontSize:"0.65rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
-            🔍 Google ingredients
-          </a>}
+        {/* Status + quick search links */}
+        <div style={{display:"flex",gap:"0.35rem",marginBottom:"0.4rem",flexWrap:"wrap",alignItems:"center"}}>
+          {prefilling&&<span style={{fontSize:"0.62rem",color:T.amber,fontFamily:"'Inter',sans-serif"}}>⟳ Auto-fetching ingredients…</span>}
+          {src.productName&&src.brand&&(
+            <a href={`https://incidecoder.com/search?query=${encodeURIComponent((src.brand||"")+" "+(src.productName||""))}`} target="_blank" rel="noopener noreferrer"
+              style={{padding:"0.3rem 0.65rem",background:"#E8F4FD",color:"#1A73E8",borderRadius:"0.4rem",fontSize:"0.65rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
+              🔬 INCI Decoder
+            </a>
+          )}
+          {src.productName&&src.brand&&(
+            <a href={`https://www.google.com/search?q=${encodeURIComponent((src.brand||"")+" "+(src.productName||"")+" full ingredient list INCI")}`} target="_blank" rel="noopener noreferrer"
+              style={{padding:"0.3rem 0.65rem",background:"#FEF3E2",color:"#EA8600",borderRadius:"0.4rem",fontSize:"0.65rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
+              🔍 Google ingredients
+            </a>
+          )}
+          {src.productName&&src.brand&&(
+            <a href={`https://www.sephora.com/search?keyword=${encodeURIComponent((src.brand||"")+" "+(src.productName||""))}`} target="_blank" rel="noopener noreferrer"
+              style={{padding:"0.3rem 0.65rem",background:"#FCE4EC",color:"#C2185B",borderRadius:"0.4rem",fontSize:"0.65rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
+              💄 Sephora
+            </a>
+          )}
+          {src.buyUrl&&(
+            <a href={src.buyUrl} target="_blank" rel="noopener noreferrer"
+              style={{padding:"0.3rem 0.65rem",background:"#FFF3E0",color:"#E65100",borderRadius:"0.4rem",fontSize:"0.65rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
+              🛒 Amazon
+            </a>
+          )}
         </div>
         <textarea value={src.ingredients||""} onChange={e=>onIngChange(e.target.value)} rows={5}
           placeholder="Paste full INCI ingredient list…"
@@ -9540,8 +9510,8 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
       </div>
       {/* Save */}
       <div style={{display:"flex",gap:"0.5rem"}}>
-        <button onClick={onSave} disabled={saving} style={{flex:1,padding:"0.75rem",background:saving?"#ccc":T.accent,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.82rem",fontWeight:"700",cursor:saving?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>{saving?"Saving…":"✓ Save Product"}</button>
-        <button onClick={onCancel} style={{padding:"0.75rem 1.25rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.78rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Cancel</button>
+        <button onClick={onSave} disabled={saving} style={{flex:2,padding:"0.75rem",background:saving?"#ccc":T.accent,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.82rem",fontWeight:"700",cursor:saving?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>{saving?"Saving…":(saveLabel||"✓ Save Product")}</button>
+        <button onClick={onCancel} style={{flex:1,padding:"0.75rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.78rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>{cancelLabel||"Cancel"}</button>
       </div>
     </div>
   );
