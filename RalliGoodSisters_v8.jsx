@@ -9172,7 +9172,7 @@ function AdminProductHub() {
   if (editing) return (
     <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
       <button onClick={()=>setEditing(null)} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",padding:0}}>← Back</button>
-      {renderEditForm({src:editing,setSrc:setEditing,score:liveScore,onIngChange:v=>handleIngChange(v,false),onImgUpload:f=>handleImgUpload(f,false),uploading:uploadingImg,imgRef:imgInputRef,onSave:()=>save(false),onCancel:()=>setEditing(null),onDelete:async()=>{ if(!window.confirm("Delete this product permanently?")) return; await deleteDoc(doc(db,"products",editing.id)); setProducts(ps=>ps.filter(p=>p.id!==editing.id)); setEditing(null); },saving,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin:(t)=>setEditing(e=>{const c=e.skinTypes||[];return{...e,skinTypes:c.includes(t)?c.filter(s=>s!==t):[...c,t]};})}))}
+      {renderEditForm({src:editing,setSrc:setEditing,score:liveScore,onIngChange:v=>handleIngChange(v,false),onImgUpload:f=>handleImgUpload(f,false),uploading:uploadingImg,imgRef:imgInputRef,onSave:()=>save(false),onCancel:()=>setEditing(null),onDelete:async()=>{ if(!window.confirm("Delete this product permanently?")) return; await deleteDoc(doc(db,"products",editing.id)); setProducts(ps=>ps.filter(p=>p.id!==editing.id)); setEditing(null); },saving,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin:(t)=>setEditing(e=>{const c=e.skinTypes||[];return{...e,skinTypes:c.includes(t)?c.filter(s=>s!==t):[...c,t]};})})}
     </div>
   );
 
