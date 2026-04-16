@@ -9025,7 +9025,7 @@ function AdminProductHub() {
     await uploadBytes(ref, file, { contentType: mime });
     const url = await getDownloadURL(ref);
     // Also write directly to Firestore so it's saved even if user forgets to hit Save
-    await updateDoc(doc(db, "products", productId), { adminImage: url, image: url, updatedAt: Date.now() });
+    await setDoc(doc(db, "products", productId), { adminImage: url, image: url, updatedAt: Date.now() }, { merge: true });
     return url;
   }
 
@@ -9046,7 +9046,11 @@ function AdminProductHub() {
     const src = isSwipe ? swipeEdit : editing;
     const score = isSwipe ? swipeLiveScore : liveScore;
     if (!src) return;
-    if (!src.id || src.id.length < 5) { alert("Save failed: invalid product ID. Please go back and reopen the product."); return; }
+    if (!src.id || src.id.length < 5) {
+      if (isSwipe) { skipSwipe(); return; } // skip bad products in swipe mode
+      alert("Save failed: invalid product ID (" + src.id + "). This product may be corrupted — delete it from Firestore.");
+      return;
+    }
     if (isSwipe) setSwipeSaving(true); else setSaving(true);
     try {
       const updates = {
@@ -9062,7 +9066,7 @@ function AdminProductHub() {
       };
       if (src.adminImage) { updates.adminImage=src.adminImage; updates.image=src.adminImage; }
       if (score!==null) updates.poreScore=score;
-      await updateDoc(doc(db,"products",src.id), updates);
+      await setDoc(doc(db,"products",src.id), updates, { merge: true });
       setProducts(ps=>ps.map(p=>p.id===src.id?{...p,...updates}:p));
       if (isSwipe) {
         const nextIdx = swipeIdx + 1;
@@ -9168,7 +9172,7 @@ function AdminProductHub() {
   if (editing) return (
     <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
       <button onClick={()=>setEditing(null)} style={{background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",padding:0}}>← Back</button>
-      {renderEditForm({src:editing,setSrc:setEditing,score:liveScore,onIngChange:v=>handleIngChange(v,false),onImgUpload:f=>handleImgUpload(f,false),uploading:uploadingImg,imgRef:imgInputRef,onSave:()=>save(false),onCancel:()=>setEditing(null),saving,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin:(t)=>setEditing(e=>{const c=e.skinTypes||[];return{...e,skinTypes:c.includes(t)?c.filter(s=>s!==t):[...c,t]};})})}
+      {renderEditForm({src:editing,setSrc:setEditing,score:liveScore,onIngChange:v=>handleIngChange(v,false),onImgUpload:f=>handleImgUpload(f,false),uploading:uploadingImg,imgRef:imgInputRef,onSave:()=>save(false),onCancel:()=>setEditing(null),onDelete:async()=>{ if(!window.confirm("Delete this product permanently?")) return; await deleteDoc(doc(db,"products",editing.id)); setProducts(ps=>ps.filter(p=>p.id!==editing.id)); setEditing(null); },saving,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin:(t)=>setEditing(e=>{const c=e.skinTypes||[];return{...e,skinTypes:c.includes(t)?c.filter(s=>s!==t):[...c,t]};})}))}
     </div>
   );
 
@@ -9412,7 +9416,7 @@ function AdminProductHub() {
 }
 
 // Shared edit form renderer
-function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgRef,onSave,onCancel,saving,saveLabel,cancelLabel,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin,prefilling=false}) {
+function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgRef,onSave,onCancel,onDelete,saving,saveLabel,cancelLabel,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin,prefilling=false}) {
   if (!src) return null;
   return (
     <div style={{background:T.surface,borderRadius:"1rem",border:`2px solid ${T.accent}`,padding:"1rem",display:"flex",flexDirection:"column",gap:"0.85rem"}}>
@@ -9523,6 +9527,12 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
         <button onClick={onSave} disabled={saving} style={{flex:2,padding:"0.75rem",background:saving?"#ccc":T.accent,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.82rem",fontWeight:"700",cursor:saving?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>{saving?"Saving…":(saveLabel||"✓ Save Product")}</button>
         <button onClick={onCancel} style={{flex:1,padding:"0.75rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.75rem",fontSize:"0.78rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>{cancelLabel||"Cancel"}</button>
       </div>
+      {onDelete&&(
+        <button onClick={onDelete} style={{width:"100%",padding:"0.5rem",background:"none",border:`1px solid ${T.rose}44`,borderRadius:"0.6rem",fontSize:"0.68rem",color:T.rose,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+          🗑 Delete this product
+        </button>
+      )}
+      {src.id&&<div style={{fontSize:"0.55rem",color:T.textLight,fontFamily:"monospace",textAlign:"center",opacity:0.5}}>ID: {src.id}</div>}
     </div>
   );
 }
