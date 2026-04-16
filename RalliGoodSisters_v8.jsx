@@ -9411,26 +9411,24 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
           <div style={{width:"80px",height:"80px",borderRadius:"0.6rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
             {src.adminImage||src.image?<img src={src.adminImage||src.image} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>:<span style={{fontSize:"1.5rem"}}>📷</span>}
           </div>
-          <div style={{flex:1,display:"flex",flexDirection:"column",gap:"0.4rem"}}>
+          <div style={{flex:1,display:"flex",flexDirection:"column",gap:"0.5rem"}}>
             <button onClick={()=>imgRef.current?.click()} disabled={uploading}
-              style={{padding:"0.6rem 1rem",background:uploading?"#ccc":T.accent,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.75rem",fontWeight:"700",cursor:uploading?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
+              style={{padding:"0.65rem 1rem",background:uploading?"#ccc":T.accent,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.75rem",fontWeight:"700",cursor:uploading?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
               {uploading?"Uploading…":"📱 Upload from Device"}
             </button>
-            <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Stored permanently in Firebase — never breaks.</div>
-            <div style={{display:"flex",gap:"0.35rem",flexWrap:"wrap"}}>
-              {src.productName&&src.brand&&(
-                <a href={`https://www.google.com/search?q=${encodeURIComponent((src.brand||"")+" "+(src.productName||"")+" product image")}&tbm=isch`} target="_blank" rel="noopener noreferrer"
-                  style={{padding:"0.3rem 0.65rem",background:"#E8F4FD",color:"#1A73E8",borderRadius:"0.4rem",fontSize:"0.62rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
-                  🖼 Google image search
-                </a>
-              )}
-              {src.productName&&src.brand&&(
-                <a href={`https://www.sephora.com/search?keyword=${encodeURIComponent((src.brand||"")+" "+(src.productName||""))}`} target="_blank" rel="noopener noreferrer"
-                  style={{padding:"0.3rem 0.65rem",background:"#FCE4EC",color:"#C2185B",borderRadius:"0.4rem",fontSize:"0.62rem",fontWeight:"600",textDecoration:"none",fontFamily:"'Inter',sans-serif"}}>
-                  💄 Sephora
-                </a>
-              )}
-            </div>
+            {src.productName&&src.brand&&(
+              <a href={`https://www.google.com/search?q=${encodeURIComponent((src.brand||"")+" "+(src.productName||"")+" product")}&tbm=isch`} target="_blank" rel="noopener noreferrer"
+                style={{padding:"0.65rem 1rem",background:"#E8F4FD",color:"#1A73E8",border:"1px solid #BBDEFB",borderRadius:"0.6rem",fontSize:"0.75rem",fontWeight:"700",textDecoration:"none",fontFamily:"'Inter',sans-serif",textAlign:"center",display:"block"}}>
+                🖼 Google Images
+              </a>
+            )}
+            {src.productName&&src.brand&&(
+              <a href={`https://www.sephora.com/search?keyword=${encodeURIComponent((src.brand||"")+" "+(src.productName||""))}`} target="_blank" rel="noopener noreferrer"
+                style={{padding:"0.65rem 1rem",background:"#FCE4EC",color:"#C2185B",border:"1px solid #F8BBD0",borderRadius:"0.6rem",fontSize:"0.75rem",fontWeight:"700",textDecoration:"none",fontFamily:"'Inter',sans-serif",textAlign:"center",display:"block"}}>
+                💄 Sephora
+              </a>
+            )}
+            <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Upload from device or tap a link to find an image, copy the URL, then paste below.</div>
             {(src.adminImage||src.image)&&<button onClick={()=>setSrc(e=>({...e,adminImage:"",image:""}))} style={{padding:"0.3rem 0.6rem",background:"none",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.6rem",color:T.rose,cursor:"pointer",fontFamily:"'Inter',sans-serif",alignSelf:"flex-start"}}>Remove image</button>}
           </div>
         </div>
