@@ -8956,13 +8956,45 @@ function AdminProductHub() {
     setLoading(true);
     try {
       const snap = await getDocs(collection(db, "products"));
-      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      // Always use d.id (Firestore doc ID) — never let document data override it
+      setProducts(snap.docs.map(d => ({ ...d.data(), id: d.id })));
     } catch(e) { console.error(e); }
     setLoading(false);
   }
 
   const hasImg = p => { const u=(p.adminImage||p.image||"").trim(); return u.length>8&&!u.includes("openbeautyfacts")&&!u.startsWith("blob:"); };
   const hasIng = p => (p.ingredients||"").trim().length > 10;
+
+  // prefillProduct — defined here inside AdminProductHub so it uses the right setPrefilling
+  async function prefillProductAdmin(p) {
+    const originalId = p.id;
+    setPrefilling(true);
+    const result = { ...p };
+    const q = encodeURIComponent(`${p.brand||""} ${p.productName||""}`.trim());
+    result.buyUrl = result.buyUrl || `https://www.amazon.com/s?k=${q}&i=beauty&tag=ralliapp-20`;
+    result.googleSearch = `https://www.google.com/search?q=${encodeURIComponent((p.brand||"")+" "+(p.productName||"")+" ingredients site:incidecoder.com OR site:sephora.com")}`;
+    result.inciSearch = `https://incidecoder.com/search?query=${encodeURIComponent((p.brand||"")+" "+(p.productName||""))}`;
+    if (!(result.ingredients||"").trim()) {
+      try {
+        if (p.barcode && !/^seed_/.test(p.barcode)) {
+          const r = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${p.barcode}.json`,{signal:AbortSignal.timeout(5000)});
+          const d = await r.json();
+          if (d.status===1) { const ing=d.product?.ingredients_text_en||d.product?.ingredients_text||""; if(ing.length>10) result.ingredients=ing; }
+        }
+        if (!result.ingredients) {
+          const r = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(`${p.brand||""} ${p.productName||""}`)}&search_simple=1&action=process&json=1&page_size=3&fields=product_name,brands,ingredients_text,ingredients_text_en`,{signal:AbortSignal.timeout(5000)});
+          const d = await r.json();
+          const brandLow=(p.brand||"").toLowerCase().split(" ")[0];
+          const hit=(d.products||[]).find(x=>(x.brands||"").toLowerCase().includes(brandLow))||(d.products||[])[0];
+          const ing=hit?.ingredients_text_en||hit?.ingredients_text||"";
+          if(ing.length>10) result.ingredients=ing;
+        }
+      } catch(e) { console.warn("OBF",e); }
+    }
+    setPrefilling(false);
+    result.id = originalId; // always restore original Firestore ID
+    return result;
+  }
 
   const filtered = products
     .filter(p => {
@@ -8991,7 +9023,7 @@ function AdminProductHub() {
     const base = { ...p, skinTypes: Array.isArray(p.skinTypes)?p.skinTypes:(p.skinTypes||"").split(",").map(s=>s.trim()).filter(Boolean) };
     setEditing(base);
     setLiveScore(p.poreScore??null);
-    const filled = await prefillProduct(p);
+    const filled = await prefillProductAdmin(p);
     setEditing(e => e?.id===p.id ? { ...e, ...filled, skinTypes: Array.isArray(p.skinTypes)?p.skinTypes:(p.skinTypes||"").split(",").map(s=>s.trim()).filter(Boolean) } : e);
     if (filled.ingredients) {
       try { const a=analyzeIngredients(filled.ingredients); if(a?.avgScore!=null) setLiveScore(Math.round(a.avgScore)); } catch {}
@@ -9076,7 +9108,7 @@ function AdminProductHub() {
           const base = {...next, skinTypes:Array.isArray(next.skinTypes)?next.skinTypes:[]};
           setSwipeEdit(base);
           setSwipeLiveScore(next.poreScore??null);
-          prefillProduct(next).then(filled => {
+          prefillProductAdmin(next).then(filled => {
             setSwipeEdit(e => e?.id===next.id ? {...e,...filled,skinTypes:base.skinTypes} : e);
             if (filled.ingredients) { try { const a=analyzeIngredients(filled.ingredients); if(a?.avgScore!=null) setSwipeLiveScore(Math.round(a.avgScore)); } catch {} }
           });
@@ -9096,7 +9128,7 @@ function AdminProductHub() {
       const base = {...next, skinTypes:Array.isArray(next.skinTypes)?next.skinTypes:[]};
       setSwipeEdit(base);
       setSwipeLiveScore(next.poreScore??null);
-      const filled = await prefillProduct(next);
+      const filled = await prefillProductAdmin(next);
       setSwipeEdit(e => e?.id===next.id ? {...e,...filled,skinTypes:base.skinTypes} : e);
       if (filled.ingredients) { try { const a=analyzeIngredients(filled.ingredients); if(a?.avgScore!=null) setSwipeLiveScore(Math.round(a.avgScore)); } catch {} }
     }
@@ -9110,7 +9142,7 @@ function AdminProductHub() {
       const base = {...first, skinTypes:Array.isArray(first.skinTypes)?first.skinTypes:[]};
       setSwipeEdit(base);
       setSwipeLiveScore(first.poreScore??null);
-      const filled = await prefillProduct(first);
+      const filled = await prefillProductAdmin(first);
       setSwipeEdit(e => e?.id===first.id ? {...e,...filled,skinTypes:base.skinTypes} : e);
       if (filled.ingredients) { try { const a=analyzeIngredients(filled.ingredients); if(a?.avgScore!=null) setSwipeLiveScore(Math.round(a.avgScore)); } catch {} }
     }
@@ -9556,7 +9588,7 @@ function AdminBulkImageUpload({ onBack }) {
 
   React.useEffect(() => {
     getDocs(collection(db, "products")).then(snap => {
-      const prods = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const prods = snap.docs.map(d => ({ ...d.data(), id: d.id }));
       setProducts(prods);
       // No auto-parse — user pastes CSV manually
     });
@@ -10030,7 +10062,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
 
   async function exportProductsCsv() {
     const snap = await getDocs(collection(db, "products"));
-    const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const rows = snap.docs.map(d => ({ ...d.data(), id: d.id }));
     const headers = ["productName","brand","imageUrl","ingredients","category","skinTypes","buyUrl","barcode","reason"];
     function esc(v) {
       v = (v == null ? "" : String(v)).replace(/\r?\n/g," ");
@@ -10067,7 +10099,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
     setLoading(true);
     try {
       const snap = await getDocs(collection(db, "products"));
-      const all = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.hidden);
+      const all = snap.docs.map(d => ({ ...d.data(), id: d.id })).filter(p => !p.hidden);
       all.sort((a, b) => {
         const aHas = (a.adminImage||a.image||"").startsWith("http") ? 1 : 0;
         const bHas = (b.adminImage||b.image||"").startsWith("http") ? 1 : 0;
@@ -10341,7 +10373,8 @@ function AdminExploreTop100() {
     setLoading(true);
     try {
       const snap = await getDocs(collection(db, "products"));
-      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      // Always use d.id (Firestore doc ID) — never let document data override it
+      setProducts(snap.docs.map(d => ({ ...d.data(), id: d.id })));
     } catch(e) { console.error(e); }
     setLoading(false);
   }
@@ -10560,7 +10593,7 @@ function AdminImageReview() {
     setWiped(null);
     try {
       const snap = await getDocs(collection(db, "products"));
-      const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const all = snap.docs.map(d => ({ ...d.data(), id: d.id }));
       const withImg = all.filter(p => (p.adminImage||p.image||"").startsWith("http"));
       // Process in chunks of 20
       let count = 0;
@@ -10581,7 +10614,7 @@ function AdminImageReview() {
     setIdx(0); setDone(0); setSkipped(0);
     try {
       const snap = await getDocs(collection(db, "products"));
-      let all = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.hidden);
+      let all = snap.docs.map(d => ({ ...d.data(), id: d.id })).filter(p => !p.hidden);
       if (filter === "hasimage") all = all.filter(p => (p.adminImage||p.image||"").startsWith("http"));
       if (filter === "noimage")  all = all.filter(p => !(p.adminImage||p.image||"").startsWith("http"));
       // Sort: no image first, then by scan count desc
@@ -10803,7 +10836,7 @@ function AdminIngredientFiller() {
     setLoading(true);
     try {
       const snap = await getDocs(query(collection(db, "products"), orderBy("scanCount", "desc")));
-      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setProducts(snap.docs.map(d => ({ ...d.data(), id: d.id })));
     } catch(e) { console.error(e); }
     setLoading(false);
   }
@@ -10941,7 +10974,7 @@ function AdminIngredientFiller() {
     setAutoStats(null);
 
     const snap = await getDocs(query(collection(db, "products"), orderBy("scanCount", "desc")));
-    const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const all = snap.docs.map(d => ({ ...d.data(), id: d.id }));
     const queue = all.filter(p => !p.ingredients || p.ingredients.trim().length < 10);
 
     if (!queue.length) {
@@ -12422,7 +12455,7 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, ch
       limit(30)
     );
     const unsub = onSnapshot(q, snap => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const list = snap.docs.map(d => ({ ...d.data(), id: d.id }));
       setConvos(list);
       const total = list.reduce((sum, c) => sum + (c[`unread_${user.uid}`] || 0), 0);
       onUnreadChange?.(total);
@@ -12616,7 +12649,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
   useEffect(() => {
     const q = query(collection(db, "conversations", cid, "messages"), orderBy("createdAt", "asc"), limit(100));
     const unsub = onSnapshot(q, snap => {
-      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setMessages(snap.docs.map(d => ({ ...d.data(), id: d.id })));
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 80);
     });
     // Mark as read
@@ -12847,7 +12880,7 @@ function ProductPickerModal({ user, onSelect, onClose }) {
     // Load all approved products once then filter client-side — no index needed
     getDocs(query(collection(db, "products"), where("approved", "==", true), limit(200)))
       .then(snap => {
-        setAllProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setAllProducts(snap.docs.map(d => ({ ...d.data(), id: d.id })));
         setLoading(false);
       }).catch(() => setLoading(false));
   }, []);
