@@ -1,4 +1,4 @@
-\// v2.4 - compact feed cards, barcode scan icon, navy rank badges
+// v2.4 - compact feed cards, barcode scan icon, navy rank badges
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import ReactDOM from "react-dom";
 import { initializeApp } from "firebase/app";
