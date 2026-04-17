@@ -7764,15 +7764,24 @@ function FounderPicksRow({onTap, friendScans={}}) {
         }
         setPicks(pickData.map(pick => {
           const p = productMap[pick.productId] || {};
+          // Compute live pore score from actual ingredients to ensure accuracy
+          const ingredients = p.ingredients || pick.ingredients || "";
+          let liveScore = pick.poreScore ?? p.poreScore ?? 99;
+          try {
+            if (ingredients.trim().length > 10) {
+              const r = analyzeIngredients(ingredients);
+              if (r?.avgScore != null) liveScore = Math.round(r.avgScore);
+            }
+          } catch {}
           return {
             ...pick,
             image: p.adminImage||p.image||pick.image||"",
-            poreScore: p.poreScore??pick.poreScore??0,
-            ingredients: p.ingredients||pick.ingredients||"",
+            poreScore: liveScore,
+            ingredients,
             buyUrl: p.buyUrl||pick.buyUrl||"",
             communityRating: p.communityRating||pick.communityRating||null,
           };
-        }));
+        }).filter(pick => pick.poreScore <= 1));    // Explore-wide rule: only show clean (0-1) products
       } catch(e) { console.error("FounderPicks load error", e); }
       setLoading(false);
     }
@@ -8149,9 +8158,6 @@ function ShopPage({user, profile, onUpdateProfile}) {
 
       {/* Founder Picks — manual selections from McKenzie & Morgan, top of Explore */}
       <FounderPicksRow friendScans={friendScans} onTap={openProductFromPost}/>
-
-      {/* Top Picks by category — auto-curated featured products grouped by category */}
-      <WhatWereLovingSection friendScans={friendScans} onTap={openProductFromPost}/>
 
       {/* Brand filter banner */}
       <div id="shop-products-list"/>
