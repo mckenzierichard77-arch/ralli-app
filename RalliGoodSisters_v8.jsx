@@ -4773,10 +4773,6 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
                       </div>
                       <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"0.2rem",flexShrink:0}}>
                         <PoreScoreBadge score={res.avgScore!=null ? Math.round(res.avgScore) : null} size="sm"/>
-                        {p._cached && p._approved
-                          ? <span style={{fontSize:"0.5rem",color:T.navy,background:T.iceBlue+"80",padding:"0.05rem 0.35rem",borderRadius:"999px",border:`1px solid ${T.iceBlue}`,fontWeight:"700"}}>✓ In Ralli</span>
-                          : null
-                        }
                         {p.communityRating&&<span style={{fontSize:"0.5rem",color:T.textMid,fontWeight:"500"}}>⭐ {p.communityRating}/10</span>}
                         {p.scanCount>0&&<span style={{fontSize:"0.48rem",color:T.textLight}}>{p.scanCount} {p.scanCount===1?"scan":"scans"}</span>}
                       </div>
@@ -7456,7 +7452,45 @@ function FounderPicksSection({onTap, friendScans={}}) {
   useEffect(()=>{
     async function load() {
       try {
-        // founder_picks sourced from product database via AdminFounderPicks
+        // PRIMARY: read products flagged with featuredOnExplore directly.
+        // This is the new admin-managed source — set via Admin → Products → ⭐ Feature
+        // or via the ✨ Run Top 100 button. Cap at 24 so the section stays performant.
+        let featured = [];
+        try {
+          const fSnap = await getDocs(query(
+            collection(db,"products"),
+            where("featuredOnExplore","==",true),
+            limit(50)
+          ));
+          featured = fSnap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(p => !p.hidden)
+            .sort((a, b) => (a.featuredOrder ?? 999) - (b.featuredOrder ?? 999))
+            .slice(0, 24);
+        } catch(e) { console.warn("featuredOnExplore query failed", e); }
+
+        if (featured.length > 0) {
+          setPicks(featured.map(p => ({
+            id: p.id,
+            productId: p.id,
+            productName: p.productName,
+            brand: p.brand || "",
+            image: p.adminImage || p.image || "",
+            adminImage: p.adminImage || "",
+            poreScore: p.poreScore ?? 0,
+            ingredients: p.ingredients || "",
+            buyUrl: p.buyUrl || "",
+            communityRating: p.communityRating || null,
+            note: p.featuredNote || "",                 // optional editorial note from admin
+            founderName: p.featuredFounder || "",       // optional founder attribution
+            order: p.featuredOrder ?? 0,
+          })));
+          setLoading(false);
+          return;
+        }
+
+        // FALLBACK: legacy founder_picks collection (kept so existing data still renders
+        // for users who haven't migrated to the featuredOnExplore flag yet).
         let snap;
         try {
           snap = await getDocs(query(collection(db,"founder_picks"), orderBy("order","asc"), limit(12)));
@@ -9392,6 +9426,27 @@ function AdminProductHub() {
     setBulkBusy(false);
   }
 
+  async function bulkUnhide() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Unhide ${ids.length} product${ids.length===1?"":"s"}?\n\nThey'll reappear in the main catalog. You may still need to approve them individually if they were never approved.`)) return;
+    setBulkBusy(true);
+    try {
+      const CHUNK = 400;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK);
+        const batch = writeBatch(db);
+        chunk.forEach(id => batch.update(doc(db, "products", id), { hidden: false, updatedAt: Date.now() }));
+        await batch.commit();
+      }
+      setProducts(ps => ps.map(p => ids.includes(p.id) ? { ...p, hidden: false } : p));
+      exitSelectMode();
+    } catch(e) {
+      alert("Bulk unhide failed: " + e.message);
+    }
+    setBulkBusy(false);
+  }
+
   // ── Duplicate finder ──────────────────────────────────────────────────
   // Groups products by normalized brand+name. Any group with 2+ entries is a duplicate set.
   // Within each group we suggest a "keep" (highest score: has admin image > has ingredients > scan count > newer)
@@ -9446,6 +9501,108 @@ function AdminProductHub() {
     exitSelectMode();
   }
 
+  // ── Featured-on-Explore bulk actions ──────────────────────────────────
+  // Flips `featuredOnExplore` on selected products. Featured products show up
+  // in the "What We're Loving" section on the Explore page.
+  async function bulkFeature(featured) {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const verb = featured ? "Feature" : "Unfeature";
+    if (!window.confirm(`${verb} ${ids.length} product${ids.length===1?"":"s"} on Explore?`)) return;
+    setBulkBusy(true);
+    try {
+      const CHUNK = 400;
+      // For new featured items, assign incremental order based on what's already featured
+      let nextOrder = featured
+        ? products.filter(p => p.featuredOnExplore).reduce((m, p) => Math.max(m, p.featuredOrder ?? 0), -1) + 1
+        : 0;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK);
+        const batch = writeBatch(db);
+        chunk.forEach(id => {
+          const update = { featuredOnExplore: featured, updatedAt: Date.now() };
+          if (featured) update.featuredOrder = nextOrder++;
+          batch.update(doc(db, "products", id), update);
+        });
+        await batch.commit();
+      }
+      // Reflect locally
+      setProducts(ps => ps.map(p => {
+        if (!ids.includes(p.id)) return p;
+        const update = { featuredOnExplore: featured };
+        if (featured) {
+          // assign a sequential order; recalc based on current featured count
+          update.featuredOrder = (ps.filter(x => x.featuredOnExplore).length);
+        }
+        return { ...p, ...update };
+      }));
+      exitSelectMode();
+    } catch(e) {
+      alert(`${verb} failed: ` + e.message);
+    }
+    setBulkBusy(false);
+  }
+
+  // ── Top 100 auto-feature ─────────────────────────────────────────────
+  // Picks the 100 best products: prioritizes complete data (image + ingredients),
+  // low pore score, high community rating, high scan count.
+  async function runTop100() {
+    if (!window.confirm("Auto-feature the top 100 products on Explore?\n\nThis ranks every product in your catalog by quality (data completeness + pore score + community rating + scans), then marks the top 100 as Featured. Any products currently featured will be UN-featured if they're not in the new top 100.")) return;
+    setBulkBusy(true);
+    try {
+      // Score every product
+      const hasCleanImg = p => { const u=(p.adminImage||p.image||"").trim(); return u.length>8 && !u.includes("openbeautyfacts") && !u.startsWith("blob:"); };
+      const hasIngredients = p => (p.ingredients||"").trim().length > 10;
+
+      const ranked = products
+        .filter(p => !p.hidden) // never feature hidden products
+        .map(p => {
+          const imgOk = hasCleanImg(p);
+          const ingOk = hasIngredients(p);
+          // Composite score (higher = better)
+          const score =
+            (imgOk ? 1000 : 0) +                                          // must-have: real image
+            (ingOk ? 800 : 0) +                                            // must-have: ingredients
+            (p.approved ? 200 : 0) +                                       // admin-approved bonus
+            (Math.max(0, 5 - (p.poreScore ?? 5))) * 100 +                  // lower pore score = better (0=best=500pts)
+            ((p.communityRating ?? 0) * 30) +                              // community rating 0-10 → 0-300
+            Math.min((p.scanCount ?? 0) * 2, 200) +                        // scan popularity, capped
+            (p.featuredOnExplore ? 25 : 0);                                // small tiebreaker for currently-featured
+          return { p, score, imgOk, ingOk };
+        })
+        // Filter out products that are missing both image and ingredients — won't render well
+        .filter(x => x.imgOk || x.ingOk)
+        .sort((a, b) => b.score - a.score);
+
+      const top100 = ranked.slice(0, 100).map(x => x.p);
+      const top100Ids = new Set(top100.map(p => p.id));
+      const currentlyFeatured = products.filter(p => p.featuredOnExplore);
+      const toUnfeature = currentlyFeatured.filter(p => !top100Ids.has(p.id));
+
+      // Batch the updates
+      const CHUNK = 400;
+      const allUpdates = [
+        ...top100.map((p, idx) => ({ id: p.id, update: { featuredOnExplore: true, featuredOrder: idx, updatedAt: Date.now() } })),
+        ...toUnfeature.map(p => ({ id: p.id, update: { featuredOnExplore: false, featuredOrder: 0, updatedAt: Date.now() } })),
+      ];
+      for (let i = 0; i < allUpdates.length; i += CHUNK) {
+        const chunk = allUpdates.slice(i, i + CHUNK);
+        const batch = writeBatch(db);
+        chunk.forEach(({ id, update }) => batch.update(doc(db, "products", id), update));
+        await batch.commit();
+      }
+
+      // Reflect locally
+      const updateMap = new Map(allUpdates.map(u => [u.id, u.update]));
+      setProducts(ps => ps.map(p => updateMap.has(p.id) ? { ...p, ...updateMap.get(p.id) } : p));
+
+      alert(`✓ Top 100 done\n\n${top100.length} products featured · ${toUnfeature.length} unfeatured\n\nThey'll show up in the "What We're Loving" section on the Explore page.`);
+    } catch(e) {
+      alert("Top 100 failed: " + e.message);
+    }
+    setBulkBusy(false);
+  }
+
   const hasImg = p => { const u=(p.adminImage||p.image||"").trim(); return u.length>8&&!u.includes("openbeautyfacts")&&!u.startsWith("blob:"); };
   const hasIng = p => (p.ingredients||"").trim().length > 10;
 
@@ -9492,6 +9649,11 @@ function AdminProductHub() {
     .filter(p => dupeView ? dupeIdSet.has(p.id) : true)
     .filter(p => {
       if (dupeView) return true; // skip status filters in dupe view
+      // Hidden filter: dedicated bucket for hidden products
+      if (filter==="hidden")        return !!p.hidden;
+      // Every other filter excludes hidden products by default — they only show in the "hidden" view
+      if (p.hidden) return false;
+      if (filter==="featured")      return !!p.featuredOnExplore;
       if (filter==="noimage")       return !hasImg(p);
       if (filter==="noingredients") return !hasIng(p);
       if (filter==="both")          return !hasImg(p)&&!hasIng(p);
@@ -9510,6 +9672,14 @@ function AdminProductHub() {
         if (ga?.keep?.id === b.id) return 1;
         return 0;
       }
+      if(sort==="featured") {
+        // Featured first (by featuredOrder), then unfeatured
+        const af = a.featuredOnExplore ? 0 : 1;
+        const bf = b.featuredOnExplore ? 0 : 1;
+        if (af !== bf) return af - bf;
+        if (a.featuredOnExplore && b.featuredOnExplore) return (a.featuredOrder ?? 999) - (b.featuredOrder ?? 999);
+        return (a.productName||"").localeCompare(b.productName||"");
+      }
       if(sort==="scans") return (b.scanCount||0)-(a.scanCount||0);
       if(sort==="name") return (a.productName||"").localeCompare(b.productName||"");
       return (b.updatedAt||0)-(a.updatedAt||0);
@@ -9527,11 +9697,13 @@ function AdminProductHub() {
     });
 
   const counts = {
-    all: products.length,
-    noimage: products.filter(p=>!hasImg(p)).length,
-    noingredients: products.filter(p=>!hasIng(p)).length,
-    both: products.filter(p=>!hasImg(p)&&!hasIng(p)).length,
-    ready: products.filter(p=>hasImg(p)&&hasIng(p)).length,
+    all: products.filter(p=>!p.hidden).length,
+    featured: products.filter(p=>!p.hidden && p.featuredOnExplore).length,
+    noimage: products.filter(p=>!p.hidden && !hasImg(p)).length,
+    noingredients: products.filter(p=>!p.hidden && !hasIng(p)).length,
+    both: products.filter(p=>!p.hidden && !hasImg(p) && !hasIng(p)).length,
+    ready: products.filter(p=>!p.hidden && hasImg(p) && hasIng(p)).length,
+    hidden: products.filter(p=>p.hidden).length,
   };
 
   async function openEdit(p) {
@@ -9893,10 +10065,17 @@ function AdminProductHub() {
 
       {/* Seed clean brands — bulk-imports ~175 real products from clean brands into swipe queue */}
       <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
-        <button onClick={runSeed} disabled={seeding}
-          style={{padding:"0.6rem 0.85rem",background:seeding?T.surfaceAlt:`linear-gradient(135deg, ${T.sage}, ${T.accent})`,color:seeding?T.textMid:"#fff",border:`1px solid ${seeding?T.border:T.sage}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"700",cursor:seeding?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.4rem"}}>
-          {seeding ? "⏳ Seeding…" : `🌱 Seed Clean Brands (${CLEAN_BRANDS_SEED.length} products)`}
-        </button>
+        <div style={{display:"flex",gap:"0.4rem"}}>
+          <button onClick={runSeed} disabled={seeding||bulkBusy}
+            style={{flex:1,padding:"0.6rem 0.85rem",background:(seeding||bulkBusy)?T.surfaceAlt:`linear-gradient(135deg, ${T.sage}, ${T.accent})`,color:(seeding||bulkBusy)?T.textMid:"#fff",border:`1px solid ${(seeding||bulkBusy)?T.border:T.sage}`,borderRadius:"0.6rem",fontSize:"0.7rem",fontWeight:"700",cursor:(seeding||bulkBusy)?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
+            {seeding ? "⏳ Seeding…" : `🌱 Seed Clean Brands`}
+          </button>
+          <button onClick={runTop100} disabled={bulkBusy||seeding}
+            title="Auto-pick the 100 best products to feature on Explore"
+            style={{flex:1,padding:"0.6rem 0.85rem",background:(bulkBusy||seeding)?T.surfaceAlt:`linear-gradient(135deg, #D4A015, #E8B73A)`,color:(bulkBusy||seeding)?T.textMid:"#fff",border:`1px solid ${(bulkBusy||seeding)?T.border:"#D4A015"}`,borderRadius:"0.6rem",fontSize:"0.7rem",fontWeight:"700",cursor:(bulkBusy||seeding)?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
+            {bulkBusy ? "⏳ …" : `✨ Run Top 100`}
+          </button>
+        </div>
         {seedResult && (
           <div style={{padding:"0.65rem 0.85rem",background:T.sage+"15",border:`1px solid ${T.sage}55`,borderRadius:"0.6rem",fontFamily:"'Inter',sans-serif"}}>
             <div style={{fontSize:"0.72rem",fontWeight:"700",color:T.sage,marginBottom:"0.25rem"}}>
@@ -9972,7 +10151,7 @@ function AdminProductHub() {
       {/* Sort */}
       <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
         <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginRight:"0.2rem"}}>Sort:</div>
-        {[["scans","Most scanned"],["name","A–Z"],["recent","Recent"]].map(([id,label])=>(
+        {[["scans","Most scanned"],["name","A–Z"],["recent","Recent"],["featured","⭐ Featured first"]].map(([id,label])=>(
           <button key={id} onClick={()=>setSort(id)}
             style={{padding:"0.25rem 0.6rem",background:sort===id?T.accent:T.surfaceAlt,color:sort===id?"#fff":T.textMid,border:`1px solid ${sort===id?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.62rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:sort===id?"600":"400"}}>
             {label}
@@ -9982,7 +10161,7 @@ function AdminProductHub() {
 
       {/* Filter pills */}
       <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
-        {[["all",`All (${counts.all})`,null],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage]].map(([id,label,color])=>(
+        {[["all",`All (${counts.all})`,null],["featured",`⭐ Featured (${counts.featured})`,"#D4A015"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage],["hidden",`🙈 Hidden (${counts.hidden})`,T.textMid]].map(([id,label,color])=>(
           <button key={id} onClick={()=>setFilter(id)}
             style={{padding:"0.3rem 0.7rem",background:filter===id?(color||T.accent):T.surfaceAlt,color:filter===id?"#fff":T.textMid,border:`1px solid ${filter===id?(color||T.accent):T.border}`,borderRadius:"999px",fontSize:"0.65rem",fontWeight:filter===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
             {label}
@@ -10014,41 +10193,57 @@ function AdminProductHub() {
       {/* Product list */}
       <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
         {filtered.length===0&&<div style={{padding:"2rem",textAlign:"center",color:T.textLight,fontSize:"0.78rem",fontFamily:"'Inter',sans-serif"}}>No products match this filter.</div>}
-        {filtered.map(p=>{
+        {filtered.map((p, idx)=>{
           const imgOk=hasImg(p), ingOk=hasIng(p), scans=p.scanCount||0;
           const isSelected = selectedIds.has(p.id);
           const onRowClick = selectMode ? (()=>toggleSelected(p.id)) : (()=>openEdit(p));
           const dupeGroup = dupeView ? dupeGroups.find(g => g.all.some(x => x.id === p.id)) : null;
           const isKeep = dupeGroup?.keep?.id === p.id;
+          // In dupe view: emit a visual group header before the first item of each group (always the KEEP item, since we sorted that way)
+          const showGroupHeader = dupeView && isKeep;
+          const groupSize = dupeGroup ? dupeGroup.all.length : 0;
           return (
-            <div key={p.id} onClick={onRowClick}
-              style={{background:isSelected?T.accent+"15":(isKeep?T.sage+"10":(savedId===p.id?T.sage+"18":T.surface)),border:`1px solid ${isSelected?T.accent:(isKeep?T.sage+"66":(savedId===p.id?T.sage:T.border))}`,borderRadius:"0.75rem",padding:"0.65rem 0.85rem",display:"flex",alignItems:"center",gap:"0.65rem",cursor:"pointer",opacity:p.hidden?0.55:1}}>
-              {selectMode && (
-                <div style={{width:"22px",height:"22px",borderRadius:"0.35rem",border:`2px solid ${isSelected?T.accent:T.border}`,background:isSelected?T.accent:T.surface,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.12s"}}>
-                  {isSelected && <span style={{color:"#fff",fontSize:"0.78rem",fontWeight:"700",lineHeight:1}}>✓</span>}
+            <React.Fragment key={p.id}>
+              {showGroupHeader && (
+                <div style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:idx===0?"0 0.25rem 0.15rem":"0.55rem 0.25rem 0.15rem",borderTop:idx===0?"none":`1px dashed ${T.border}`,marginTop:idx===0?0:"0.25rem"}}>
+                  <span style={{fontSize:"0.6rem",fontWeight:"700",color:"#7C3AED",fontFamily:"'Inter',sans-serif",textTransform:"uppercase",letterSpacing:"0.06em"}}>
+                    👯 {dupeGroup.brand} — {dupeGroup.name}
+                  </span>
+                  <span style={{fontSize:"0.55rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
+                    {groupSize} cop{groupSize===1?"y":"ies"}
+                  </span>
                 </div>
               )}
-              <div style={{width:"44px",height:"44px",borderRadius:"0.5rem",background:T.surfaceAlt,flexShrink:0,overflow:"hidden",border:`1px solid ${T.border}`}}>
-                {imgOk?<img src={p.adminImage||p.image} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>:<div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1.1rem"}}>📷</div>}
+              <div onClick={onRowClick}
+                style={{background:isSelected?T.accent+"15":(isKeep?T.sage+"10":(savedId===p.id?T.sage+"18":T.surface)),border:`1px solid ${isSelected?T.accent:(isKeep?T.sage+"66":(savedId===p.id?T.sage:T.border))}`,borderRadius:"0.75rem",padding:"0.65rem 0.85rem",display:"flex",alignItems:"center",gap:"0.65rem",cursor:"pointer",opacity:p.hidden?0.55:1}}>
+                {selectMode && (
+                  <div style={{width:"22px",height:"22px",borderRadius:"0.35rem",border:`2px solid ${isSelected?T.accent:T.border}`,background:isSelected?T.accent:T.surface,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.12s"}}>
+                    {isSelected && <span style={{color:"#fff",fontSize:"0.78rem",fontWeight:"700",lineHeight:1}}>✓</span>}
+                  </div>
+                )}
+                <div style={{width:"44px",height:"44px",borderRadius:"0.5rem",background:T.surfaceAlt,flexShrink:0,overflow:"hidden",border:`1px solid ${T.border}`}}>
+                  {imgOk?<img src={p.adminImage||p.image} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>:<div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1.1rem"}}>📷</div>}
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:"0.4rem"}}>
+                    {isKeep && <span style={{fontSize:"0.5rem",fontWeight:"700",color:T.sage,background:T.sage+"22",padding:"0.12rem 0.4rem",borderRadius:"999px",textTransform:"uppercase",letterSpacing:"0.06em",flexShrink:0}}>★ KEEP</span>}
+                    {p.featuredOnExplore && <span title="Featured on Explore" style={{fontSize:"0.55rem",fontWeight:"700",color:"#D4A015",flexShrink:0}}>⭐</span>}
+                    <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>{p.productName}</span>
+                    {p.hidden&&<span style={{fontSize:"0.55rem",color:T.rose,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.05em",flexShrink:0}}>· hidden</span>}
+                  </div>
+                  <div style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
+                    {p.brand}{p.category?` · ${p.category}`:""}{scans>0&&<span style={{color:T.accent,fontWeight:"600"}}> · {scans} scans</span>}{dupeView&&<span style={{color:T.textMid}}> · ID {p.id.slice(0,12)}…</span>}
+                  </div>
+                </div>
+                {!selectMode && (
+                  <div style={{display:"flex",flexDirection:"column",gap:"0.2rem",alignItems:"flex-end",flexShrink:0}}>
+                    <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:imgOk?T.sage+"22":T.rose+"22",color:imgOk?T.sage:T.rose,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{imgOk?"img ✓":"no img"}</span>
+                    <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:ingOk?T.sage+"22":T.amber+"22",color:ingOk?T.sage:T.amber,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{ingOk?"ing ✓":"no ing"}</span>
+                  </div>
+                )}
+                {!selectMode && <div style={{fontSize:"0.65rem",color:T.textLight,flexShrink:0}}>›</div>}
               </div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:"0.4rem"}}>
-                  {isKeep && <span style={{fontSize:"0.5rem",fontWeight:"700",color:T.sage,background:T.sage+"22",padding:"0.12rem 0.4rem",borderRadius:"999px",textTransform:"uppercase",letterSpacing:"0.06em",flexShrink:0}}>★ KEEP</span>}
-                  <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>{p.productName}</span>
-                  {p.hidden&&<span style={{fontSize:"0.55rem",color:T.rose,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.05em",flexShrink:0}}>· hidden</span>}
-                </div>
-                <div style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
-                  {p.brand}{p.category?` · ${p.category}`:""}{scans>0&&<span style={{color:T.accent,fontWeight:"600"}}> · {scans} scans</span>}{dupeView&&<span style={{color:T.textMid}}> · ID {p.id.slice(0,12)}…</span>}
-                </div>
-              </div>
-              {!selectMode && (
-                <div style={{display:"flex",flexDirection:"column",gap:"0.2rem",alignItems:"flex-end",flexShrink:0}}>
-                  <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:imgOk?T.sage+"22":T.rose+"22",color:imgOk?T.sage:T.rose,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{imgOk?"img ✓":"no img"}</span>
-                  <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:ingOk?T.sage+"22":T.amber+"22",color:ingOk?T.sage:T.amber,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{ingOk?"ing ✓":"no ing"}</span>
-                </div>
-              )}
-              {!selectMode && <div style={{fontSize:"0.65rem",color:T.textLight,flexShrink:0}}>›</div>}
-            </div>
+            </React.Fragment>
           );
         })}
       </div>
@@ -10061,10 +10256,28 @@ function AdminProductHub() {
           <div style={{flex:1,fontSize:"0.7rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>
             {selectedIds.size} selected
           </div>
-          <button onClick={bulkHide} disabled={bulkBusy}
-            style={{padding:"0.55rem 0.9rem",background:bulkBusy?T.surfaceAlt:T.amber,color:bulkBusy?T.textMid:"#fff",border:"none",borderRadius:"0.55rem",fontSize:"0.7rem",fontWeight:"700",cursor:bulkBusy?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif"}}>
-            {bulkBusy ? "…" : `🙈 Hide ${selectedIds.size}`}
-          </button>
+          {filter==="featured" ? (
+            <button onClick={()=>bulkFeature(false)} disabled={bulkBusy}
+              style={{padding:"0.55rem 0.9rem",background:bulkBusy?T.surfaceAlt:T.textMid,color:bulkBusy?T.textMid:"#fff",border:"none",borderRadius:"0.55rem",fontSize:"0.7rem",fontWeight:"700",cursor:bulkBusy?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif"}}>
+              {bulkBusy ? "…" : `Unfeature ${selectedIds.size}`}
+            </button>
+          ) : (
+            <button onClick={()=>bulkFeature(true)} disabled={bulkBusy}
+              style={{padding:"0.55rem 0.9rem",background:bulkBusy?T.surfaceAlt:"#D4A015",color:bulkBusy?T.textMid:"#fff",border:"none",borderRadius:"0.55rem",fontSize:"0.7rem",fontWeight:"700",cursor:bulkBusy?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif"}}>
+              {bulkBusy ? "…" : `⭐ Feature ${selectedIds.size}`}
+            </button>
+          )}
+          {filter==="hidden" ? (
+            <button onClick={bulkUnhide} disabled={bulkBusy}
+              style={{padding:"0.55rem 0.9rem",background:bulkBusy?T.surfaceAlt:T.sage,color:bulkBusy?T.textMid:"#fff",border:"none",borderRadius:"0.55rem",fontSize:"0.7rem",fontWeight:"700",cursor:bulkBusy?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif"}}>
+              {bulkBusy ? "…" : `👁 Unhide ${selectedIds.size}`}
+            </button>
+          ) : (
+            <button onClick={bulkHide} disabled={bulkBusy}
+              style={{padding:"0.55rem 0.9rem",background:bulkBusy?T.surfaceAlt:T.amber,color:bulkBusy?T.textMid:"#fff",border:"none",borderRadius:"0.55rem",fontSize:"0.7rem",fontWeight:"700",cursor:bulkBusy?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif"}}>
+              {bulkBusy ? "…" : `🙈 Hide ${selectedIds.size}`}
+            </button>
+          )}
           <button onClick={bulkDelete} disabled={bulkBusy}
             style={{padding:"0.55rem 0.9rem",background:bulkBusy?T.surfaceAlt:T.rose,color:bulkBusy?T.textMid:"#fff",border:"none",borderRadius:"0.55rem",fontSize:"0.7rem",fontWeight:"700",cursor:bulkBusy?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif"}}>
             {bulkBusy ? "…" : `🗑 Delete ${selectedIds.size}`}
