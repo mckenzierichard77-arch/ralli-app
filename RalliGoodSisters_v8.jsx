@@ -1,4 +1,4 @@
-// v2.4 - compact feed cards, barcode scan icon, navy rank badges
+\// v2.4 - compact feed cards, barcode scan icon, navy rank badges
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import ReactDOM from "react-dom";
 import { initializeApp } from "firebase/app";
@@ -7505,10 +7505,10 @@ function FounderPicksSection({onTap, friendScans={}}) {
       {/* Header */}
       <div style={{marginBottom:"0.85rem"}}>
         <div style={{display:"flex",alignItems:"center",gap:"0.4rem",marginBottom:"2px"}}>
-          <span style={{fontSize:"0.85rem"}}>⭐</span>
-          <span style={{fontSize:"0.62rem",letterSpacing:"0.1em",textTransform:"uppercase",color:"#D4A015",fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>Top Picks</span>
+          <span style={{fontSize:"0.85rem"}}>💛</span>
+          <span style={{fontSize:"0.62rem",letterSpacing:"0.1em",textTransform:"uppercase",color:"#D4A015",fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>Founder Picks</span>
         </div>
-        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>The cleanest, most-loved formulas in Ralli</div>
+        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Hand-selected by McKenzie, Morgan, and Kira</div>
       </div>
 
       {/* 2-col grid */}
