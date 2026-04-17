@@ -7452,24 +7452,21 @@ function FounderPicksSection({onTap, friendScans={}}) {
   useEffect(()=>{
     async function load() {
       try {
-        // PRIMARY: read products flagged with featuredOnExplore directly.
-        // This is the new admin-managed source — set via Admin → Products → ⭐ Feature
-        // or via the ✨ Run Top 100 button. Cap at 24 so the section stays performant.
-        let featured = [];
+        // Read products flagged with featuredOnExplore. This is the SOLE source —
+        // populated by Admin → Products → ⭐ Feature button or ✨ Run Top 100.
+        // No legacy fallback: if nothing is featured, the section stays empty.
         try {
           const fSnap = await getDocs(query(
             collection(db,"products"),
             where("featuredOnExplore","==",true),
-            limit(50)
+            limit(100)
           ));
-          featured = fSnap.docs
+          const featured = fSnap.docs
             .map(d => ({ id: d.id, ...d.data() }))
             .filter(p => !p.hidden)
             .sort((a, b) => (a.featuredOrder ?? 999) - (b.featuredOrder ?? 999))
-            .slice(0, 24);
-        } catch(e) { console.warn("featuredOnExplore query failed", e); }
+            .slice(0, 100);
 
-        if (featured.length > 0) {
           setPicks(featured.map(p => ({
             id: p.id,
             productId: p.id,
@@ -7481,49 +7478,12 @@ function FounderPicksSection({onTap, friendScans={}}) {
             ingredients: p.ingredients || "",
             buyUrl: p.buyUrl || "",
             communityRating: p.communityRating || null,
-            note: p.featuredNote || "",                 // optional editorial note from admin
-            founderName: p.featuredFounder || "",       // optional founder attribution
+            note: "",                         // featured products don't have founder notes
+            founderName: "",                  // founder attribution lives on the separate Founder Picks section
             order: p.featuredOrder ?? 0,
           })));
-          setLoading(false);
-          return;
-        }
-
-        // FALLBACK: legacy founder_picks collection (kept so existing data still renders
-        // for users who haven't migrated to the featuredOnExplore flag yet).
-        let snap;
-        try {
-          snap = await getDocs(query(collection(db,"founder_picks"), orderBy("order","asc"), limit(12)));
-        } catch {
-          snap = await getDocs(query(collection(db,"founder_picks"), limit(12)));
-        }
-        if (!snap.empty) {
-          // Enrich with latest product data from database
-          const pickData = snap.docs.map(d=>({id:d.id,...d.data()}));
-          const productIds = pickData.map(p=>p.productId).filter(Boolean);
-          let productMap = {};
-          if (productIds.length) {
-            // Fetch product docs in chunks of 10
-            for (let i=0; i<productIds.length; i+=10) {
-              const chunk = productIds.slice(i,i+10);
-              const pSnap = await getDocs(query(collection(db,"products"), where("__name__","in",chunk)));
-              pSnap.docs.forEach(d => { productMap[d.id] = {id:d.id,...d.data()}; });
-            }
-          }
-          setPicks(pickData.map(pick => {
-            const p = productMap[pick.productId] || {};
-            return {
-              ...pick,
-              image: p.adminImage||p.image||pick.image||"",
-              poreScore: p.poreScore??pick.poreScore??0,
-              ingredients: p.ingredients||pick.ingredients||"",
-              buyUrl: p.buyUrl||pick.buyUrl||"",
-              communityRating: p.communityRating||pick.communityRating||null,
-            };
-          }));
-        }
-        // If no picks configured, show nothing (not fake defaults)
-      } catch(e) { console.error("WWL load error", e); }
+        } catch(e) { console.warn("featuredOnExplore query failed", e); }
+      } catch(e) { console.error("Top Picks load error", e); }
       setLoading(false);
     }
     load();
@@ -7545,10 +7505,10 @@ function FounderPicksSection({onTap, friendScans={}}) {
       {/* Header */}
       <div style={{marginBottom:"0.85rem"}}>
         <div style={{display:"flex",alignItems:"center",gap:"0.4rem",marginBottom:"2px"}}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill={T.rose}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-          <span style={{fontSize:"0.62rem",letterSpacing:"0.1em",textTransform:"uppercase",color:T.rose,fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>What We're Loving</span>
+          <span style={{fontSize:"0.85rem"}}>⭐</span>
+          <span style={{fontSize:"0.62rem",letterSpacing:"0.1em",textTransform:"uppercase",color:"#D4A015",fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>Top Picks</span>
         </div>
-        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Personally curated by the Co-Founders</div>
+        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>The cleanest, most-loved formulas in Ralli</div>
       </div>
 
       {/* 2-col grid */}
@@ -7764,8 +7724,125 @@ function AdminFounderPicks() {
 }
 
 // Legacy alias — existing code still uses WhatWereLovingSection in ShopPage
+// (now renders Top Picks — i.e. featured products)
 function WhatWereLovingSection({onTap, friendScans={}}) {
   return <FounderPicksSection onTap={onTap} friendScans={friendScans}/>;
+}
+
+// ── FounderPicksRow — personal picks from McKenzie / Morgan / Kira ──────────
+// Reads from the founder_picks Firestore collection. Managed via:
+//   Admin → Content → 💛 Founder Picks
+// This section is separate from Top Picks (auto-curated featured products).
+function FounderPicksRow({onTap, friendScans={}}) {
+  const [picks, setPicks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const founderAvatars = useFounderAvatars();
+
+  useEffect(()=>{
+    async function load() {
+      try {
+        let snap;
+        try {
+          snap = await getDocs(query(collection(db,"founder_picks"), orderBy("order","asc"), limit(12)));
+        } catch {
+          snap = await getDocs(query(collection(db,"founder_picks"), limit(12)));
+        }
+        if (snap.empty) { setLoading(false); return; }
+        const pickData = snap.docs.map(d=>({id:d.id,...d.data()}));
+        const productIds = pickData.map(p=>p.productId).filter(Boolean);
+        let productMap = {};
+        if (productIds.length) {
+          for (let i=0; i<productIds.length; i+=10) {
+            const chunk = productIds.slice(i,i+10);
+            const pSnap = await getDocs(query(collection(db,"products"), where("__name__","in",chunk)));
+            pSnap.docs.forEach(d => { productMap[d.id] = {id:d.id,...d.data()}; });
+          }
+        }
+        setPicks(pickData.map(pick => {
+          const p = productMap[pick.productId] || {};
+          return {
+            ...pick,
+            image: p.adminImage||p.image||pick.image||"",
+            poreScore: p.poreScore??pick.poreScore??0,
+            ingredients: p.ingredients||pick.ingredients||"",
+            buyUrl: p.buyUrl||pick.buyUrl||"",
+            communityRating: p.communityRating||pick.communityRating||null,
+          };
+        }));
+      } catch(e) { console.error("FounderPicks load error", e); }
+      setLoading(false);
+    }
+    load();
+  },[]);
+
+  if (loading) return null;
+  if (!picks.length) return null;
+
+  return (
+    <div style={{marginBottom:"1.75rem"}}>
+      {/* Header */}
+      <div style={{marginBottom:"0.85rem"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"0.4rem",marginBottom:"2px"}}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill={T.rose}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          <span style={{fontSize:"0.62rem",letterSpacing:"0.1em",textTransform:"uppercase",color:T.rose,fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>What We're Loving</span>
+        </div>
+        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Personally curated by the Co-Founders</div>
+      </div>
+
+      {/* 2-col grid */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.65rem"}}>
+        {picks.map(pick=>{
+          const ps = poreStyle(pick.poreScore||0);
+          const img = (pick.adminImage||pick.image||"").trim();
+          const founderPhoto = pick.founderPhoto || founderAvatars[pick.founderName] || "";
+          const pickFriends = getFriendRoutineUsers(friendScans, pick.productName, pick.id);
+          return (
+            <button key={pick.id} onClick={()=>onTap({...pick,productImage:img})}
+              style={{background:T.surface,borderRadius:"1rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",transition:"all 0.18s",display:"flex",flexDirection:"column"}}
+              onMouseEnter={e=>{e.currentTarget.style.borderColor=T.rose+"80";e.currentTarget.style.boxShadow=`0 6px 20px ${T.rose}18`;e.currentTarget.style.transform="translateY(-1px)";}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.boxShadow="none";e.currentTarget.style.transform="none";}}>
+              <div style={{width:"100%",aspectRatio:"4/3",background:"#ffffff",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
+                {img
+                  ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.display="none"}/>
+                  : <PlaceholderCard name={pick.productName} brand={pick.brand||""}/>
+                }
+                {pick.ingredients && pick.ingredients.trim().length >= 10 && pick.poreScore != null && pick.poreScore > 0 && (
+                  <div style={{position:"absolute",top:"8px",left:"8px",background:ps.color,borderRadius:"0.4rem",padding:"2px 7px",display:"flex",alignItems:"center",gap:"3px"}}>
+                    <span style={{fontSize:"0.6rem",fontWeight:"700",color:"#fff"}}>{pick.poreScore}/5</span>
+                  </div>
+                )}
+                {founderPhoto && !pickFriends.length && (
+                  <div style={{position:"absolute",bottom:"8px",right:"8px",borderRadius:"50%",border:`2px solid ${T.surface}`,overflow:"hidden",width:"26px",height:"26px",boxShadow:"0 1px 6px rgba(0,0,0,0.15)"}}>
+                    <img src={founderPhoto} alt={pick.founderName||""} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
+                  </div>
+                )}
+                {founderPhoto && pickFriends.length > 0 && (
+                  <div style={{position:"absolute",bottom:"8px",right:"8px",borderRadius:"50%",border:`2px solid ${T.surface}`,overflow:"hidden",width:"26px",height:"26px",boxShadow:"0 1px 6px rgba(0,0,0,0.15)",opacity:0.5}}>
+                    <img src={founderPhoto} alt={pick.founderName||""} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
+                  </div>
+                )}
+                <FriendRoutinePill friends={pickFriends}/>
+              </div>
+              <div style={{padding:"0.65rem 0.7rem 0.75rem",flex:1,display:"flex",flexDirection:"column"}}>
+                {pick.brand && <div style={{fontSize:"0.53rem",color:T.accent,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"2px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pick.brand}</div>}
+                <div style={{fontSize:"0.78rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",marginBottom:"0.45rem"}}>{pick.productName}</div>
+                {pick.note && (
+                  <div style={{fontSize:"0.65rem",color:T.textMid,lineHeight:1.4,fontStyle:"italic",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical",overflow:"hidden",flex:1,marginBottom:"0.45rem"}}>
+                    "{pick.note}"
+                  </div>
+                )}
+                {pick.founderName && (
+                  <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>
+                    — {pick.founderName}
+                  </div>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // -- FriendsUsingSection — "What Your Friends Are Using" on Explore --
@@ -8068,6 +8145,9 @@ function ShopPage({user, profile, onUpdateProfile}) {
 
       {/* What We're Loving */}
       <WhatWereLovingSection friendScans={friendScans} onTap={openProductFromPost}/>
+
+      {/* Founder Picks — McKenzie / Morgan / Kira's personal recs */}
+      <FounderPicksRow friendScans={friendScans} onTap={openProductFromPost}/>
 
       {/* Brand filter banner */}
       <div id="shop-products-list"/>
