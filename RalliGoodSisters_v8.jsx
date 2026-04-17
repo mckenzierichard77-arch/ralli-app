@@ -7447,7 +7447,6 @@ function AboutRalliCard({onFounderTap}) {
 function FounderPicksSection({onTap, friendScans={}}) {
   const [picks, setPicks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const founderAvatars = useFounderAvatars();
 
   useEffect(()=>{
     async function load() {
@@ -7472,14 +7471,13 @@ function FounderPicksSection({onTap, friendScans={}}) {
             productId: p.id,
             productName: p.productName,
             brand: p.brand || "",
+            category: p.category || "other",
             image: p.adminImage || p.image || "",
             adminImage: p.adminImage || "",
             poreScore: p.poreScore ?? 0,
             ingredients: p.ingredients || "",
             buyUrl: p.buyUrl || "",
             communityRating: p.communityRating || null,
-            note: "",                         // featured products don't have founder notes
-            founderName: "",                  // founder attribution lives on the separate Founder Picks section
             order: p.featuredOrder ?? 0,
           })));
         } catch(e) { console.warn("featuredOnExplore query failed", e); }
@@ -7500,75 +7498,81 @@ function FounderPicksSection({onTap, friendScans={}}) {
   );
   if (!picks.length) return null;
 
+  // Group picks by category, preserving featuredOrder within each group
+  const grouped = {};
+  picks.forEach(p => {
+    const cat = p.category || "other";
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(p);
+  });
+  // Render in CAT_ORDER so categories appear in a predictable order, then any extras
+  const orderedCategories = [
+    ...CAT_ORDER.filter(c => grouped[c]?.length),
+    ...Object.keys(grouped).filter(c => !CAT_ORDER.includes(c)),
+  ];
+
   return (
     <div style={{marginBottom:"1.75rem"}}>
-      {/* Header */}
-      <div style={{marginBottom:"0.85rem"}}>
+      {/* Top section header */}
+      <div style={{marginBottom:"1.1rem"}}>
         <div style={{display:"flex",alignItems:"center",gap:"0.4rem",marginBottom:"2px"}}>
-          <span style={{fontSize:"0.85rem"}}>💛</span>
-          <span style={{fontSize:"0.62rem",letterSpacing:"0.1em",textTransform:"uppercase",color:"#D4A015",fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>Founder Picks</span>
+          <span style={{fontSize:"0.85rem"}}>⭐</span>
+          <span style={{fontSize:"0.62rem",letterSpacing:"0.1em",textTransform:"uppercase",color:"#D4A015",fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>Top Picks</span>
         </div>
-        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Hand-selected by the Founders</div>
+        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>The cleanest, most-loved formulas in Ralli — by category</div>
       </div>
 
-      {/* 2-col grid */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.65rem"}}>
-        {picks.map(pick=>{
-          const ps = poreStyle(pick.poreScore||0);
-          const img = (pick.adminImage||pick.image||"").trim();
-          const founderPhoto = pick.founderPhoto || founderAvatars[pick.founderName] || "";
-          const pickFriends = getFriendRoutineUsers(friendScans, pick.productName, pick.id);
-          return (
-            <button key={pick.id} onClick={()=>onTap({...pick,productImage:img})}
-              style={{background:T.surface,borderRadius:"1rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",transition:"all 0.18s",display:"flex",flexDirection:"column"}}
-              onMouseEnter={e=>{e.currentTarget.style.borderColor=T.rose+"80";e.currentTarget.style.boxShadow=`0 6px 20px ${T.rose}18`;e.currentTarget.style.transform="translateY(-1px)";}}
-              onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.boxShadow="none";e.currentTarget.style.transform="none";}}>
+      {/* One sub-section per category */}
+      {orderedCategories.map(cat => {
+        const items = grouped[cat];
+        if (!items?.length) return null;
+        const label = CAT_LABEL[cat] || cat;
+        const emoji = CAT_EMOJI[cat] || "🛍";
+        return (
+          <div key={cat} style={{marginBottom:"1.4rem"}}>
+            {/* Category sub-header */}
+            <div style={{display:"flex",alignItems:"center",gap:"0.4rem",marginBottom:"0.65rem"}}>
+              <span style={{fontSize:"0.95rem"}}>{emoji}</span>
+              <span style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>{label}</span>
+              <span style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"500",marginLeft:"auto"}}>{items.length} pick{items.length===1?"":"s"}</span>
+            </div>
 
-              {/* Product image */}
-              <div style={{width:"100%",aspectRatio:"4/3",background:"#ffffff",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
-                {img
-                  ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.display="none"}/>
-                  : <PlaceholderCard name={pick.productName} brand={pick.brand||""}/>
-                }
-                {/* Pore clog score chip — only if we have real ingredient data */}
-                {pick.ingredients && pick.ingredients.trim().length >= 10 && pick.poreScore != null && pick.poreScore > 0 && (
-                  <div style={{position:"absolute",top:"8px",left:"8px",background:ps.color,borderRadius:"0.4rem",padding:"2px 7px",display:"flex",alignItems:"center",gap:"3px"}}>
-                    <span style={{fontSize:"0.6rem",fontWeight:"700",color:"#fff"}}>{pick.poreScore}/5</span>
-                  </div>
-                )}
-                {/* Founder avatar — only show if no friend pill */}
-                {founderPhoto && !pickFriends.length && (
-                  <div style={{position:"absolute",bottom:"8px",right:"8px",borderRadius:"50%",border:`2px solid ${T.surface}`,overflow:"hidden",width:"26px",height:"26px",boxShadow:"0 1px 6px rgba(0,0,0,0.15)"}}>
-                    <img src={founderPhoto} alt={pick.founderName||""} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
-                  </div>
-                )}
-                {founderPhoto && pickFriends.length > 0 && (
-                  <div style={{position:"absolute",bottom:"8px",right:"8px",borderRadius:"50%",border:`2px solid ${T.surface}`,overflow:"hidden",width:"26px",height:"26px",boxShadow:"0 1px 6px rgba(0,0,0,0.15)",opacity:0.5}}>
-                    <img src={founderPhoto} alt={pick.founderName||""} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
-                  </div>
-                )}
-                <FriendRoutinePill friends={pickFriends}/>
-              </div>
+            {/* 2-col grid for this category */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.65rem"}}>
+              {items.map(pick => {
+                const ps = poreStyle(pick.poreScore||0);
+                const img = (pick.adminImage||pick.image||"").trim();
+                const pickFriends = getFriendRoutineUsers(friendScans, pick.productName, pick.id);
+                return (
+                  <button key={pick.id} onClick={()=>onTap({...pick,productImage:img})}
+                    style={{background:T.surface,borderRadius:"1rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",transition:"all 0.18s",display:"flex",flexDirection:"column"}}
+                    onMouseEnter={e=>{e.currentTarget.style.borderColor="#D4A01580";e.currentTarget.style.boxShadow=`0 6px 20px #D4A01518`;e.currentTarget.style.transform="translateY(-1px)";}}
+                    onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.boxShadow="none";e.currentTarget.style.transform="none";}}>
 
-              {/* Info */}
-              <div style={{padding:"0.65rem 0.7rem 0.75rem",flex:1,display:"flex",flexDirection:"column"}}>
-                {pick.brand && <div style={{fontSize:"0.53rem",color:T.accent,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"2px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pick.brand}</div>}
-                <div style={{fontSize:"0.78rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",marginBottom:"0.45rem"}}>{pick.productName}</div>
-                {pick.note && (
-                  <div style={{fontSize:"0.65rem",color:T.textMid,lineHeight:1.4,fontStyle:"italic",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical",overflow:"hidden",flex:1,marginBottom:"0.45rem"}}>
-                    "{pick.note}"
-                  </div>
-                )}
-                {pick.founderName && (
-                  <div style={{fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>
-                    — {pick.founderName}
-                  </div>
-                )}
-              </div>
-            </button>
-          );
-        })}
-      </div>
+                    <div style={{width:"100%",aspectRatio:"4/3",background:"#ffffff",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
+                      {img
+                        ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.display="none"}/>
+                        : <PlaceholderCard name={pick.productName} brand={pick.brand||""}/>
+                      }
+                      {pick.ingredients && pick.ingredients.trim().length >= 10 && pick.poreScore != null && pick.poreScore > 0 && (
+                        <div style={{position:"absolute",top:"8px",left:"8px",background:ps.color,borderRadius:"0.4rem",padding:"2px 7px",display:"flex",alignItems:"center",gap:"3px"}}>
+                          <span style={{fontSize:"0.6rem",fontWeight:"700",color:"#fff"}}>{pick.poreScore}/5</span>
+                        </div>
+                      )}
+                      <FriendRoutinePill friends={pickFriends}/>
+                    </div>
+
+                    <div style={{padding:"0.65rem 0.7rem 0.75rem",flex:1,display:"flex",flexDirection:"column"}}>
+                      {pick.brand && <div style={{fontSize:"0.53rem",color:T.accent,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"2px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pick.brand}</div>}
+                      <div style={{fontSize:"0.78rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{pick.productName}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -8143,11 +8147,11 @@ function ShopPage({user, profile, onUpdateProfile}) {
         }, 100);
       }}/>
 
-      {/* What We're Loving */}
-      <WhatWereLovingSection friendScans={friendScans} onTap={openProductFromPost}/>
-
-      {/* Founder Picks — McKenzie & Morgan's personal recs */}
+      {/* Founder Picks — manual selections from McKenzie & Morgan, top of Explore */}
       <FounderPicksRow friendScans={friendScans} onTap={openProductFromPost}/>
+
+      {/* Top Picks by category — auto-curated featured products grouped by category */}
+      <WhatWereLovingSection friendScans={friendScans} onTap={openProductFromPost}/>
 
       {/* Brand filter banner */}
       <div id="shop-products-list"/>
