@@ -7508,7 +7508,7 @@ function FounderPicksSection({onTap, friendScans={}}) {
           <span style={{fontSize:"0.85rem"}}>💛</span>
           <span style={{fontSize:"0.62rem",letterSpacing:"0.1em",textTransform:"uppercase",color:"#D4A015",fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>Founder Picks</span>
         </div>
-        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Hand-selected by McKenzie, Morgan, and Kira</div>
+        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Hand-selected by the Founders</div>
       </div>
 
       {/* 2-col grid */}
@@ -7729,7 +7729,7 @@ function WhatWereLovingSection({onTap, friendScans={}}) {
   return <FounderPicksSection onTap={onTap} friendScans={friendScans}/>;
 }
 
-// ── FounderPicksRow — personal picks from McKenzie / Morgan / Kira ──────────
+// ── FounderPicksRow — personal picks from McKenzie & Morgan ─────────────────
 // Reads from the founder_picks Firestore collection. Managed via:
 //   Admin → Content → 💛 Founder Picks
 // This section is separate from Top Picks (auto-curated featured products).
@@ -7786,7 +7786,7 @@ function FounderPicksRow({onTap, friendScans={}}) {
           <svg width="12" height="12" viewBox="0 0 24 24" fill={T.rose}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
           <span style={{fontSize:"0.62rem",letterSpacing:"0.1em",textTransform:"uppercase",color:T.rose,fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>What We're Loving</span>
         </div>
-        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Personally curated by the Co-Founders</div>
+        <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Personally curated by the Founders</div>
       </div>
 
       {/* 2-col grid */}
@@ -8146,7 +8146,7 @@ function ShopPage({user, profile, onUpdateProfile}) {
       {/* What We're Loving */}
       <WhatWereLovingSection friendScans={friendScans} onTap={openProductFromPost}/>
 
-      {/* Founder Picks — McKenzie / Morgan / Kira's personal recs */}
+      {/* Founder Picks — McKenzie & Morgan's personal recs */}
       <FounderPicksRow friendScans={friendScans} onTap={openProductFromPost}/>
 
       {/* Brand filter banner */}
