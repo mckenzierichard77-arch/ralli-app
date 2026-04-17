@@ -9654,6 +9654,7 @@ function AdminProductHub() {
       // Every other filter excludes hidden products by default — they only show in the "hidden" view
       if (p.hidden) return false;
       if (filter==="featured")      return !!p.featuredOnExplore;
+      if (filter==="enriched")      return !!p.lastEnrichedAt;
       if (filter==="noimage")       return !hasImg(p);
       if (filter==="noingredients") return !hasIng(p);
       if (filter==="both")          return !hasImg(p)&&!hasIng(p);
@@ -9699,6 +9700,7 @@ function AdminProductHub() {
   const counts = {
     all: products.filter(p=>!p.hidden).length,
     featured: products.filter(p=>!p.hidden && p.featuredOnExplore).length,
+    enriched: products.filter(p=>!p.hidden && p.lastEnrichedAt).length,
     noimage: products.filter(p=>!p.hidden && !hasImg(p)).length,
     noingredients: products.filter(p=>!p.hidden && !hasIng(p)).length,
     both: products.filter(p=>!p.hidden && !hasImg(p) && !hasIng(p)).length,
@@ -10161,7 +10163,7 @@ function AdminProductHub() {
 
       {/* Filter pills */}
       <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
-        {[["all",`All (${counts.all})`,null],["featured",`⭐ Featured (${counts.featured})`,"#D4A015"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage],["hidden",`🙈 Hidden (${counts.hidden})`,T.textMid]].map(([id,label,color])=>(
+        {[["all",`All (${counts.all})`,null],["featured",`⭐ Featured (${counts.featured})`,"#D4A015"],["enriched",`✨ Enriched (${counts.enriched})`,"#6366F1"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage],["hidden",`🙈 Hidden (${counts.hidden})`,T.textMid]].map(([id,label,color])=>(
           <button key={id} onClick={()=>setFilter(id)}
             style={{padding:"0.3rem 0.7rem",background:filter===id?(color||T.accent):T.surfaceAlt,color:filter===id?"#fff":T.textMid,border:`1px solid ${filter===id?(color||T.accent):T.border}`,borderRadius:"999px",fontSize:"0.65rem",fontWeight:filter===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
             {label}
@@ -10228,6 +10230,7 @@ function AdminProductHub() {
                   <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:"0.4rem"}}>
                     {isKeep && <span style={{fontSize:"0.5rem",fontWeight:"700",color:T.sage,background:T.sage+"22",padding:"0.12rem 0.4rem",borderRadius:"999px",textTransform:"uppercase",letterSpacing:"0.06em",flexShrink:0}}>★ KEEP</span>}
                     {p.featuredOnExplore && <span title="Featured on Explore" style={{fontSize:"0.55rem",fontWeight:"700",color:"#D4A015",flexShrink:0}}>⭐</span>}
+                    {p.lastEnrichedAt && <span title={`Enriched by ${p.lastEnrichedBy||"coworker"}`} style={{fontSize:"0.55rem",fontWeight:"700",color:"#6366F1",flexShrink:0}}>✨</span>}
                     <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>{p.productName}</span>
                     {p.hidden&&<span style={{fontSize:"0.55rem",color:T.rose,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.05em",flexShrink:0}}>· hidden</span>}
                   </div>
@@ -10291,8 +10294,34 @@ function AdminProductHub() {
 // Shared edit form renderer
 function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgRef,onSave,onCancel,onDelete,saving,saveLabel,cancelLabel,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin,prefilling=false}) {
   if (!src) return null;
+  // Format enrichment timestamp as relative time ("3 days ago" / "just now")
+  const enrichedRelTime = src.lastEnrichedAt ? (() => {
+    const ms = Date.now() - src.lastEnrichedAt;
+    const mins = Math.floor(ms / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins} min ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs} hr ago`;
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return `${days} day${days===1?"":"s"} ago`;
+    const wks = Math.floor(days / 7);
+    if (wks < 4) return `${wks} wk${wks===1?"":"s"} ago`;
+    return new Date(src.lastEnrichedAt).toLocaleDateString();
+  })() : null;
   return (
     <div style={{background:T.surface,borderRadius:"1rem",border:`2px solid ${T.accent}`,padding:"1rem",display:"flex",flexDirection:"column",gap:"0.85rem"}}>
+      {/* Enrichment status banner */}
+      {src.lastEnrichedAt && (
+        <div style={{padding:"0.5rem 0.75rem",background:"#6366F112",border:"1px solid #6366F140",borderRadius:"0.55rem",display:"flex",alignItems:"center",gap:"0.5rem",fontFamily:"'Inter',sans-serif"}}>
+          <span style={{fontSize:"0.85rem"}}>✨</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:"0.62rem",fontWeight:"700",color:"#6366F1"}}>Enriched {enrichedRelTime}</div>
+            <div style={{fontSize:"0.55rem",color:T.textLight,marginTop:"1px"}}>
+              by {src.lastEnrichedBy || "coworker"} · {new Date(src.lastEnrichedAt).toLocaleString()}
+            </div>
+          </div>
+        </div>
+      )}
       {/* Image */}
       <div>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.4rem"}}>
