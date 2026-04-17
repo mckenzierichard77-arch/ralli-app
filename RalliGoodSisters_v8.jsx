@@ -9268,6 +9268,10 @@ function AdminProductHub() {
   const [selectedIds, setSelectedIds] = React.useState(() => new Set());
   const [bulkBusy, setBulkBusy]       = React.useState(false);
 
+  // Duplicate-finder mode
+  const [dupeView, setDupeView]       = React.useState(false); // when true, list filters down to dupes only
+  const [dupeGroups, setDupeGroups]   = React.useState([]);    // [{key, brand, name, products: [...]}]
+
   // Swipe mode
   const [swipeIdx, setSwipeIdx]   = React.useState(0);
   const [swipeFilter, setSwipeFilter] = React.useState("both"); // what to swipe through
@@ -9339,6 +9343,8 @@ function AdminProductHub() {
   function exitSelectMode() {
     setSelectMode(false);
     clearSelection();
+    setDupeView(false);
+    setDupeGroups([]);
   }
 
   async function bulkHide() {
@@ -9386,6 +9392,60 @@ function AdminProductHub() {
     setBulkBusy(false);
   }
 
+  // ── Duplicate finder ──────────────────────────────────────────────────
+  // Groups products by normalized brand+name. Any group with 2+ entries is a duplicate set.
+  // Within each group we suggest a "keep" (highest score: has admin image > has ingredients > scan count > newer)
+  // and the rest become preselected for hide/delete.
+  function findDuplicates() {
+    const groups = new Map();
+    products.forEach(p => {
+      const key = _normProductKey(p.brand, p.productName);
+      if (!key || key === "|") return; // skip products with no brand+name
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
+    });
+    const dupes = [];
+    groups.forEach((arr, key) => {
+      if (arr.length < 2) return;
+      // Score each: prioritize the one most worth keeping
+      const scored = arr.map(p => ({
+        p,
+        score: (
+          (p.adminImage && p.adminImage.length > 8 ? 1000 : 0) +
+          (p.image && p.image.length > 8 && !p.image.includes("openbeautyfacts") ? 500 : 0) +
+          ((p.ingredients||"").trim().length > 10 ? 250 : 0) +
+          (p.approved ? 100 : 0) +
+          (p.scanCount || 0) * 5 +
+          (p.communityRating ? 50 : 0)
+        ),
+      }));
+      scored.sort((a, b) => b.score - a.score);
+      dupes.push({
+        key,
+        brand: arr[0].brand || "(no brand)",
+        name: arr[0].productName || "(no name)",
+        keep: scored[0].p,
+        drop: scored.slice(1).map(s => s.p),
+        all: scored.map(s => s.p),
+      });
+    });
+    // Sort: groups with most duplicates first, then alpha
+    dupes.sort((a, b) => (b.all.length - a.all.length) || a.brand.localeCompare(b.brand));
+    setDupeGroups(dupes);
+    setDupeView(true);
+    // Preselect all "drop" candidates so user can one-tap Hide/Delete
+    const preselect = new Set();
+    dupes.forEach(g => g.drop.forEach(p => preselect.add(p.id)));
+    setSelectedIds(preselect);
+    setSelectMode(true);
+  }
+
+  function exitDupeView() {
+    setDupeView(false);
+    setDupeGroups([]);
+    exitSelectMode();
+  }
+
   const hasImg = p => { const u=(p.adminImage||p.image||"").trim(); return u.length>8&&!u.includes("openbeautyfacts")&&!u.startsWith("blob:"); };
   const hasIng = p => (p.ingredients||"").trim().length > 10;
 
@@ -9420,8 +9480,18 @@ function AdminProductHub() {
     return result;
   }
 
+  // When in dupeView, only show products that are part of a duplicate group.
+  // We also flatten the dupe groups into a single list so the user sees them grouped visually below.
+  const dupeIdSet = React.useMemo(() => {
+    const s = new Set();
+    dupeGroups.forEach(g => g.all.forEach(p => s.add(p.id)));
+    return s;
+  }, [dupeGroups]);
+
   const filtered = products
+    .filter(p => dupeView ? dupeIdSet.has(p.id) : true)
     .filter(p => {
+      if (dupeView) return true; // skip status filters in dupe view
       if (filter==="noimage")       return !hasImg(p);
       if (filter==="noingredients") return !hasIng(p);
       if (filter==="both")          return !hasImg(p)&&!hasIng(p);
@@ -9429,7 +9499,21 @@ function AdminProductHub() {
       return true;
     })
     .filter(p => { if(!search.trim()) return true; const q=search.toLowerCase(); return (p.productName||"").toLowerCase().includes(q)||(p.brand||"").toLowerCase().includes(q); })
-    .sort((a,b) => { if(sort==="scans") return (b.scanCount||0)-(a.scanCount||0); if(sort==="name") return (a.productName||"").localeCompare(b.productName||""); return (b.updatedAt||0)-(a.updatedAt||0); });
+    .sort((a,b) => {
+      if (dupeView) {
+        // Group dupes together: sort by normalized key, then "keep" first within each group
+        const ka = _normProductKey(a.brand, a.productName);
+        const kb = _normProductKey(b.brand, b.productName);
+        if (ka !== kb) return ka.localeCompare(kb);
+        const ga = dupeGroups.find(g => g.all.some(x => x.id === a.id));
+        if (ga?.keep?.id === a.id) return -1;
+        if (ga?.keep?.id === b.id) return 1;
+        return 0;
+      }
+      if(sort==="scans") return (b.scanCount||0)-(a.scanCount||0);
+      if(sort==="name") return (a.productName||"").localeCompare(b.productName||"");
+      return (b.updatedAt||0)-(a.updatedAt||0);
+    });
 
   const swipeQueue = products
     .filter(p => { if(swipeFilter==="both") return !hasImg(p)&&!hasIng(p); if(swipeFilter==="noimage") return !hasImg(p); if(swipeFilter==="noingredients") return !hasIng(p); return true; })
@@ -9851,6 +9935,11 @@ function AdminProductHub() {
       <div style={{display:"flex",gap:"0.5rem",alignItems:"center"}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…"
           style={{flex:1,padding:"0.55rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface}}/>
+        <button onClick={dupeView ? exitDupeView : findDuplicates}
+          title={dupeView ? "Exit duplicate view" : "Find duplicate products"}
+          style={{padding:"0.55rem 0.75rem",background:dupeView?"#7C3AED":T.surfaceAlt,color:dupeView?"#fff":T.textMid,border:`1px solid ${dupeView?"#7C3AED":T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+          {dupeView ? "✕" : "👯"}
+        </button>
         <button onClick={()=>{ if(selectMode) exitSelectMode(); else setSelectMode(true); }}
           title={selectMode ? "Exit select mode" : "Select multiple to hide or delete"}
           style={{padding:"0.55rem 0.75rem",background:selectMode?T.accent:T.surfaceAlt,color:selectMode?"#fff":T.textMid,border:`1px solid ${selectMode?T.accent:T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
@@ -9859,6 +9948,26 @@ function AdminProductHub() {
         <button onClick={exportCsv} style={{padding:"0.55rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>⬇️</button>
         <button onClick={load} style={{padding:"0.55rem 0.75rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>↺</button>
       </div>
+
+      {/* Duplicate view banner */}
+      {dupeView && (
+        <div style={{padding:"0.65rem 0.85rem",background:"#7C3AED12",border:`1px solid #7C3AED44`,borderRadius:"0.6rem",fontFamily:"'Inter',sans-serif"}}>
+          {dupeGroups.length === 0 ? (
+            <div style={{fontSize:"0.72rem",color:"#7C3AED",fontWeight:"700"}}>
+              ✓ No duplicates found — your catalog is clean.
+            </div>
+          ) : (
+            <>
+              <div style={{fontSize:"0.72rem",color:"#7C3AED",fontWeight:"700",marginBottom:"0.25rem"}}>
+                👯 Found {dupeGroups.length} duplicate group{dupeGroups.length===1?"":"s"} · {dupeGroups.reduce((n,g)=>n+g.drop.length,0)} extra cop{dupeGroups.reduce((n,g)=>n+g.drop.length,0)===1?"y":"ies"} preselected
+              </div>
+              <div style={{fontSize:"0.62rem",color:T.textMid,lineHeight:1.5}}>
+                The "best" copy in each group (most data, most scans) is marked <strong>KEEP</strong>. The rest are preselected — review the selection then tap <strong>🙈 Hide</strong> or <strong>🗑 Delete</strong>. Matching is case- and punctuation-insensitive on brand + name.
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Sort */}
       <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
@@ -9909,9 +10018,11 @@ function AdminProductHub() {
           const imgOk=hasImg(p), ingOk=hasIng(p), scans=p.scanCount||0;
           const isSelected = selectedIds.has(p.id);
           const onRowClick = selectMode ? (()=>toggleSelected(p.id)) : (()=>openEdit(p));
+          const dupeGroup = dupeView ? dupeGroups.find(g => g.all.some(x => x.id === p.id)) : null;
+          const isKeep = dupeGroup?.keep?.id === p.id;
           return (
             <div key={p.id} onClick={onRowClick}
-              style={{background:isSelected?T.accent+"15":(savedId===p.id?T.sage+"18":T.surface),border:`1px solid ${isSelected?T.accent:(savedId===p.id?T.sage:T.border)}`,borderRadius:"0.75rem",padding:"0.65rem 0.85rem",display:"flex",alignItems:"center",gap:"0.65rem",cursor:"pointer",opacity:p.hidden?0.55:1}}>
+              style={{background:isSelected?T.accent+"15":(isKeep?T.sage+"10":(savedId===p.id?T.sage+"18":T.surface)),border:`1px solid ${isSelected?T.accent:(isKeep?T.sage+"66":(savedId===p.id?T.sage:T.border))}`,borderRadius:"0.75rem",padding:"0.65rem 0.85rem",display:"flex",alignItems:"center",gap:"0.65rem",cursor:"pointer",opacity:p.hidden?0.55:1}}>
               {selectMode && (
                 <div style={{width:"22px",height:"22px",borderRadius:"0.35rem",border:`2px solid ${isSelected?T.accent:T.border}`,background:isSelected?T.accent:T.surface,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.12s"}}>
                   {isSelected && <span style={{color:"#fff",fontSize:"0.78rem",fontWeight:"700",lineHeight:1}}>✓</span>}
@@ -9921,9 +10032,13 @@ function AdminProductHub() {
                 {imgOk?<img src={p.adminImage||p.image} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>:<div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1.1rem"}}>📷</div>}
               </div>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}{p.hidden&&<span style={{marginLeft:"0.4rem",fontSize:"0.55rem",color:T.rose,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.05em"}}>· hidden</span>}</div>
+                <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:"0.4rem"}}>
+                  {isKeep && <span style={{fontSize:"0.5rem",fontWeight:"700",color:T.sage,background:T.sage+"22",padding:"0.12rem 0.4rem",borderRadius:"999px",textTransform:"uppercase",letterSpacing:"0.06em",flexShrink:0}}>★ KEEP</span>}
+                  <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>{p.productName}</span>
+                  {p.hidden&&<span style={{fontSize:"0.55rem",color:T.rose,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.05em",flexShrink:0}}>· hidden</span>}
+                </div>
                 <div style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
-                  {p.brand}{p.category?` · ${p.category}`:""}{scans>0&&<span style={{color:T.accent,fontWeight:"600"}}> · {scans} scans</span>}
+                  {p.brand}{p.category?` · ${p.category}`:""}{scans>0&&<span style={{color:T.accent,fontWeight:"600"}}> · {scans} scans</span>}{dupeView&&<span style={{color:T.textMid}}> · ID {p.id.slice(0,12)}…</span>}
                 </div>
               </div>
               {!selectMode && (
@@ -9938,7 +10053,7 @@ function AdminProductHub() {
         })}
       </div>
 
-      {filtered.length>0&&<div style={{textAlign:"center",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",paddingBottom:selectMode&&selectedIds.size>0?"6rem":"2rem"}}>{filtered.length} of {products.length} products · {selectMode?"tap to select":"tap to edit"}</div>}
+      {filtered.length>0&&<div style={{textAlign:"center",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",paddingBottom:selectMode&&selectedIds.size>0?"6rem":"2rem"}}>{filtered.length} of {products.length} products · {dupeView?"in duplicate groups":(selectMode?"tap to select":"tap to edit")}</div>}
 
       {/* Sticky bulk action bar — visible when in select mode with selections */}
       {selectMode && selectedIds.size > 0 && (
