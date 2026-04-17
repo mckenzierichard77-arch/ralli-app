@@ -1046,21 +1046,25 @@ async function searchProducts(searchTerm) {
           _cached: false,
         };
         results.push(result);
-        // Queue for caching
+        // Queue for caching — flagged for admin review via swipe queue
         newToCache.push({
           productName: p.product_name,
           brand,
           barcode: p.code||"",
-          image: "",
-          obfImage: p.image_front_small_url||"",
+          image: "",                                         // clean field — admin will add
+          obfImage: p.image_front_small_url||"",             // OBF ref shown in admin swipe card
           ingredients,
           poreScore: poreScore??0,
+          category: guessCategory(p.product_name||""),
           buyUrl: `https://www.amazon.com/s?k=${encodeURIComponent(brand+" "+p.product_name)}`,
           approved: false,
           hidden: false,
-          source: "user-scan",
+          pendingReview: true,                                // surfaces in admin swipe queue
+          source: "obf-search",
           isRequest: true,
           scanCount: 0,
+          uniqueScanners: [],
+          communityRating: null,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         });
@@ -1232,15 +1236,24 @@ async function upsertProduct(barcode, data) {
   const id = barcode || `manual_${Date.now()}`;
   const ref = doc(db,"products",id);
   const snap = await getDoc(ref);
+  // If the inbound image is an OBF URL, route it to obfImage instead of image
+  // (the admin swipe queue filters out OBF URLs from the `image` field anyway,
+  // and we want a clean separation so the admin can see the OBF ref while reviewing.)
+  const rawImg = (data.image || "").trim();
+  const isObfImg = rawImg && rawImg.includes("openbeautyfacts");
+  const cleanImg = isObfImg ? "" : rawImg;
+  const obfImg = isObfImg ? rawImg : (data.obfImage || "");
   if (snap.exists()) {
     // Update mutable fields only — don't overwrite admin edits
+    const existing = snap.data();
     const updates = {};
-    if (data.productName && !snap.data().productName) updates.productName = data.productName;
-    if (data.brand && !snap.data().brand) updates.brand = data.brand;
-    if (data.ingredients) updates.ingredients = data.ingredients;
-    if (data.image && !snap.data().image) updates.image = data.image;
-    if (Object.keys(updates).length) await updateDoc(ref, updates);
-    return {id, ...snap.data(), ...updates};
+    if (data.productName && !existing.productName) updates.productName = data.productName;
+    if (data.brand && !existing.brand) updates.brand = data.brand;
+    if (data.ingredients && (!existing.ingredients || existing.ingredients.trim().length < 10)) updates.ingredients = data.ingredients;
+    if (cleanImg && !existing.image && !existing.adminImage) updates.image = cleanImg;
+    if (obfImg && !existing.obfImage) updates.obfImage = obfImg;
+    if (Object.keys(updates).length) { updates.updatedAt = Date.now(); await updateDoc(ref, updates); }
+    return {id, ...existing, ...updates};
   } else {
     const newProduct = {
       barcode: id,
@@ -1249,14 +1262,18 @@ async function upsertProduct(barcode, data) {
       category: guessCategory(data.productName || ""),
       poreScore: data.poreScore ?? 0,
       ingredients: data.ingredients || "",
-      image: data.image || "",
+      image: cleanImg,
+      obfImage: obfImg,
       buyUrl: data.buyUrl || "",
       approved: false,
+      hidden: false,
+      pendingReview: true,      // flag for admin swipe queue — new OBF/scan additions
       scanCount: 0,
       uniqueScanners: [],
       communityRating: null,
       source: data.source || "scan",
       createdAt: serverTimestamp(),
+      updatedAt: Date.now(),
     };
     await setDoc(ref, newProduct);
     return {id, ...newProduct};
@@ -3571,7 +3588,9 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
       setProductName(p.name); setBrand(p.brand);
       setCurrentBarcode(code);
       setPostSource("scan");
+      let resolvedIngredients = "";
       if (p.hasIngredients) {
+        resolvedIngredients = p.ingredients;
         setIngredients(p.ingredients);
         const res = analyzeIngredients(p.ingredients);
         setResults(res);
@@ -3589,6 +3608,7 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
         } catch {}
 
         if (ingFromSearch.trim().length > 10) {
+          resolvedIngredients = ingFromSearch;
           setIngredients(ingFromSearch);
           const res = analyzeIngredients(ingFromSearch);
           setResults(res);
@@ -3601,11 +3621,14 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
           setCameraErr(`Found "${p.name}" but no ingredient list on file — photograph the ingredients label on the back to analyse it, or paste it below.`);
         }
       }
+      // Persist to Firestore so the product appears in the admin swipe queue for review.
+      // upsertProduct auto-routes the OBF image URL into obfImage (keeping `image` clean).
       upsertProduct(code, {
         productName: p.name, brand: p.brand,
-        ingredients: p.ingredients, image: p.image||"",
-        source: "scan",
-      }).catch(()=>{});
+        ingredients: resolvedIngredients,
+        image: p.image || "",
+        source: "obf-barcode-scan",
+      }).catch(e => debugLog("warn", `Upsert failed: ${e.message}`));
     } catch(e) {
       debugLog("error", `Barcode lookup failed: ${e.message}`);
       setCameraMode("choose");
@@ -3649,9 +3672,10 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
               debugLog("ok", `Found in catalog: ${match.name}`);
             } else {
               // Try OBF name search
-              const r2 = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(`${brand} ${name}`)}&search_simple=1&action=process&json=1&page_size=3&fields=product_name,brands,ingredients_text,ingredients_text_en`,{signal:AbortSignal.timeout(5000)});
+              const r2 = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(`${brand} ${name}`)}&search_simple=1&action=process&json=1&page_size=3&fields=product_name,brands,code,ingredients_text,ingredients_text_en,image_front_small_url`,{signal:AbortSignal.timeout(5000)});
               const d2 = await r2.json();
-              const ing = d2.products?.[0]?.ingredients_text_en || d2.products?.[0]?.ingredients_text || "";
+              const hit = d2.products?.[0];
+              const ing = hit?.ingredients_text_en || hit?.ingredients_text || "";
               if (ing.trim().length > 10) {
                 setIngredients(ing);
                 const r = analyzeIngredients(ing);
@@ -3660,6 +3684,14 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
               } else {
                 setCameraErr(`Found "${name}" but couldn't locate its ingredient list. Try photographing the ingredient label on the back instead.`);
               }
+              // Persist to Firestore so the product lands in the admin swipe queue.
+              const persistId = hit?.code || ("manual_"+(brand||"").toLowerCase().replace(/\s+/g,"_")+"_"+name.toLowerCase().replace(/\s+/g,"_"));
+              upsertProduct(persistId, {
+                productName: name, brand,
+                ingredients: ing,
+                image: hit?.image_front_small_url || "",
+                source: "obf-photo-product",
+              }).catch(e => debugLog("warn", `Upsert failed: ${e.message}`));
             }
           } catch { setCameraErr(`Found "${name}" but the lookup failed. Try photographing the ingredient label on the back instead.`); }
         } else {
@@ -3673,6 +3705,8 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
         const p=await lookupBarcode(bcode);
         debugLog("ok", `OBF: ${p.name} | ingredients: ${p.hasIngredients}`);
         setIngredients(p.ingredients||""); setProductName(p.name); setBrand(p.brand);
+        setCurrentBarcode(bcode);
+        setPostSource("scan");
         if (p.hasIngredients) {
           setAiStatus("Analysing ingredients…");
           const res = analyzeIngredients(p.ingredients);
@@ -3681,6 +3715,13 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
         } else {
           setCameraErr(`Found "${p.name}" but no ingredient list on file — paste the ingredients below.`);
         }
+        // Persist to Firestore so the product lands in the admin swipe queue.
+        upsertProduct(bcode, {
+          productName: p.name, brand: p.brand,
+          ingredients: p.ingredients || "",
+          image: p.image || "",
+          source: "obf-photo-barcode",
+        }).catch(e => debugLog("warn", `Upsert failed: ${e.message}`));
       } else if(result.includes("INGREDIENTS:")) {
         const nameMatch = result.match(/^NAME:(.+)$/m);
         const brandMatch = result.match(/^BRAND:(.+)$/m);
@@ -6903,6 +6944,297 @@ const SHOP_CATEGORIES = [
   ]},
 ];
 
+// ── CLEAN_BRANDS_SEED ───────────────────────────────────────────────────────
+// Curated list of real products from clean / acne-safe brands.
+// These are seeded with empty ingredients + image fields so they land in the
+// admin swipe queue — McKenzie + Coworker can then enrich them.
+// Each entry: {brand, productName, category}. Buy URL auto-generated.
+const CLEAN_BRANDS_SEED = [
+  // ── Merit ──────────────────────────────────────────────
+  {brand:"Merit", productName:"The Minimalist Perfecting Complexion Stick", category:"makeup"},
+  {brand:"Merit", productName:"Flush Balm Cream Blush", category:"makeup"},
+  {brand:"Merit", productName:"Signature Lip Lightweight Lipstick", category:"lip"},
+  {brand:"Merit", productName:"Great Skin Instant Glow Serum", category:"serum"},
+  {brand:"Merit", productName:"Solo Shadow Single Eyeshadow", category:"makeup"},
+  {brand:"Merit", productName:"Brush No. 1 Cheek & Complexion Brush", category:"other"},
+  {brand:"Merit", productName:"Clean Lash Lengthening Mascara", category:"makeup"},
+  {brand:"Merit", productName:"Day Glow Highlighting Balm", category:"makeup"},
+  {brand:"Merit", productName:"Bronze Balm Cream Bronzer", category:"makeup"},
+  {brand:"Merit", productName:"Shade Slick Tinted Lip Oil", category:"lip"},
+  {brand:"Merit", productName:"Fountain Skin Tint Hydrating Serum Tint", category:"makeup"},
+  {brand:"Merit", productName:"Brow 1980 Volumizing Tinted Brow Gel", category:"makeup"},
+  {brand:"Merit", productName:"The Minimalist Concealer", category:"makeup"},
+
+  // ── Tower 28 ───────────────────────────────────────────
+  {brand:"Tower 28", productName:"SOS Daily Rescue Facial Spray", category:"toner"},
+  {brand:"Tower 28", productName:"SOS Intensive Redness Relief Serum", category:"serum"},
+  {brand:"Tower 28", productName:"SOS Daily Barrier Cream", category:"moisturizer"},
+  {brand:"Tower 28", productName:"BeachPlease Tinted Lip + Cheek Balm", category:"makeup"},
+  {brand:"Tower 28", productName:"SuperDew Highlight Balm", category:"makeup"},
+  {brand:"Tower 28", productName:"Swipe Serum Concealer", category:"makeup"},
+  {brand:"Tower 28", productName:"OneShot Adaptive Foundation Stick", category:"makeup"},
+  {brand:"Tower 28", productName:"LipSoftie Hydrating Tinted Lip Treatment", category:"lip"},
+  {brand:"Tower 28", productName:"MakeWaves Lengthening + Volumizing Mascara", category:"makeup"},
+  {brand:"Tower 28", productName:"ShineOn Lip Jelly", category:"lip"},
+  {brand:"Tower 28", productName:"JuiceBalm Vegan Tinted Lip Balm", category:"lip"},
+  {brand:"Tower 28", productName:"Bronzino Illuminating Cream Bronzer", category:"makeup"},
+  {brand:"Tower 28", productName:"GetSet Setting Powder", category:"makeup"},
+
+  // ── Cetaphil ───────────────────────────────────────────
+  {brand:"Cetaphil", productName:"Daily Facial Cleanser", category:"face-wash"},
+  {brand:"Cetaphil", productName:"Gentle Foaming Cleanser", category:"face-wash"},
+  {brand:"Cetaphil", productName:"PRO Oil Removing Foam Wash", category:"face-wash"},
+  {brand:"Cetaphil", productName:"Daily Facial Moisturizer SPF 35", category:"spf"},
+  {brand:"Cetaphil", productName:"Healthy Radiance Brightening Day Cream SPF 15", category:"moisturizer"},
+  {brand:"Cetaphil", productName:"Healthy Radiance Eye Cream", category:"eye"},
+  {brand:"Cetaphil", productName:"Healthy Radiance Brightness Reveal Serum", category:"serum"},
+  {brand:"Cetaphil", productName:"Soothing Gel Cream with Aloe", category:"moisturizer"},
+  {brand:"Cetaphil", productName:"Deep Hydration Healthy Glow Daily Cream", category:"moisturizer"},
+  {brand:"Cetaphil", productName:"Deep Hydration 48 Hour Activation Serum", category:"serum"},
+  {brand:"Cetaphil", productName:"Gentle Skin Cleansing Cloths", category:"face-wash"},
+  {brand:"Cetaphil", productName:"Pro Acne Control Foam Wash", category:"acne"},
+  {brand:"Cetaphil", productName:"Eczema Soothing Moisturizer", category:"body"},
+
+  // ── Youth To The People ────────────────────────────────
+  {brand:"Youth To The People", productName:"Kale + Green Tea Spinach Vitamins Superfood Cleanser", category:"face-wash"},
+  {brand:"Youth To The People", productName:"Polypeptide-121 Future Cream Firm + Bright Moisturizer", category:"moisturizer"},
+  {brand:"Youth To The People", productName:"Yerba Mate Resveratrol Eye Cream", category:"eye"},
+  {brand:"Youth To The People", productName:"Triple Peptide + Cactus Oasis Serum", category:"serum"},
+  {brand:"Youth To The People", productName:"Mineral Glow Sunscreen SPF 30", category:"spf"},
+  {brand:"Youth To The People", productName:"Dream Eye Cream with Vitamin C", category:"eye"},
+  {brand:"Youth To The People", productName:"Superberry Hydrate + Glow Dream Mask", category:"mask"},
+  {brand:"Youth To The People", productName:"Yerba Mate Resveratrol Cleansing Balm", category:"face-wash"},
+  {brand:"Youth To The People", productName:"15% Vitamin C + Clean Caffeine Energy Serum", category:"serum"},
+  {brand:"Youth To The People", productName:"10% Niacinamide + Tranexamic Acid Brightening Serum", category:"serum"},
+  {brand:"Youth To The People", productName:"Adaptogen Soothe + Hydrate Activated Mist", category:"toner"},
+  {brand:"Youth To The People", productName:"Superfood Antioxidant Eye Cream", category:"eye"},
+
+  // ── Clearstem ──────────────────────────────────────────
+  {brand:"Clearstem", productName:"GENTLECLEAN Acne-Safe Cleanser", category:"face-wash"},
+  {brand:"Clearstem", productName:"VITAMINSCRUB Acne-Safe Exfoliating Cleanser", category:"face-wash"},
+  {brand:"Clearstem", productName:"HYDRAGLOW Hyaluronic Acid Moisturizer", category:"moisturizer"},
+  {brand:"Clearstem", productName:"PRO-ACT Pre-Vitamin A Brightening Serum", category:"serum"},
+  {brand:"Clearstem", productName:"BRIGHTEYES Acne-Safe Eye Cream", category:"eye"},
+  {brand:"Clearstem", productName:"CLEARITY Anti-Acne + Anti-Aging Serum", category:"acne"},
+  {brand:"Clearstem", productName:"MINDBODYSKIN Hormonal Acne Supplement", category:"other"},
+  {brand:"Clearstem", productName:"BODYCLEAR Acne-Safe Body Wash", category:"body"},
+  {brand:"Clearstem", productName:"SKIN PREBIOTIC Pro-Microbiome Powder", category:"other"},
+  {brand:"Clearstem", productName:"GROWTH Lash + Brow Serum", category:"other"},
+
+  // ── Naturium ───────────────────────────────────────────
+  {brand:"Naturium", productName:"The Glow Getter Multi-Oil Hydrating Body Wash", category:"body"},
+  {brand:"Naturium", productName:"Niacinamide Cleansing Gel 3%", category:"face-wash"},
+  {brand:"Naturium", productName:"Niacinamide Serum 12% Plus Zinc 2%", category:"serum"},
+  {brand:"Naturium", productName:"Salicylic Acid Cleansing Gel 2%", category:"face-wash"},
+  {brand:"Naturium", productName:"BHA Liquid Exfoliant 2%", category:"exfoliant"},
+  {brand:"Naturium", productName:"Vitamin C Complex Serum", category:"serum"},
+  {brand:"Naturium", productName:"Phyto-Glow Lip Balm", category:"lip"},
+  {brand:"Naturium", productName:"Mineral Sunscreen SPF 50", category:"spf"},
+  {brand:"Naturium", productName:"Dew-Glow Moisturizer SPF 50", category:"spf"},
+  {brand:"Naturium", productName:"Plant Ceramide Rich Moisture Cream", category:"moisturizer"},
+  {brand:"Naturium", productName:"Multi-Bright Tranexamic Acid Treatment 5%", category:"serum"},
+  {brand:"Naturium", productName:"Quadruple Hyaluronic Acid Serum 5%", category:"serum"},
+  {brand:"Naturium", productName:"Multi-Peptide Eye Cream", category:"eye"},
+  {brand:"Naturium", productName:"Body Wash Glow Getter", category:"body"},
+  {brand:"Naturium", productName:"Mandelic Topical Acid 12%", category:"exfoliant"},
+  {brand:"Naturium", productName:"Retinol Complex Serum 1%", category:"serum"},
+  {brand:"Naturium", productName:"Glycolic Acid Cleansing Gel 5%", category:"face-wash"},
+
+  // ── NARS ───────────────────────────────────────────────
+  {brand:"NARS", productName:"Light Reflecting Foundation", category:"makeup"},
+  {brand:"NARS", productName:"Soft Matte Complete Foundation", category:"makeup"},
+  {brand:"NARS", productName:"Radiant Creamy Concealer", category:"makeup"},
+  {brand:"NARS", productName:"Soft Matte Complete Concealer", category:"makeup"},
+  {brand:"NARS", productName:"Blush in Orgasm", category:"makeup"},
+  {brand:"NARS", productName:"Air Matte Blush", category:"makeup"},
+  {brand:"NARS", productName:"Air Matte Lip Color", category:"lip"},
+  {brand:"NARS", productName:"Powermatte Lip Pigment", category:"lip"},
+  {brand:"NARS", productName:"Afterglow Lip Balm", category:"lip"},
+  {brand:"NARS", productName:"Climax Mascara", category:"makeup"},
+  {brand:"NARS", productName:"Light Reflecting Setting Powder", category:"makeup"},
+  {brand:"NARS", productName:"Sheer Glow Foundation", category:"makeup"},
+  {brand:"NARS", productName:"Tinted Moisturizer SPF 30", category:"makeup"},
+
+  // ── Innisfree ──────────────────────────────────────────
+  {brand:"Innisfree", productName:"Green Tea Hyaluronic Serum", category:"serum"},
+  {brand:"Innisfree", productName:"Green Tea Seed Hyaluronic Cream", category:"moisturizer"},
+  {brand:"Innisfree", productName:"Daily UV Defense Sunscreen SPF 36", category:"spf"},
+  {brand:"Innisfree", productName:"Volcanic Clay Pore Mask", category:"mask"},
+  {brand:"Innisfree", productName:"Retinol Cica Repair Ampoule", category:"serum"},
+  {brand:"Innisfree", productName:"Cherry Blossom Glow Cream", category:"moisturizer"},
+  {brand:"Innisfree", productName:"Bija Trouble Spot Essence", category:"acne"},
+  {brand:"Innisfree", productName:"Pore Clearing Foam Cleanser with Volcanic Cluster", category:"face-wash"},
+
+  // ── ILIA ───────────────────────────────────────────────
+  {brand:"ILIA", productName:"Super Serum Skin Tint SPF 40", category:"makeup"},
+  {brand:"ILIA", productName:"True Skin Serum Foundation", category:"makeup"},
+  {brand:"ILIA", productName:"True Skin Serum Concealer", category:"makeup"},
+  {brand:"ILIA", productName:"Multi-Stick Cream Blush + Lip + Cheek", category:"makeup"},
+  {brand:"ILIA", productName:"Limitless Lash Mascara", category:"makeup"},
+  {brand:"ILIA", productName:"Liquid Light Serum Highlighter", category:"makeup"},
+  {brand:"ILIA", productName:"Color Haze Multi-Use Pigment", category:"makeup"},
+  {brand:"ILIA", productName:"Balmy Tint Hydrating Lip Balm", category:"lip"},
+  {brand:"ILIA", productName:"Soft Focus Finishing Powder", category:"makeup"},
+  {brand:"ILIA", productName:"The Necessary Eyeshadow Palette", category:"makeup"},
+
+  // ── Saie ───────────────────────────────────────────────
+  {brand:"Saie", productName:"Glowy Super Gel Lightweight Dewy Highlighter", category:"makeup"},
+  {brand:"Saie", productName:"Sunvisor Radiant Moisturizing Face Sunscreen SPF 35", category:"spf"},
+  {brand:"Saie", productName:"Slip Tint Dewy Tinted Moisturizer SPF 35", category:"makeup"},
+  {brand:"Saie", productName:"Dew Blush Liquid Cheek Blush", category:"makeup"},
+  {brand:"Saie", productName:"Lip Blur Soft-Matte Hydrating Lip Treatment", category:"lip"},
+  {brand:"Saie", productName:"Mascara 101 Lengthening + Lifting", category:"makeup"},
+  {brand:"Saie", productName:"Brow Butter Conditioning Brow Pomade", category:"makeup"},
+  {brand:"Saie", productName:"Glossybounce Hydrating Lip Gloss Oil", category:"lip"},
+  {brand:"Saie", productName:"Sun Melt Cream Bronzer", category:"makeup"},
+
+  // ── Westman Atelier ────────────────────────────────────
+  {brand:"Westman Atelier", productName:"Vital Skincare Complexion Drops", category:"makeup"},
+  {brand:"Westman Atelier", productName:"Vital Pressed Skincare Foundation", category:"makeup"},
+  {brand:"Westman Atelier", productName:"Baby Cheeks Blush Stick", category:"makeup"},
+  {brand:"Westman Atelier", productName:"Lit Up Highlight Stick", category:"makeup"},
+  {brand:"Westman Atelier", productName:"Lip Suede Hydrating Matte Lipstick", category:"lip"},
+  {brand:"Westman Atelier", productName:"Eye Pods Cream Eyeshadow Duo", category:"makeup"},
+  {brand:"Westman Atelier", productName:"Beauty Butter Powder Bronzer", category:"makeup"},
+
+  // ── Kosas ──────────────────────────────────────────────
+  {brand:"Kosas", productName:"Revealer Concealer Super Creamy + Brightening", category:"makeup"},
+  {brand:"Kosas", productName:"Revealer Skin-Improving Foundation SPF 25", category:"makeup"},
+  {brand:"Kosas", productName:"DreamBeam Silicone-Free Mineral Sunscreen SPF 40", category:"spf"},
+  {brand:"Kosas", productName:"Cloud Set Baked Setting + Smoothing Talc-Free Powder", category:"makeup"},
+  {brand:"Kosas", productName:"BB Burst Tinted Moisturizer Gel Cream", category:"makeup"},
+  {brand:"Kosas", productName:"Plump + Juicy Lip Booster Buttery Treatment", category:"lip"},
+  {brand:"Kosas", productName:"Wet Lip Oil Plumping Treatment Gloss", category:"lip"},
+  {brand:"Kosas", productName:"The Big Clean Volumizing + Lash Care Mascara", category:"makeup"},
+  {brand:"Kosas", productName:"Stick Foundation Cream Concealer", category:"makeup"},
+
+  // ── Krave Beauty ───────────────────────────────────────
+  {brand:"Krave Beauty", productName:"Matcha Hemp Hydrating Cleanser", category:"face-wash"},
+  {brand:"Krave Beauty", productName:"Great Barrier Relief Soothing Repair Serum", category:"serum"},
+  {brand:"Krave Beauty", productName:"Oat So Simple Water Cream", category:"moisturizer"},
+  {brand:"Krave Beauty", productName:"Kale-Lalu-yAHA Mild Resurfacing Serum", category:"exfoliant"},
+  {brand:"Krave Beauty", productName:"Beet The Sun SPF 40 PA++++", category:"spf"},
+
+  // ── Glossier ───────────────────────────────────────────
+  {brand:"Glossier", productName:"Milky Jelly Cleanser", category:"face-wash"},
+  {brand:"Glossier", productName:"Super Bounce Hydrating Serum", category:"serum"},
+  {brand:"Glossier", productName:"Super Pure Niacinamide + Zinc Serum", category:"serum"},
+  {brand:"Glossier", productName:"Super Glow Vitamin C + Magnesium Serum", category:"serum"},
+  {brand:"Glossier", productName:"Invisible Shield Daily Sunscreen SPF 35", category:"spf"},
+  {brand:"Glossier", productName:"Balm Dotcom Universal Skin Salve", category:"lip"},
+  {brand:"Glossier", productName:"Futuredew Oil-Serum Hybrid", category:"serum"},
+  {brand:"Glossier", productName:"Solution Exfoliating Skin Perfector", category:"exfoliant"},
+  {brand:"Glossier", productName:"After Baume Moisture Barrier Recovery Cream", category:"moisturizer"},
+
+  // ── Versed ─────────────────────────────────────────────
+  {brand:"Versed", productName:"Day Dissolve Cleansing Balm", category:"face-wash"},
+  {brand:"Versed", productName:"Weekend Glow Daily Brightening Solution", category:"serum"},
+  {brand:"Versed", productName:"Press Restart Gentle Retinol Serum", category:"serum"},
+  {brand:"Versed", productName:"Skin Soak Rich Moisture Cream", category:"moisturizer"},
+  {brand:"Versed", productName:"Dew Point Moisturizing Gel-Cream", category:"moisturizer"},
+  {brand:"Versed", productName:"Guards Up Daily Mineral Sunscreen", category:"spf"},
+  {brand:"Versed", productName:"Just Breathe Clarifying Serum", category:"acne"},
+  {brand:"Versed", productName:"Doctor's Visit Instant Resurfacing Mask", category:"mask"},
+
+  // ── Bubble Skincare ────────────────────────────────────
+  {brand:"Bubble Skincare", productName:"Fresh Start Gel Cleanser", category:"face-wash"},
+  {brand:"Bubble Skincare", productName:"Slam Dunk Hydrating Moisturizer", category:"moisturizer"},
+  {brand:"Bubble Skincare", productName:"Day Dream Hydrating Toner", category:"toner"},
+  {brand:"Bubble Skincare", productName:"Level Up Daily Moisturizer SPF 30", category:"spf"},
+  {brand:"Bubble Skincare", productName:"Solo Act Hyaluronic Acid Serum", category:"serum"},
+  {brand:"Bubble Skincare", productName:"Break Even Salicylic Acid Cleanser", category:"face-wash"},
+
+  // ── Bliss ──────────────────────────────────────────────
+  {brand:"Bliss", productName:"Clear Genius Clarifying Toner", category:"toner"},
+  {brand:"Bliss", productName:"Bright Idea Vitamin C Brightening Serum", category:"serum"},
+  {brand:"Bliss", productName:"Block Star Mineral Sunscreen SPF 30", category:"spf"},
+  {brand:"Bliss", productName:"Drench & Quench Moisturizer", category:"moisturizer"},
+
+  // ── Dermalogica ────────────────────────────────────────
+  {brand:"Dermalogica", productName:"Special Cleansing Gel", category:"face-wash"},
+  {brand:"Dermalogica", productName:"Daily Microfoliant", category:"exfoliant"},
+  {brand:"Dermalogica", productName:"Active Moist", category:"moisturizer"},
+  {brand:"Dermalogica", productName:"Skin Smoothing Cream", category:"moisturizer"},
+  {brand:"Dermalogica", productName:"Multi Vitamin Power Recovery Masque", category:"mask"},
+
+  // ── REN ────────────────────────────────────────────────
+  {brand:"REN Clean Skincare", productName:"Ready Steady Glow Daily AHA Tonic", category:"toner"},
+  {brand:"REN Clean Skincare", productName:"Evercalm Gentle Cleansing Gel", category:"face-wash"},
+  {brand:"REN Clean Skincare", productName:"Clearcalm Clarifying Clay Cleanser", category:"face-wash"},
+  {brand:"REN Clean Skincare", productName:"Vita-Mineral Daily Supplement Moisturising Cream", category:"moisturizer"},
+];
+
+// Generate Amazon search URL for a seed product
+function _seedAmazonUrl(brand, name) {
+  return `https://www.amazon.com/s?k=${encodeURIComponent(brand+" "+name)}&i=beauty`;
+}
+
+// Normalize a product key for dedup matching (case + whitespace + punctuation insensitive)
+function _normProductKey(brand, name) {
+  const clean = s => (s||"").toLowerCase().replace(/[^\w\s]/g,"").replace(/\s+/g," ").trim();
+  return `${clean(brand)}|${clean(name)}`;
+}
+
+// Seed clean-brand products into Firestore. Skips any duplicates already present.
+// Returns {added, skipped, total, examples: [first few added names]}.
+async function seedCleanBrands() {
+  // 1. Pull current product catalog and build a dedup set
+  const snap = await getDocs(collection(db, "products"));
+  const existingKeys = new Set();
+  snap.docs.forEach(d => {
+    const p = d.data();
+    existingKeys.add(_normProductKey(p.brand, p.productName));
+  });
+
+  // 2. Filter seed list against existing
+  const toAdd = CLEAN_BRANDS_SEED.filter(p => !existingKeys.has(_normProductKey(p.brand, p.productName)));
+
+  // 3. Batch write — Firestore batches max 500 ops, we'll do 200 at a time to be safe
+  const examples = [];
+  let added = 0;
+  const CHUNK = 200;
+  for (let i = 0; i < toAdd.length; i += CHUNK) {
+    const chunk = toAdd.slice(i, i + CHUNK);
+    const batch = writeBatch(db);
+    chunk.forEach(p => {
+      // Stable Firestore doc ID — prevents accidental re-seeding from creating dupes
+      const id = "seed_clean_" + _normProductKey(p.brand, p.productName).replace(/[|\s]/g,"_").slice(0, 80);
+      const ref = doc(db, "products", id);
+      batch.set(ref, {
+        barcode: id,
+        productName: p.productName,
+        brand: p.brand,
+        category: p.category || guessCategory(p.productName),
+        poreScore: 0,
+        ingredients: "",                                    // empty — for swipe-queue enrichment
+        image: "",                                          // empty — for swipe-queue enrichment
+        obfImage: "",
+        buyUrl: _seedAmazonUrl(p.brand, p.productName),
+        approved: false,
+        hidden: false,
+        pendingReview: true,                                // surfaces in admin swipe queue
+        scanCount: 0,
+        uniqueScanners: [],
+        communityRating: null,
+        skinTypes: [],
+        source: "seed-clean-brands",
+        createdAt: serverTimestamp(),
+        updatedAt: Date.now(),
+      });
+      added++;
+      if (examples.length < 5) examples.push(`${p.brand} — ${p.productName}`);
+    });
+    await batch.commit();
+  }
+
+  return {
+    added,
+    skipped: CLEAN_BRANDS_SEED.length - toAdd.length,
+    total: CLEAN_BRANDS_SEED.length,
+    examples,
+  };
+}
+
 
 const CAT_EMOJI = {"face-wash":"🫧","moisturizer":"💧","serum":"✨","exfoliant":"🌀","spf":"☀️","eye":"👁️","body":"🧴","acne":"🎯","toner":"💦","lip":"💋","mask":"🎭","hair":"💇","makeup":"💄","other":"🛍"};
 const CAT_LABEL = {"face-wash":"Face Wash","moisturizer":"Moisturizer","serum":"Serum","exfoliant":"Exfoliant","spf":"SPF","eye":"Eye Cream","body":"Body Care","acne":"Acne Treatment","toner":"Toner","lip":"Lip Care","mask":"Face Mask","hair":"Hair & Scalp","makeup":"Makeup","other":"Other"};
@@ -8927,6 +9259,15 @@ function AdminProductHub() {
   const [uploadingImg, setUploadingImg] = React.useState(false);
   const [liveScore, setLiveScore] = React.useState(null);
 
+  // Seed clean brands
+  const [seeding, setSeeding] = React.useState(false);
+  const [seedResult, setSeedResult] = React.useState(null); // {added, skipped, total, examples}
+
+  // Multi-select mode for bulk hide/delete
+  const [selectMode, setSelectMode]   = React.useState(false);
+  const [selectedIds, setSelectedIds] = React.useState(() => new Set());
+  const [bulkBusy, setBulkBusy]       = React.useState(false);
+
   // Swipe mode
   const [swipeIdx, setSwipeIdx]   = React.useState(0);
   const [swipeFilter, setSwipeFilter] = React.useState("both"); // what to swipe through
@@ -8960,6 +9301,89 @@ function AdminProductHub() {
       setProducts(snap.docs.map(d => ({ ...d.data(), id: d.id })));
     } catch(e) { console.error(e); }
     setLoading(false);
+  }
+
+  async function runSeed() {
+    if (seeding) return;
+    if (!window.confirm(`Seed ~${CLEAN_BRANDS_SEED.length} clean-brand products into your catalog?\n\nDuplicates already in your database will be skipped automatically. New products land in the swipe queue with empty ingredients + image so you can enrich them with the Coworker.`)) return;
+    setSeeding(true);
+    setSeedResult(null);
+    try {
+      const result = await seedCleanBrands();
+      setSeedResult(result);
+      await load(); // refresh so the new products appear in counts + swipe queue
+    } catch(e) {
+      alert("Seed failed: " + e.message);
+    }
+    setSeeding(false);
+  }
+
+  // ── Multi-select bulk actions ─────────────────────────────────────────
+  function toggleSelected(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function selectAllVisible(ids) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.add(id));
+      return next;
+    });
+  }
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+  function exitSelectMode() {
+    setSelectMode(false);
+    clearSelection();
+  }
+
+  async function bulkHide() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Hide ${ids.length} product${ids.length===1?"":"s"}?\n\nHidden products stay in your database and can be un-hidden later — they just won't show up in the app.`)) return;
+    setBulkBusy(true);
+    try {
+      // Firestore batch limit = 500 — chunk to be safe
+      const CHUNK = 400;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK);
+        const batch = writeBatch(db);
+        chunk.forEach(id => batch.update(doc(db, "products", id), { hidden: true, approved: false, updatedAt: Date.now() }));
+        await batch.commit();
+      }
+      // Reflect locally without a full reload
+      setProducts(ps => ps.map(p => ids.includes(p.id) ? { ...p, hidden: true, approved: false } : p));
+      exitSelectMode();
+    } catch(e) {
+      alert("Bulk hide failed: " + e.message);
+    }
+    setBulkBusy(false);
+  }
+
+  async function bulkDelete() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    if (!window.confirm(`PERMANENTLY DELETE ${ids.length} product${ids.length===1?"":"s"}?\n\nThis cannot be undone. If you might want them back later, use Hide instead.`)) return;
+    if (ids.length >= 25 && !window.confirm(`Just to be sure — you're about to delete ${ids.length} products. Continue?`)) return;
+    setBulkBusy(true);
+    try {
+      const CHUNK = 400;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK);
+        const batch = writeBatch(db);
+        chunk.forEach(id => batch.delete(doc(db, "products", id)));
+        await batch.commit();
+      }
+      setProducts(ps => ps.filter(p => !ids.includes(p.id)));
+      exitSelectMode();
+    } catch(e) {
+      alert("Bulk delete failed: " + e.message);
+    }
+    setBulkBusy(false);
   }
 
   const hasImg = p => { const u=(p.adminImage||p.image||"").trim(); return u.length>8&&!u.includes("openbeautyfacts")&&!u.startsWith("blob:"); };
@@ -9009,7 +9433,14 @@ function AdminProductHub() {
 
   const swipeQueue = products
     .filter(p => { if(swipeFilter==="both") return !hasImg(p)&&!hasIng(p); if(swipeFilter==="noimage") return !hasImg(p); if(swipeFilter==="noingredients") return !hasIng(p); return true; })
-    .sort((a,b) => (b.scanCount||0)-(a.scanCount||0));
+    .sort((a,b) => {
+      // Pending-review products (newly added via OBF scan/search) go first
+      const aPending = a.pendingReview ? 0 : 1;
+      const bPending = b.pendingReview ? 0 : 1;
+      if (aPending !== bPending) return aPending - bPending;
+      // Within tier: most-scanned first
+      return (b.scanCount||0)-(a.scanCount||0);
+    });
 
   const counts = {
     all: products.length,
@@ -9094,6 +9525,7 @@ function AdminProductHub() {
         ingredients: (src.ingredients||"").trim(),
         buyUrl:      (src.buyUrl||"").trim(),
         approved:    true,
+        pendingReview: false,   // cleared once admin has reviewed
         updatedAt:   Date.now(),
       };
       if (src.adminImage) { updates.adminImage=src.adminImage; updates.image=src.adminImage; }
@@ -9375,6 +9807,35 @@ function AdminProductHub() {
         </button>
       </div>
 
+      {/* Seed clean brands — bulk-imports ~175 real products from clean brands into swipe queue */}
+      <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
+        <button onClick={runSeed} disabled={seeding}
+          style={{padding:"0.6rem 0.85rem",background:seeding?T.surfaceAlt:`linear-gradient(135deg, ${T.sage}, ${T.accent})`,color:seeding?T.textMid:"#fff",border:`1px solid ${seeding?T.border:T.sage}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"700",cursor:seeding?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.4rem"}}>
+          {seeding ? "⏳ Seeding…" : `🌱 Seed Clean Brands (${CLEAN_BRANDS_SEED.length} products)`}
+        </button>
+        {seedResult && (
+          <div style={{padding:"0.65rem 0.85rem",background:T.sage+"15",border:`1px solid ${T.sage}55`,borderRadius:"0.6rem",fontFamily:"'Inter',sans-serif"}}>
+            <div style={{fontSize:"0.72rem",fontWeight:"700",color:T.sage,marginBottom:"0.25rem"}}>
+              ✓ Added {seedResult.added} · Skipped {seedResult.skipped} duplicate{seedResult.skipped===1?"":"s"}
+            </div>
+            <div style={{fontSize:"0.62rem",color:T.textMid,lineHeight:1.5}}>
+              {seedResult.added > 0
+                ? <>New products are in the <strong>swipe queue</strong> with empty ingredients + image. Tap <strong>👆 Swipe</strong> above, or use the Coworker prompt to bulk-enrich them.</>
+                : <>All {seedResult.total} seed products were already in your catalog — nothing to add.</>}
+            </div>
+            {seedResult.examples?.length > 0 && (
+              <div style={{fontSize:"0.58rem",color:T.textLight,marginTop:"0.4rem",fontStyle:"italic"}}>
+                e.g. {seedResult.examples.slice(0,3).join(" · ")}
+              </div>
+            )}
+            <button onClick={()=>setSeedResult(null)}
+              style={{marginTop:"0.4rem",background:"none",border:"none",color:T.accent,fontSize:"0.6rem",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif"}}>
+              dismiss
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Swipe filter selector */}
       <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
         <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Swipe queue:</div>
@@ -9390,6 +9851,11 @@ function AdminProductHub() {
       <div style={{display:"flex",gap:"0.5rem",alignItems:"center"}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…"
           style={{flex:1,padding:"0.55rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface}}/>
+        <button onClick={()=>{ if(selectMode) exitSelectMode(); else setSelectMode(true); }}
+          title={selectMode ? "Exit select mode" : "Select multiple to hide or delete"}
+          style={{padding:"0.55rem 0.75rem",background:selectMode?T.accent:T.surfaceAlt,color:selectMode?"#fff":T.textMid,border:`1px solid ${selectMode?T.accent:T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+          {selectMode ? "✕" : "☑"}
+        </button>
         <button onClick={exportCsv} style={{padding:"0.55rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>⬇️</button>
         <button onClick={load} style={{padding:"0.55rem 0.75rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>↺</button>
       </div>
@@ -9415,34 +9881,81 @@ function AdminProductHub() {
         ))}
       </div>
 
+      {/* Select-all bar (visible when in select mode) */}
+      {selectMode && (
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.5rem 0.75rem",background:T.accent+"12",border:`1px solid ${T.accent}40`,borderRadius:"0.6rem"}}>
+          <div style={{fontSize:"0.7rem",color:T.text,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>
+            {selectedIds.size > 0 ? `${selectedIds.size} selected` : "Tap rows to select"}
+          </div>
+          <div style={{display:"flex",gap:"0.4rem"}}>
+            <button onClick={()=>selectAllVisible(filtered.map(p=>p.id))}
+              style={{background:"none",border:"none",color:T.accent,fontSize:"0.65rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif",padding:"0.2rem 0.4rem"}}>
+              Select all visible ({filtered.length})
+            </button>
+            {selectedIds.size > 0 && (
+              <button onClick={clearSelection}
+                style={{background:"none",border:"none",color:T.textMid,fontSize:"0.65rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif",padding:"0.2rem 0.4rem"}}>
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Product list */}
       <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
         {filtered.length===0&&<div style={{padding:"2rem",textAlign:"center",color:T.textLight,fontSize:"0.78rem",fontFamily:"'Inter',sans-serif"}}>No products match this filter.</div>}
         {filtered.map(p=>{
           const imgOk=hasImg(p), ingOk=hasIng(p), scans=p.scanCount||0;
+          const isSelected = selectedIds.has(p.id);
+          const onRowClick = selectMode ? (()=>toggleSelected(p.id)) : (()=>openEdit(p));
           return (
-            <div key={p.id} onClick={()=>openEdit(p)}
-              style={{background:savedId===p.id?T.sage+"18":T.surface,border:`1px solid ${savedId===p.id?T.sage:T.border}`,borderRadius:"0.75rem",padding:"0.65rem 0.85rem",display:"flex",alignItems:"center",gap:"0.65rem",cursor:"pointer"}}>
+            <div key={p.id} onClick={onRowClick}
+              style={{background:isSelected?T.accent+"15":(savedId===p.id?T.sage+"18":T.surface),border:`1px solid ${isSelected?T.accent:(savedId===p.id?T.sage:T.border)}`,borderRadius:"0.75rem",padding:"0.65rem 0.85rem",display:"flex",alignItems:"center",gap:"0.65rem",cursor:"pointer",opacity:p.hidden?0.55:1}}>
+              {selectMode && (
+                <div style={{width:"22px",height:"22px",borderRadius:"0.35rem",border:`2px solid ${isSelected?T.accent:T.border}`,background:isSelected?T.accent:T.surface,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.12s"}}>
+                  {isSelected && <span style={{color:"#fff",fontSize:"0.78rem",fontWeight:"700",lineHeight:1}}>✓</span>}
+                </div>
+              )}
               <div style={{width:"44px",height:"44px",borderRadius:"0.5rem",background:T.surfaceAlt,flexShrink:0,overflow:"hidden",border:`1px solid ${T.border}`}}>
                 {imgOk?<img src={p.adminImage||p.image} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>:<div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1.1rem"}}>📷</div>}
               </div>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
+                <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}{p.hidden&&<span style={{marginLeft:"0.4rem",fontSize:"0.55rem",color:T.rose,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.05em"}}>· hidden</span>}</div>
                 <div style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
                   {p.brand}{p.category?` · ${p.category}`:""}{scans>0&&<span style={{color:T.accent,fontWeight:"600"}}> · {scans} scans</span>}
                 </div>
               </div>
-              <div style={{display:"flex",flexDirection:"column",gap:"0.2rem",alignItems:"flex-end",flexShrink:0}}>
-                <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:imgOk?T.sage+"22":T.rose+"22",color:imgOk?T.sage:T.rose,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{imgOk?"img ✓":"no img"}</span>
-                <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:ingOk?T.sage+"22":T.amber+"22",color:ingOk?T.sage:T.amber,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{ingOk?"ing ✓":"no ing"}</span>
-              </div>
-              <div style={{fontSize:"0.65rem",color:T.textLight,flexShrink:0}}>›</div>
+              {!selectMode && (
+                <div style={{display:"flex",flexDirection:"column",gap:"0.2rem",alignItems:"flex-end",flexShrink:0}}>
+                  <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:imgOk?T.sage+"22":T.rose+"22",color:imgOk?T.sage:T.rose,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{imgOk?"img ✓":"no img"}</span>
+                  <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:ingOk?T.sage+"22":T.amber+"22",color:ingOk?T.sage:T.amber,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{ingOk?"ing ✓":"no ing"}</span>
+                </div>
+              )}
+              {!selectMode && <div style={{fontSize:"0.65rem",color:T.textLight,flexShrink:0}}>›</div>}
             </div>
           );
         })}
       </div>
 
-      {filtered.length>0&&<div style={{textAlign:"center",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",paddingBottom:"2rem"}}>{filtered.length} of {products.length} products · tap to edit</div>}
+      {filtered.length>0&&<div style={{textAlign:"center",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",paddingBottom:selectMode&&selectedIds.size>0?"6rem":"2rem"}}>{filtered.length} of {products.length} products · {selectMode?"tap to select":"tap to edit"}</div>}
+
+      {/* Sticky bulk action bar — visible when in select mode with selections */}
+      {selectMode && selectedIds.size > 0 && (
+        <div style={{position:"fixed",bottom:"4.5rem",left:"50%",transform:"translateX(-50%)",zIndex:50,maxWidth:"460px",width:"calc(100% - 2rem)",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",boxShadow:"0 10px 40px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.08)",padding:"0.65rem 0.75rem",display:"flex",alignItems:"center",gap:"0.5rem"}}>
+          <div style={{flex:1,fontSize:"0.7rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>
+            {selectedIds.size} selected
+          </div>
+          <button onClick={bulkHide} disabled={bulkBusy}
+            style={{padding:"0.55rem 0.9rem",background:bulkBusy?T.surfaceAlt:T.amber,color:bulkBusy?T.textMid:"#fff",border:"none",borderRadius:"0.55rem",fontSize:"0.7rem",fontWeight:"700",cursor:bulkBusy?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif"}}>
+            {bulkBusy ? "…" : `🙈 Hide ${selectedIds.size}`}
+          </button>
+          <button onClick={bulkDelete} disabled={bulkBusy}
+            style={{padding:"0.55rem 0.9rem",background:bulkBusy?T.surfaceAlt:T.rose,color:bulkBusy?T.textMid:"#fff",border:"none",borderRadius:"0.55rem",fontSize:"0.7rem",fontWeight:"700",cursor:bulkBusy?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif"}}>
+            {bulkBusy ? "…" : `🗑 Delete ${selectedIds.size}`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -9454,7 +9967,19 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
     <div style={{background:T.surface,borderRadius:"1rem",border:`2px solid ${T.accent}`,padding:"1rem",display:"flex",flexDirection:"column",gap:"0.85rem"}}>
       {/* Image */}
       <div>
-        <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginBottom:"0.4rem",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Product Image</div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.4rem"}}>
+          <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.05em"}}>Product Image</div>
+          {src.pendingReview&&<div style={{fontSize:"0.55rem",color:T.amber,fontFamily:"'Inter',sans-serif",fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.08em",background:T.amber+"18",padding:"0.15rem 0.45rem",borderRadius:"999px"}}>🆕 Pending review · added via OBF scan</div>}
+        </div>
+        {src.obfImage&&!(src.adminImage||src.image)&&(
+          <div style={{marginBottom:"0.6rem",padding:"0.55rem",background:T.surfaceAlt,border:`1px dashed ${T.border}`,borderRadius:"0.5rem",display:"flex",gap:"0.6rem",alignItems:"center"}}>
+            <img src={src.obfImage} alt="OBF reference" style={{width:"48px",height:"48px",objectFit:"cover",borderRadius:"0.35rem",flexShrink:0,border:`1px solid ${T.border}`}} onError={e=>{e.target.style.display="none";}}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textMid,fontFamily:"'Inter',sans-serif",marginBottom:"0.1rem"}}>OBF reference image</div>
+              <div style={{fontSize:"0.55rem",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.35}}>Low quality — use as a visual reference only. Upload a clean product shot below.</div>
+            </div>
+          </div>
+        )}
         <div style={{display:"flex",gap:"0.75rem",alignItems:"flex-start"}}>
           <div style={{width:"80px",height:"80px",borderRadius:"0.6rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
             {src.adminImage||src.image?<img src={src.adminImage||src.image} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>:<span style={{fontSize:"1.5rem"}}>📷</span>}
@@ -11454,7 +11979,7 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
 
       {/* Tab switcher — Row 1: main sections */}
       <div style={{display:"flex",gap:"0.3rem",marginBottom:"0.3rem",background:T.surfaceAlt,padding:"0.25rem",borderRadius:"0.6rem"}}>
-        {[["overview","📊 Overview"],["products","🏪 Products"],["content","✏️ Content"],["cleanup","🧹 Cleanup"]].map(([id,lbl])=>(
+        {[["overview","📊 Overview"],["products","🏪 Products"],["content","✏️ Content"]].map(([id,lbl])=>(
           <button key={id} onClick={()=>setActiveTab(id)}
             style={{flex:1,padding:"0.5rem 0.25rem",background:activeTab===id?T.accent:"transparent",color:activeTab===id?"#FFFFFF":T.textMid,border:"none",borderRadius:"0.4rem",fontSize:"0.68rem",fontWeight:activeTab===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.15s"}}>
             {lbl}
@@ -11477,7 +12002,6 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
 
       {/* Products — single hub */}
       {activeTab==="products"&&<AdminProductHub/>}
-      {activeTab==="cleanup"&&<AdminCleanup afRunning={afRunning} afLog={afLog} afDone={afDone} afProducts={afProducts} setAfRunning={setAfRunning} setAfLog={setAfLog} setAfDone={setAfDone} setAfProducts={setAfProducts} afAddLog={afAddLog}/>}
       {/* Content sub-tabs */}
       {activeTab==="schedule"&&<EditorialCalendar/>}
       {activeTab==="picks"&&<AdminFounderPicks/>}
