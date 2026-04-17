@@ -965,38 +965,68 @@ function shareProduct(productName, brand) {
 }
 
 function analyzeIngredients(text) {
-  const lower = text.toLowerCase();
-  const found = [];
-  const seen = new Set();       // canonical names already added
-  const seenText = new Set();   // matched strings already claimed by another entry
+  const lower = (text || "").toLowerCase();
+  // Split the INCI list into ordered tokens so we can use position as a concentration proxy.
+  // INCI lists are required to be in descending concentration order down to ~1%, so position
+  // is a good (if imperfect) signal: the first few ingredients are the bulk of the formula,
+  // anything past position ~12 is typically <1% and has minimal real-skin impact.
+  const tokens = lower.split(/[,;]\s*/).map(t => t.trim()).filter(Boolean);
 
+  // Pre-build a flat lookup of every ingredient name + alias → its INGDB entry
+  const lookup = []; // [{ pattern, canonical, data }]
   for (const [name, data] of Object.entries(INGDB)) {
-    const allNames = [name, ...(data.aliases||[])];
-    const matched = allNames.find(n => n && lower.includes(n.toLowerCase()));
-    if (!matched) continue;
-    const matchedLower = matched.toLowerCase();
-    // Skip if this canonical name already added, or if the matched text was already claimed
-    if (seen.has(name) || seenText.has(matchedLower)) continue;
-    seen.add(name);
-    // Claim all alias texts for this entry so they can't match again
-    allNames.forEach(n => n && seenText.add(n.toLowerCase()));
-    const display = matchedLower === name.toLowerCase() ? name : `${name} (${matched})`;
-    found.push({name:display, ...data});
+    const allNames = [name, ...(data.aliases || [])];
+    for (const n of allNames) {
+      if (n) lookup.push({ pattern: n.toLowerCase(), canonical: name, data });
+    }
   }
-  // Flagged = pore-clogging score >= 1 OR irritant
+  // Sort longest-first so "polyglyceryl-2 stearate" matches before "stearate"
+  lookup.sort((a, b) => b.pattern.length - a.pattern.length);
+
+  // Walk tokens IN ORDER, recording position. Each canonical INGDB entry can only be added once.
+  const found = [];
+  const seenCanonical = new Set();
+  tokens.forEach((token, idx) => {
+    for (const entry of lookup) {
+      if (seenCanonical.has(entry.canonical)) continue;
+      if (token.includes(entry.pattern)) {
+        seenCanonical.add(entry.canonical);
+        const display = token === entry.pattern ? entry.canonical : `${entry.canonical} (${token})`;
+        found.push({ name: display, position: idx + 1, ...entry.data });
+        break; // one INGDB entry per token
+      }
+    }
+  });
+
+  // Position weight: how much real-world impact does an ingredient at position N have?
+  // First 3 = full weight (bulk of formula). 4-7 = ~70% (likely 1-5%).
+  // 8-12 = ~40% (sub-1% but real). 13+ = ~15% (trace amount).
+  function positionWeight(pos) {
+    if (pos <= 3) return 1.0;
+    if (pos <= 7) return 0.7;
+    if (pos <= 12) return 0.4;
+    return 0.15;
+  }
+
+  // Flagged = pore-clogging score >= 1 OR irritant flag
   const flagged = found.filter(i => i.score >= 1 || i.irritant);
   const poreCloggers = flagged.filter(i => i.score >= 1);
   const irritants = flagged.filter(i => i.irritant && i.score < 1);
-  // Pore clog score: 70% max + 30% average, tiny count penalty for truly problematic lists
+
+  // Position-weighted pore clog score.
+  // Each ingredient contributes (score × position_weight). The final score is 70% from the
+  // max-weighted ingredient (the worst real offender) and 30% from the average weighted score
+  // (so a list full of small concerns still adds up appropriately).
   const avgScore = (() => {
     if (!poreCloggers.length) return found.length > 0 ? 0 : null;
-    const max = Math.max(...poreCloggers.map(i => i.score));
-    const avg = poreCloggers.reduce((s,i)=>s+i.score,0) / poreCloggers.length;
-    const countPenalty = Math.min(Math.max(poreCloggers.length - 3, 0), 3) * 0.1;
-    const raw = (max * 0.7) + (avg * 0.3) + countPenalty;
-    return Math.round(Math.min(raw, 5) * 10) / 10;
+    const weighted = poreCloggers.map(i => i.score * positionWeight(i.position || 99));
+    const wMax = Math.max(...weighted);
+    const wAvg = weighted.reduce((s, v) => s + v, 0) / weighted.length;
+    const raw = (wMax * 0.7) + (wAvg * 0.3);
+    return Math.round(Math.min(Math.max(raw, 0), 5) * 10) / 10;
   })();
-  return {found, flagged, poreCloggers, irritants, avgScore};
+
+  return { found, flagged, poreCloggers, irritants, avgScore };
 }
 
 function initials(name="") {
