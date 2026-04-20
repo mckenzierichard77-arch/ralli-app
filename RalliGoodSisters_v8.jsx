@@ -10654,6 +10654,37 @@ function AdminProductHub() {
         ))}
       </div>
 
+      {/* Copy filtered list → clipboard for Cowork */}
+      {filter !== "all" && filtered.length > 0 && (
+        <button onClick={async ()=>{
+          const lines = filtered.map(p => `${p.brand || "?"} — ${p.productName || "?"}`);
+          const text = lines.join("\n");
+          try {
+            await navigator.clipboard.writeText(text);
+            alert(`Copied ${filtered.length} product${filtered.length===1?"":"s"} to clipboard.\n\nPaste into Cowork after triggering the "Ralli Catalog Research" shortcut.`);
+          } catch(e) {
+            // Fallback for iOS Safari or blocked clipboard: show the text in a textarea
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.top = "10%";
+            ta.style.left = "5%";
+            ta.style.width = "90%";
+            ta.style.height = "70%";
+            ta.style.zIndex = "99999";
+            ta.style.padding = "1rem";
+            ta.style.fontSize = "0.8rem";
+            ta.style.fontFamily = "monospace";
+            document.body.appendChild(ta);
+            ta.select();
+            alert("Clipboard blocked — text is shown in a box. Long-press to Select All → Copy, then tap outside to dismiss.");
+            ta.addEventListener("blur", () => ta.remove(), { once: true });
+          }
+        }} style={{padding:"0.5rem 0.85rem",background:`linear-gradient(135deg, #6B5CA5, #8B7BC5)`,color:"#fff",border:"none",borderRadius:"0.5rem",fontSize:"0.7rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.4rem",alignSelf:"flex-start"}}>
+          📋 Copy {filtered.length} product{filtered.length===1?"":"s"} for Cowork
+        </button>
+      )}
+
       {/* Select-all bar (visible when in select mode) */}
       {selectMode && (
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.5rem 0.75rem",background:T.accent+"12",border:`1px solid ${T.accent}40`,borderRadius:"0.6rem"}}>
