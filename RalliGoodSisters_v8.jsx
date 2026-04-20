@@ -9579,6 +9579,13 @@ function AdminProductHub() {
   const [addDone, setAddDone]     = React.useState(false);
   const addImgRef = React.useRef(null);
 
+  // CSV bulk import (Cowork-produced research)
+  const [csvImporting, setCsvImporting] = React.useState(false);
+  const [csvReview, setCsvReview]       = React.useState(null);  // {rows: [...], kind: 'ingredients'|'images'}
+  const [csvApplying, setCsvApplying]   = React.useState(false);
+  const [csvResult, setCsvResult]       = React.useState(null);  // {applied, skipped, errors}
+  const csvFileRef = React.useRef(null);
+
   const imgInputRef = React.useRef(null);
   const [prefilling, setPrefilling] = React.useState(false);
 
@@ -9610,6 +9617,129 @@ function AdminProductHub() {
       alert("Seed failed: " + e.message);
     }
     setSeeding(false);
+  }
+
+  // ── CSV bulk import (Cowork research → paste into admin) ──────────────
+  // Expects a CSV with a header row. Detects ingredients CSV vs images CSV by columns.
+  // Ingredients CSV columns:  product_name, brand, ingredients, source_url, confidence
+  // Images CSV columns:       product_name, brand, image_url, source_page_url, dimensions
+  function parseCsv(text) {
+    // Minimal CSV parser that handles quoted fields containing commas.
+    const rows = [];
+    let row = [], field = "", inQuote = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i], next = text[i+1];
+      if (inQuote) {
+        if (c === '"' && next === '"') { field += '"'; i++; }
+        else if (c === '"') inQuote = false;
+        else field += c;
+      } else {
+        if (c === '"') inQuote = true;
+        else if (c === ',') { row.push(field); field = ""; }
+        else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ""; }
+        else if (c === '\r') { /* skip */ }
+        else field += c;
+      }
+    }
+    if (field.length || row.length) { row.push(field); rows.push(row); }
+    if (!rows.length) return { header: [], rows: [] };
+    const header = rows[0].map(h => h.trim().toLowerCase());
+    const data = rows.slice(1).filter(r => r.some(c => c.trim().length)).map(r => {
+      const obj = {};
+      header.forEach((h, i) => { obj[h] = (r[i] || "").trim(); });
+      return obj;
+    });
+    return { header, rows: data };
+  }
+
+  async function onCsvChosen(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setCsvImporting(true);
+    setCsvResult(null);
+    try {
+      const text = await file.text();
+      const { header, rows } = parseCsv(text);
+      if (!rows.length) { alert("CSV has no data rows."); setCsvImporting(false); return; }
+
+      // Detect kind
+      const hasIng = header.includes("ingredients");
+      const hasImg = header.includes("image_url");
+      if (!hasIng && !hasImg) {
+        alert("CSV must have either an 'ingredients' column or an 'image_url' column.\n\nColumns found: " + header.join(", "));
+        setCsvImporting(false);
+        return;
+      }
+      const kind = hasIng ? "ingredients" : "images";
+
+      // Match each CSV row to a product in the catalog by brand+name (normalized)
+      const norm = s => (s||"").toLowerCase().replace(/[^\w\s]/g,"").replace(/\s+/g," ").trim();
+      const productLookup = new Map();
+      products.forEach(p => {
+        const key = `${norm(p.brand)}|${norm(p.productName)}`;
+        if (key !== "|") productLookup.set(key, p);
+      });
+
+      const matched = rows.map((r, idx) => {
+        const key = `${norm(r.brand)}|${norm(r.product_name)}`;
+        const product = productLookup.get(key) || null;
+        return {
+          csvRow: idx + 2,  // human-friendly row number (header=1)
+          brand: r.brand || "",
+          productName: r.product_name || "",
+          product,
+          value: kind === "ingredients" ? (r.ingredients || "") : (r.image_url || ""),
+          source: r.source_url || r.source_page_url || "",
+          confidence: r.confidence || "",
+          accepted: !!product,   // only auto-accept rows that matched a product
+        };
+      });
+
+      setCsvReview({ kind, rows: matched });
+    } catch(err) {
+      alert("CSV parse failed: " + err.message);
+    }
+    setCsvImporting(false);
+  }
+
+  function toggleCsvRow(idx) {
+    setCsvReview(cr => {
+      if (!cr) return cr;
+      const next = { ...cr, rows: cr.rows.map((r, i) => i === idx ? { ...r, accepted: !r.accepted } : r) };
+      return next;
+    });
+  }
+
+  async function applyCsvReview() {
+    if (!csvReview) return;
+    const toApply = csvReview.rows.filter(r => r.accepted && r.product);
+    if (!toApply.length) { alert("No rows selected to apply."); return; }
+    if (!window.confirm(`Apply ${toApply.length} ${csvReview.kind === "ingredients" ? "ingredient list(s)" : "image(s)"} to products?\n\nEach product will have its ${csvReview.kind === "ingredients" ? "ingredients" : "adminImage + image"} field updated and go into the review queue (pendingReview: true).`)) return;
+    setCsvApplying(true);
+    const result = { applied: 0, skipped: 0, errors: [] };
+    for (const row of toApply) {
+      try {
+        const patch = { lastEnrichedAt: Date.now(), lastEnrichedBy: "cowork-csv", updatedAt: serverTimestamp(), pendingReview: true };
+        if (csvReview.kind === "ingredients") {
+          const cleaned = row.value.toLowerCase().trim().replace(/\s+/g," ").replace(/\s*,\s*/g,", ");
+          if (cleaned.length < 10) { result.skipped++; continue; }
+          patch.ingredients = cleaned;
+        } else {
+          if (!/^https?:\/\//.test(row.value)) { result.skipped++; continue; }
+          patch.image = row.value;
+          patch.adminImage = row.value;
+        }
+        await updateDoc(doc(db, "products", row.product.id), patch);
+        result.applied++;
+      } catch(e) {
+        result.errors.push(`Row ${row.csvRow} (${row.brand} ${row.productName}): ${e.message}`);
+      }
+    }
+    setCsvApplying(false);
+    setCsvResult(result);
+    setCsvReview(null);
+    await load();
   }
 
   // ── Multi-select bulk actions ─────────────────────────────────────────
@@ -10334,6 +10464,101 @@ function AdminProductHub() {
             {bulkBusy ? "⏳ …" : `✨ Run Top 100`}
           </button>
         </div>
+
+        {/* CSV import row — for Cowork-produced research files */}
+        <div style={{display:"flex",gap:"0.4rem"}}>
+          <input type="file" accept=".csv,text/csv" ref={csvFileRef} onChange={onCsvChosen} style={{display:"none"}}/>
+          <button onClick={()=>csvFileRef.current?.click()} disabled={csvImporting||csvApplying||bulkBusy||seeding}
+            title="Upload a CSV from Cowork with product_name, brand, ingredients (or image_url) columns"
+            style={{flex:1,padding:"0.6rem 0.85rem",background:(csvImporting||csvApplying)?T.surfaceAlt:`linear-gradient(135deg, #6B5CA5, #8B7BC5)`,color:(csvImporting||csvApplying)?T.textMid:"#fff",border:`1px solid ${(csvImporting||csvApplying)?T.border:"#6B5CA5"}`,borderRadius:"0.6rem",fontSize:"0.7rem",fontWeight:"700",cursor:(csvImporting||csvApplying)?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
+            {csvImporting ? "⏳ Parsing…" : "📥 Import CSV"}
+          </button>
+        </div>
+
+        {csvResult && (
+          <div style={{padding:"0.65rem 0.85rem",background:(csvResult.errors?.length?T.rose:T.sage)+"15",border:`1px solid ${(csvResult.errors?.length?T.rose:T.sage)}55`,borderRadius:"0.6rem",fontFamily:"'Inter',sans-serif"}}>
+            <div style={{fontSize:"0.72rem",fontWeight:"700",color:csvResult.errors?.length?T.rose:T.sage,marginBottom:"0.25rem"}}>
+              ✓ Applied {csvResult.applied} · Skipped {csvResult.skipped}{csvResult.errors?.length?` · ${csvResult.errors.length} errors`:""}
+            </div>
+            {csvResult.errors?.length > 0 && (
+              <div style={{fontSize:"0.6rem",color:T.textMid,lineHeight:1.5,maxHeight:"80px",overflow:"auto"}}>
+                {csvResult.errors.slice(0,5).map((e,i)=><div key={i}>• {e}</div>)}
+                {csvResult.errors.length > 5 && <div>...and {csvResult.errors.length-5} more</div>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* CSV review modal — shows matched rows, lets user accept/reject before apply */}
+        {csvReview && ReactDOM.createPortal(
+          <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.55)",zIndex:9999,display:"flex",flexDirection:"column",padding:"0.5rem"}}>
+            <div style={{flex:1,background:T.surface,borderRadius:"0.75rem",display:"flex",flexDirection:"column",overflow:"hidden",maxWidth:"520px",margin:"0 auto",width:"100%",border:`1px solid ${T.border}`}}>
+              {/* Header */}
+              <div style={{padding:"0.85rem 1rem",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <div>
+                  <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>📥 Review CSV Import</div>
+                  <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"2px"}}>
+                    {csvReview.rows.filter(r=>r.product).length} matched · {csvReview.rows.filter(r=>!r.product).length} unmatched · Will apply: <strong style={{color:T.sage}}>{csvReview.rows.filter(r=>r.accepted&&r.product).length}</strong>
+                  </div>
+                </div>
+                <button onClick={()=>setCsvReview(null)} style={{background:"none",border:"none",fontSize:"1.1rem",cursor:"pointer",color:T.textMid,padding:"0.25rem"}}>✕</button>
+              </div>
+
+              {/* Rows */}
+              <div style={{flex:1,overflowY:"auto",padding:"0.5rem"}}>
+                {csvReview.rows.map((row, idx) => {
+                  const hasMatch = !!row.product;
+                  const lowConf = row.confidence?.toLowerCase() === "low";
+                  return (
+                    <div key={idx} onClick={()=>hasMatch && toggleCsvRow(idx)}
+                      style={{padding:"0.55rem 0.7rem",borderRadius:"0.5rem",border:`1px solid ${hasMatch?(row.accepted?T.sage+"80":T.border):T.rose+"55"}`,background:hasMatch?(row.accepted?T.sage+"10":T.surface):T.rose+"10",marginBottom:"0.35rem",cursor:hasMatch?"pointer":"default",opacity:hasMatch?1:0.75}}>
+                      <div style={{display:"flex",alignItems:"start",gap:"0.5rem"}}>
+                        <div style={{fontSize:"0.9rem",marginTop:"1px"}}>{hasMatch ? (row.accepted?"✓":"○") : "⚠"}</div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:"0.7rem",fontWeight:"700",color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            {row.brand ? `${row.brand} — ` : ""}{row.productName}
+                          </div>
+                          {!hasMatch && <div style={{fontSize:"0.58rem",color:T.rose,marginTop:"2px"}}>No matching product in catalog</div>}
+                          {hasMatch && (
+                            <div style={{fontSize:"0.58rem",color:T.textMid,marginTop:"3px",lineHeight:1.4,overflow:"hidden",textOverflow:"ellipsis",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>
+                              {csvReview.kind === "ingredients" ? row.value : `Image: ${row.value.slice(0,60)}${row.value.length>60?"…":""}`}
+                            </div>
+                          )}
+                          <div style={{display:"flex",gap:"0.4rem",marginTop:"3px",flexWrap:"wrap"}}>
+                            {row.confidence && (
+                              <span style={{fontSize:"0.52rem",padding:"1px 5px",borderRadius:"0.3rem",background:lowConf?T.rose+"22":T.sage+"22",color:lowConf?T.rose:T.sage,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.04em"}}>
+                                {row.confidence}
+                              </span>
+                            )}
+                            {row.source && (
+                              <a href={row.source} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()}
+                                style={{fontSize:"0.52rem",color:T.accent,textDecoration:"underline"}}>
+                                source ↗
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Footer */}
+              <div style={{padding:"0.75rem 1rem",borderTop:`1px solid ${T.border}`,display:"flex",gap:"0.5rem"}}>
+                <button onClick={()=>setCsvReview(null)}
+                  style={{flex:1,padding:"0.65rem",background:T.surface,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.5rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                  Cancel
+                </button>
+                <button onClick={applyCsvReview} disabled={csvApplying || !csvReview.rows.some(r=>r.accepted&&r.product)}
+                  style={{flex:2,padding:"0.65rem",background:csvApplying?T.surfaceAlt:T.sage,color:csvApplying?T.textMid:"#fff",border:"none",borderRadius:"0.5rem",fontSize:"0.72rem",fontWeight:"700",cursor:csvApplying?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif"}}>
+                  {csvApplying ? "⏳ Applying…" : `Apply ${csvReview.rows.filter(r=>r.accepted&&r.product).length} update${csvReview.rows.filter(r=>r.accepted&&r.product).length===1?"":"s"}`}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
         {seedResult && (
           <div style={{padding:"0.65rem 0.85rem",background:T.sage+"15",border:`1px solid ${T.sage}55`,borderRadius:"0.6rem",fontFamily:"'Inter',sans-serif"}}>
             <div style={{fontSize:"0.72rem",fontWeight:"700",color:T.sage,marginBottom:"0.25rem"}}>
