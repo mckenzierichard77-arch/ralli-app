@@ -10104,6 +10104,13 @@ function AdminProductHub({ user } = {}) {
       }
       if(sort==="scans") return (b.scanCount||0)-(a.scanCount||0);
       if(sort==="name") return (a.productName||"").localeCompare(b.productName||"");
+      if(sort==="checked") {
+        // Most recently checked first; products never checked sink to the bottom.
+        const av = a.lastEnrichedAt || 0;
+        const bv = b.lastEnrichedAt || 0;
+        if (av === bv) return (a.productName||"").localeCompare(b.productName||"");
+        return bv - av;
+      }
       return (b.updatedAt||0)-(a.updatedAt||0);
     });
 
@@ -10501,7 +10508,7 @@ function AdminProductHub({ user } = {}) {
       {todaySuggestion ? (
         <div style={{background:`linear-gradient(135deg, ${todaySuggestion.color}10, ${todaySuggestion.color}22)`,border:`1.5px solid ${todaySuggestion.color}66`,borderRadius:"0.85rem",padding:"0.95rem 1rem",fontFamily:"'Inter',sans-serif"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.35rem"}}>
-            <div style={{fontSize:"0.6rem",fontWeight:"700",color:todaySuggestion.color,textTransform:"uppercase",letterSpacing:"0.08em"}}>📋 Today's Queue {vaMode && <span style={{color:T.textLight,marginLeft:"0.4rem",fontWeight:"400"}}>· VA mode</span>}</div>
+            <div style={{fontSize:"0.6rem",fontWeight:"700",color:todaySuggestion.color,textTransform:"uppercase",letterSpacing:"0.08em"}}>📋 Today's Queue</div>
             <div style={{fontSize:"0.58rem",color:T.textLight}}>signed in as <strong style={{color:T.textMid}}>{myTag}</strong></div>
           </div>
           <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,marginBottom:"0.65rem",lineHeight:1.35}}>{todaySuggestion.label}</div>
@@ -10539,14 +10546,6 @@ function AdminProductHub({ user } = {}) {
               ＋ Add new
             </button>
           </div>
-
-          {/* Founder-only: toggle VA mode preview, or switch back to full view */}
-          {!isVA(user) && (
-            <button onClick={()=>setVaMode(v=>!v)}
-              style={{marginTop:"0.55rem",background:"none",border:"none",color:T.textLight,fontSize:"0.6rem",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif",textDecoration:"underline"}}>
-              {vaMode ? "Switch to full admin view" : "Preview VA mode"}
-            </button>
-          )}
         </div>
       ) : (
         <div style={{background:T.sage+"15",border:`1.5px solid ${T.sage}55`,borderRadius:"0.85rem",padding:"0.95rem 1rem",fontFamily:"'Inter',sans-serif",textAlign:"center"}}>
@@ -10555,16 +10554,11 @@ function AdminProductHub({ user } = {}) {
           <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"0.25rem"}}>
             Every product has an image and ingredients.{myEditCount > 0 && <> You contributed to {myEditCount}.</>}
           </div>
-          {!isVA(user) && (
-            <button onClick={()=>setVaMode(v=>!v)}
-              style={{marginTop:"0.65rem",background:"none",border:"none",color:T.textLight,fontSize:"0.6rem",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif",textDecoration:"underline"}}>
-              {vaMode ? "Switch to full admin view" : "Preview VA mode"}
-            </button>
-          )}
         </div>
       )}
 
-      {/* Mode switcher */}
+      {/* Mode switcher — hidden by default (Today's Queue card has Start swiping + Add new) */}
+      {showAdvanced && (
       <div style={{display:"flex",gap:"0.5rem"}}>
         <button onClick={()=>setMode("list")}
           style={{flex:1,padding:"0.55rem",background:mode==="list"?T.accent:T.surfaceAlt,color:mode==="list"?"#fff":T.textMid,border:`1px solid ${mode==="list"?T.accent:T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
@@ -10579,10 +10573,10 @@ function AdminProductHub({ user } = {}) {
           ＋ Add New
         </button>
       </div>
+      )}
 
-      {/* Seed clean brands — bulk-imports ~175 real products from clean brands into swipe queue */}
-      {/* Power tools (seed, top 100, CSV import) — hidden in VA mode by default */}
-      {(!vaMode || showAdvanced) && (
+      {/* Power tools (Seed, Top 100, CSV import) — hidden by default. Toggle the Advanced expander below to show them. */}
+      {showAdvanced && (
       <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
         <div style={{display:"flex",gap:"0.4rem"}}>
           <button onClick={runSeed} disabled={seeding||bulkBusy}
@@ -10714,15 +10708,14 @@ function AdminProductHub({ user } = {}) {
       </div>
       )}
 
-      {/* Toggle for VA mode — show advanced tools, or hide them again. */}
-      {vaMode && (
-        <button onClick={()=>setShowAdvanced(s=>!s)}
-          style={{padding:"0.4rem 0.75rem",background:"none",border:`1px dashed ${T.border}`,borderRadius:"0.5rem",fontSize:"0.65rem",color:T.textLight,cursor:"pointer",fontFamily:"'Inter',sans-serif",alignSelf:"flex-start"}}>
-          {showAdvanced ? "▾ Hide advanced tools" : "▸ Show advanced tools (Seed, Top 100, CSV import)"}
-        </button>
-      )}
+      {/* Advanced tools toggle — universal. Hides power tools, mode switcher, swipe queue filter, dupe finder, bulk select, and the sort row by default. */}
+      <button onClick={()=>setShowAdvanced(s=>!s)}
+        style={{padding:"0.4rem 0.75rem",background:"none",border:`1px dashed ${T.border}`,borderRadius:"0.5rem",fontSize:"0.65rem",color:T.textLight,cursor:"pointer",fontFamily:"'Inter',sans-serif",alignSelf:"flex-start"}}>
+        {showAdvanced ? "▾ Hide advanced tools" : "▸ Advanced tools"}
+      </button>
 
-      {/* Swipe filter selector */}
+      {/* Swipe queue filter — only shown in advanced; Today's Queue card auto-picks the right queue otherwise. */}
+      {showAdvanced && (
       <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
         <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Swipe queue:</div>
         {[["both","Missing both"],["noimage","No image"],["noingredients","No ingredients"]].map(([id,label])=>(
@@ -10732,28 +10725,35 @@ function AdminProductHub({ user } = {}) {
           </button>
         ))}
       </div>
+      )}
 
       {/* Search + actions */}
       <div style={{display:"flex",gap:"0.5rem",alignItems:"center"}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…"
           style={{flex:1,padding:"0.55rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface}}/>
-        {/* Dupe finder + bulk select — destructive tools, hidden in VA mode by default */}
-        {(!vaMode || showAdvanced) && (
+        {/* Quick sort cycle: Most scanned ↔ Recently checked ↔ A–Z. Tap to cycle. */}
+        <button onClick={()=>setSort(s => s==="scans" ? "checked" : s==="checked" ? "name" : "scans")}
+          title={`Sort: ${sort==="scans"?"Most scanned":sort==="checked"?"Recently checked":sort==="name"?"A–Z":sort==="recent"?"Recent":sort==="featured"?"Featured first":"Most scanned"} — tap to change`}
+          style={{padding:"0.55rem 0.7rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.65rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"}}>
+          {sort==="scans" ? "📊 Scans" : sort==="checked" ? "🕒 Checked" : sort==="name" ? "A–Z" : sort==="recent" ? "⏱ Recent" : sort==="featured" ? "⭐ Feat." : "📊 Scans"}
+        </button>
+        {/* Dupe finder + bulk select — only shown in Advanced */}
+        {showAdvanced && (
         <button onClick={dupeView ? exitDupeView : findDuplicates}
           title={dupeView ? "Exit duplicate view" : "Find duplicate products"}
           style={{padding:"0.55rem 0.75rem",background:dupeView?"#7C3AED":T.surfaceAlt,color:dupeView?"#fff":T.textMid,border:`1px solid ${dupeView?"#7C3AED":T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
           {dupeView ? "✕" : "👯"}
         </button>
         )}
-        {(!vaMode || showAdvanced) && (
+        {showAdvanced && (
         <button onClick={()=>{ if(selectMode) exitSelectMode(); else setSelectMode(true); }}
           title={selectMode ? "Exit select mode" : "Select multiple to hide or delete"}
           style={{padding:"0.55rem 0.75rem",background:selectMode?T.accent:T.surfaceAlt,color:selectMode?"#fff":T.textMid,border:`1px solid ${selectMode?T.accent:T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
           {selectMode ? "✕" : "☑"}
         </button>
         )}
-        <button onClick={exportCsv} style={{padding:"0.55rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>⬇️</button>
-        <button onClick={load} style={{padding:"0.55rem 0.75rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>↺</button>
+        <button onClick={exportCsv} title="Export catalog to CSV" style={{padding:"0.55rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>⬇️</button>
+        <button onClick={load} title="Refresh" style={{padding:"0.55rem 0.75rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>↺</button>
       </div>
 
       {/* Duplicate view banner */}
@@ -10776,26 +10776,46 @@ function AdminProductHub({ user } = {}) {
         </div>
       )}
 
-      {/* Sort */}
+      {/* Sort — hidden by default; defaults to Most Scanned */}
+      {showAdvanced && (
       <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
         <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginRight:"0.2rem"}}>Sort:</div>
-        {[["scans","Most scanned"],["name","A–Z"],["recent","Recent"],["featured","⭐ Featured first"]].map(([id,label])=>(
+        {[["scans","Most scanned"],["checked","🕒 Recently checked"],["name","A–Z"],["recent","Recent"],["featured","⭐ Featured first"]].map(([id,label])=>(
           <button key={id} onClick={()=>setSort(id)}
             style={{padding:"0.25rem 0.6rem",background:sort===id?T.accent:T.surfaceAlt,color:sort===id?"#fff":T.textMid,border:`1px solid ${sort===id?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.62rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:sort===id?"600":"400"}}>
             {label}
           </button>
         ))}
       </div>
+      )}
 
-      {/* Filter pills */}
+      {/* Filter pills — trimmed set: All / No image / No ingredients / Both missing / Complete / Mine. Featured/Enriched/Never checked/Hidden show only in Advanced. */}
       <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
-        {[["all",`All (${counts.all})`,null],["mine",`👤 Mine (${myEditCount})`,T.accent],["featured",`⭐ Featured (${counts.featured})`,"#D4A015"],["enriched",`✨ Enriched (${counts.enriched})`,"#6366F1"],["unchecked",`🤖 Never checked (${counts.unchecked})`,"#EC4899"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage],["hidden",`🙈 Hidden (${counts.hidden})`,T.textMid]].map(([id,label,color])=>(
+        {(showAdvanced
+          ? [["all",`All (${counts.all})`,null],["mine",`👤 Mine (${myEditCount})`,T.accent],["featured",`⭐ Featured (${counts.featured})`,"#D4A015"],["enriched",`✨ Enriched (${counts.enriched})`,"#6366F1"],["unchecked",`🤖 Never checked (${counts.unchecked})`,"#EC4899"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage],["hidden",`🙈 Hidden (${counts.hidden})`,T.textMid]]
+          : [["all",`All (${counts.all})`,null],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage],["mine",`👤 Mine (${myEditCount})`,T.accent]]
+        ).map(([id,label,color])=>(
           <button key={id} onClick={()=>setFilter(id)}
             style={{padding:"0.3rem 0.7rem",background:filter===id?(color||T.accent):T.surfaceAlt,color:filter===id?"#fff":T.textMid,border:`1px solid ${filter===id?(color||T.accent):T.border}`,borderRadius:"999px",fontSize:"0.65rem",fontWeight:filter===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
             {label}
           </button>
         ))}
       </div>
+
+      {/* Inline explainer for the active filter — disappears for "All" */}
+      {filter !== "all" && (
+        <div style={{padding:"0.45rem 0.7rem",background:T.surfaceAlt,borderRadius:"0.5rem",fontSize:"0.62rem",color:T.textMid,fontFamily:"'Inter',sans-serif",lineHeight:1.4}}>
+          {filter === "mine"          && <>👤 <strong>Mine</strong> — products you ({myTag}) personally edited or saved. Useful for reviewing your own work.</>}
+          {filter === "noimage"       && <>📷 <strong>No image</strong> — products missing a clean product photo. Tap one to find and upload an image.</>}
+          {filter === "noingredients" && <>🧪 <strong>No ingredients</strong> — products missing the INCI ingredient list. Tap one to look it up and paste it in.</>}
+          {filter === "both"          && <>🚧 <strong>Both missing</strong> — products that need both an image and ingredients. Highest-priority queue.</>}
+          {filter === "ready"         && <>✅ <strong>Complete</strong> — products with both image and ingredients. Ready for users.</>}
+          {filter === "featured"      && <>⭐ <strong>Featured</strong> — products currently shown in "What We're Loving" on Explore.</>}
+          {filter === "enriched"      && <>✨ <strong>Enriched</strong> — products that have been checked at least once by you, the VA, or Cowork.</>}
+          {filter === "unchecked"     && <>🤖 <strong>Never checked</strong> — products no one has reviewed yet. May have stale or auto-fetched data.</>}
+          {filter === "hidden"        && <>🙈 <strong>Hidden</strong> — products excluded from the app. Still in the database, can be unhidden anytime.</>}
+        </div>
+      )}
 
       {/* Copy filtered list → clipboard for Cowork */}
       {filter !== "all" && filtered.length > 0 && (
@@ -10895,6 +10915,28 @@ function AdminProductHub({ user } = {}) {
                   <div style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
                     {p.brand}{p.category?` · ${p.category}`:""}{scans>0&&<span style={{color:T.accent,fontWeight:"600"}}> · {scans} scans</span>}{dupeView&&<span style={{color:T.textMid}}> · ID {p.id.slice(0,12)}…</span>}
                   </div>
+                  {/* Checked by + when — shown when the product has been enriched */}
+                  {p.lastEnrichedAt ? (
+                    <div style={{fontSize:"0.58rem",color:"#6366F1",fontFamily:"'Inter',sans-serif",marginTop:"2px",fontWeight:"500"}}>
+                      ✨ checked {(() => {
+                        const ms = Date.now() - p.lastEnrichedAt;
+                        const mins = Math.floor(ms / 60000);
+                        if (mins < 1) return "just now";
+                        if (mins < 60) return `${mins}m ago`;
+                        const hrs = Math.floor(mins / 60);
+                        if (hrs < 24) return `${hrs}h ago`;
+                        const days = Math.floor(hrs / 24);
+                        if (days < 7) return `${days}d ago`;
+                        const wks = Math.floor(days / 7);
+                        if (wks < 4) return `${wks}w ago`;
+                        return new Date(p.lastEnrichedAt).toLocaleDateString();
+                      })()} by <strong>{p.lastEnrichedBy || "coworker"}</strong>
+                    </div>
+                  ) : (
+                    <div style={{fontSize:"0.58rem",color:"#EC4899",fontFamily:"'Inter',sans-serif",marginTop:"2px",fontWeight:"500"}}>
+                      🤖 never checked
+                    </div>
+                  )}
                 </div>
                 {!selectMode && (
                   <div style={{display:"flex",flexDirection:"column",gap:"0.2rem",alignItems:"flex-end",flexShrink:0}}>
