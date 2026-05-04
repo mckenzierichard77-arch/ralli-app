@@ -10789,32 +10789,12 @@ function AdminProductHub({ user } = {}) {
         </div>
       )}
 
-      {/* Mode switcher — hidden by default (Today's Queue card has Start swiping + Add new) */}
-      {showAdvanced && (
-      <div style={{display:"flex",gap:"0.5rem"}}>
-        <button onClick={()=>setMode("list")}
-          style={{flex:1,padding:"0.55rem",background:mode==="list"?T.accent:T.surfaceAlt,color:mode==="list"?"#fff":T.textMid,border:`1px solid ${mode==="list"?T.accent:T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-          📋 List
-        </button>
-        <button onClick={startSwipe}
-          style={{flex:1,padding:"0.55rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-          👆 Swipe ({counts.needswork} need work)
-        </button>
-        <button onClick={()=>setMode("add")}
-          style={{flex:1,padding:"0.55rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-          ＋ Add New
-        </button>
-      </div>
-      )}
+      {/* Mode switcher removed — Today's Queue card has Start Swiping + Add New, and List view is the default. */}
 
-      {/* Power tools (Seed, Top 100, CSV import) — hidden by default. Toggle the Advanced expander below to show them. */}
+      {/* Power tools (Top 100, CSV import) — hidden by default. Toggle the Advanced expander below to show them. */}
       {showAdvanced && (
       <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
         <div style={{display:"flex",gap:"0.4rem"}}>
-          <button onClick={runSeed} disabled={seeding||bulkBusy}
-            style={{flex:1,padding:"0.6rem 0.85rem",background:(seeding||bulkBusy)?T.surfaceAlt:`linear-gradient(135deg, ${T.sage}, ${T.accent})`,color:(seeding||bulkBusy)?T.textMid:"#fff",border:`1px solid ${(seeding||bulkBusy)?T.border:T.sage}`,borderRadius:"0.6rem",fontSize:"0.7rem",fontWeight:"700",cursor:(seeding||bulkBusy)?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
-            {seeding ? "⏳ Seeding…" : `🌱 Seed Clean Brands`}
-          </button>
           <button onClick={runTop100} disabled={bulkBusy||seeding}
             title="Auto-pick the 100 best products to feature on Explore"
             style={{flex:1,padding:"0.6rem 0.85rem",background:(bulkBusy||seeding)?T.surfaceAlt:`linear-gradient(135deg, #D4A015, #E8B73A)`,color:(bulkBusy||seeding)?T.textMid:"#fff",border:`1px solid ${(bulkBusy||seeding)?T.border:"#D4A015"}`,borderRadius:"0.6rem",fontSize:"0.7rem",fontWeight:"700",cursor:(bulkBusy||seeding)?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
@@ -10829,11 +10809,6 @@ function AdminProductHub({ user } = {}) {
             title="Upload a CSV with product_name, brand, ingredients (or image_url) columns to bulk-update products"
             style={{flex:1,padding:"0.6rem 0.85rem",background:(csvImporting||csvApplying)?T.surfaceAlt:`linear-gradient(135deg, #6B5CA5, #8B7BC5)`,color:(csvImporting||csvApplying)?T.textMid:"#fff",border:`1px solid ${(csvImporting||csvApplying)?T.border:"#6B5CA5"}`,borderRadius:"0.6rem",fontSize:"0.7rem",fontWeight:"700",cursor:(csvImporting||csvApplying)?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
             {csvImporting ? "⏳ Parsing…" : "📥 Import CSV"}
-          </button>
-          <button onClick={runStripBrandFromNames} disabled={bulkBusy||seeding}
-            title="Strip duplicated brand prefix from every product name (e.g. 'CeraVe CeraVe Hydrating Cleanser' → 'Hydrating Cleanser'). Shows a preview first."
-            style={{flex:1,padding:"0.6rem 0.85rem",background:(bulkBusy||seeding)?T.surfaceAlt:`linear-gradient(135deg, #2C7A5C, #4A9B7E)`,color:(bulkBusy||seeding)?T.textMid:"#fff",border:`1px solid ${(bulkBusy||seeding)?T.border:T.sage}`,borderRadius:"0.6rem",fontSize:"0.7rem",fontWeight:"700",cursor:(bulkBusy||seeding)?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
-            🧹 Clean brand prefixes
           </button>
         </div>
 
@@ -10968,11 +10943,11 @@ function AdminProductHub({ user } = {}) {
       <div style={{display:"flex",gap:"0.5rem",alignItems:"center"}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…"
           style={{flex:1,padding:"0.55rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface}}/>
-        {/* Quick sort cycle: Most scanned ↔ Recently checked ↔ A–Z. Tap to cycle. */}
-        <button onClick={()=>setSort(s => s==="scans" ? "checked" : s==="checked" ? "name" : "scans")}
-          title={`Sort: ${sort==="scans"?"Most scanned":sort==="checked"?"Recently checked":sort==="name"?"A–Z":sort==="recent"?"Recent":sort==="featured"?"Featured first":"Most scanned"} — tap to change`}
+        {/* Quick sort cycle: Most scanned ↔ A–Z. Tap to cycle. */}
+        <button onClick={()=>setSort(s => s==="scans" ? "name" : "scans")}
+          title={`Sort: ${sort==="scans"?"Most scanned":"A–Z"} — tap to change`}
           style={{padding:"0.55rem 0.7rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.65rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"}}>
-          {sort==="scans" ? "📊 Scans" : sort==="checked" ? "🕒 Checked" : sort==="name" ? "A–Z" : sort==="recent" ? "⏱ Recent" : sort==="featured" ? "⭐ Feat." : "📊 Scans"}
+          {sort==="scans" ? "📊 Scans" : "A–Z"}
         </button>
         {/* Dupe finder + bulk select — only shown in Advanced */}
         {showAdvanced && (
@@ -11017,7 +10992,7 @@ function AdminProductHub({ user } = {}) {
       {showAdvanced && (
       <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
         <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginRight:"0.2rem"}}>Sort:</div>
-        {[["scans","Most scanned"],["checked","🕒 Recently checked"],["name","A–Z"],["recent","Recent"],["featured","⭐ Featured first"]].map(([id,label])=>(
+        {[["scans","Most scanned"],["name","A–Z"]].map(([id,label])=>(
           <button key={id} onClick={()=>setSort(id)}
             style={{padding:"0.25rem 0.6rem",background:sort===id?T.accent:T.surfaceAlt,color:sort===id?"#fff":T.textMid,border:`1px solid ${sort===id?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.62rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:sort===id?"600":"400"}}>
             {label}
@@ -11029,8 +11004,8 @@ function AdminProductHub({ user } = {}) {
       {/* Filter pills — default set: All / Needs work / No image / No ingredients / No skin / No buy / Complete / Mine. Advanced exposes everything. */}
       <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
         {(showAdvanced
-          ? [["all",`All (${counts.all})`,null],["needswork",`🚧 Needs work (${counts.needswork})`,"#7C3AED"],["mine",`👤 Mine (${myEditCount})`,T.accent],["featured",`⭐ Featured (${counts.featured})`,"#D4A015"],["enriched",`✨ Reviewed (${counts.enriched})`,"#6366F1"],["unchecked",`🤖 Not reviewed (${counts.unchecked})`,"#EC4899"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["noskin",`No skin type (${counts.noskin})`,T.amber],["nocategory",`No category (${counts.nocategory})`,T.amber],["nobuy",`No buy link (${counts.nobuy})`,T.amber],["ready",`Complete (${counts.ready})`,T.sage],["hidden",`🙈 Hidden (${counts.hidden})`,T.textMid]]
-          : [["all",`All (${counts.all})`,null],["needswork",`🚧 Needs work (${counts.needswork})`,"#7C3AED"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["noskin",`No skin type (${counts.noskin})`,T.amber],["nobuy",`No buy link (${counts.nobuy})`,T.amber],["ready",`Complete (${counts.ready})`,T.sage],["mine",`👤 Mine (${myEditCount})`,T.accent]]
+          ? [["all",`All (${counts.all})`,null],["needswork",`🚧 Needs work (${counts.needswork})`,"#7C3AED"],["featured",`⭐ Featured (${counts.featured})`,"#D4A015"],["enriched",`✨ Reviewed (${counts.enriched})`,"#6366F1"],["unchecked",`🤖 Not reviewed (${counts.unchecked})`,"#EC4899"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["noskin",`No skin type (${counts.noskin})`,T.amber],["nocategory",`No category (${counts.nocategory})`,T.amber],["nobuy",`No buy link (${counts.nobuy})`,T.amber],["ready",`Complete (${counts.ready})`,T.sage],["hidden",`🙈 Hidden (${counts.hidden})`,T.textMid]]
+          : [["all",`All (${counts.all})`,null],["needswork",`🚧 Needs work (${counts.needswork})`,"#7C3AED"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["noskin",`No skin type (${counts.noskin})`,T.amber],["nobuy",`No buy link (${counts.nobuy})`,T.amber],["ready",`Complete (${counts.ready})`,T.sage]]
         ).map(([id,label,color])=>(
           <button key={id} onClick={()=>setFilter(id)}
             style={{padding:"0.3rem 0.7rem",background:filter===id?(color||T.accent):T.surfaceAlt,color:filter===id?"#fff":T.textMid,border:`1px solid ${filter===id?(color||T.accent):T.border}`,borderRadius:"999px",fontSize:"0.65rem",fontWeight:filter===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
@@ -11042,7 +11017,6 @@ function AdminProductHub({ user } = {}) {
       {/* Inline explainer for the active filter — disappears for "All" */}
       {filter !== "all" && (
         <div style={{padding:"0.45rem 0.7rem",background:T.surfaceAlt,borderRadius:"0.5rem",fontSize:"0.62rem",color:T.textMid,fontFamily:"'Inter',sans-serif",lineHeight:1.4}}>
-          {filter === "mine"          && <>👤 <strong>Mine</strong> — products you ({myTag}) personally edited or saved. Useful for reviewing your own work.</>}
           {filter === "noimage"       && <>📷 <strong>No image</strong> — products missing a clean product photo. Tap one to find and upload an image.</>}
           {filter === "noingredients" && <>🧪 <strong>No ingredients</strong> — products missing the INCI ingredient list. Tap one to look it up and paste it in.</>}
           {filter === "noskin"        && <>🧴 <strong>No skin type</strong> — products without skin-type tags. Tap one to add at least one (Oily, Dry, Sensitive, etc.).</>}
@@ -11190,7 +11164,6 @@ function AdminProductHub({ user } = {}) {
                       );
                     })()}
                   </div>
-                )}
                 )}
                 {!selectMode && <div style={{fontSize:"0.65rem",color:T.textLight,flexShrink:0,marginLeft:"0.25rem"}}>›</div>}
               </div>
