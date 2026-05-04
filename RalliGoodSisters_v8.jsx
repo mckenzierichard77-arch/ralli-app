@@ -8036,6 +8036,22 @@ function AdminFounderPicks() {
   const [loading, setLoading]   = useState(true);
   const [search, setSearch]     = useState("");
   const [msg, setMsg]           = useState("");
+  const productCache = useProductCache();
+
+  // Always recompute pore score from current ingredients so admin sees the
+  // same number the modal/user-side shows. The stored p.poreScore on the
+  // Firestore doc may be stale if the ingredient database has been updated.
+  function liveScoreFor(p) {
+    if (!p) return 0;
+    const ing = (p.ingredients || "").trim();
+    if (ing.length > 10) {
+      try {
+        const r = analyzeIngredients(ing);
+        if (r?.avgScore != null) return Math.round(r.avgScore);
+      } catch {}
+    }
+    return p.poreScore ?? 0;
+  }
 
   useEffect(()=>{
     async function load() {
@@ -8134,7 +8150,7 @@ function AdminFounderPicks() {
               {(p.adminImage||p.image) && <img src={p.adminImage||p.image} alt="" style={{width:"40px",height:"40px",objectFit:"contain",borderRadius:"0.35rem",background:"#ffffff",flexShrink:0}}/>}
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
-                <div style={{fontSize:"0.68rem",color:T.textLight}}>{p.brand} · Pore {p.poreScore||0}/5</div>
+                <div style={{fontSize:"0.68rem",color:T.textLight}}>{p.brand} · Pore {liveScoreFor(p)}/5</div>
               </div>
               <div style={{flexShrink:0,background:T.sage,color:"#fff",borderRadius:"0.5rem",padding:"0.35rem 0.75rem",fontSize:"0.75rem",fontWeight:"700"}}>+ Add</div>
             </button>
@@ -8159,7 +8175,7 @@ function AdminFounderPicks() {
             </div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pick.productName}</div>
-              <div style={{fontSize:"0.65rem",color:T.textLight,marginBottom:"0.4rem"}}>{pick.brand} · Pore {pick.poreScore||0}/5</div>
+              <div style={{fontSize:"0.65rem",color:T.textLight,marginBottom:"0.4rem"}}>{pick.brand} · Pore {liveScoreFor(productCache.get(pick.productId) || productCache.get(pick.productName) || pick)}/5</div>
               <select value={pick.founderName||"McKenzie"} onChange={e=>updateFounder(pick.id,e.target.value)}
                 style={{fontSize:"0.68rem",padding:"0.2rem 0.4rem",borderRadius:"0.3rem",border:`1px solid ${T.border}`,background:T.surface,color:T.textMid,marginBottom:"0.35rem",fontFamily:"'Inter',sans-serif"}}>
                 <option>McKenzie</option>
@@ -8193,8 +8209,12 @@ function FounderPicksRow({onTap, friendScans={}}) {
   const [picks, setPicks] = useState([]);
   const [loading, setLoading] = useState(true);
   const founderAvatars = useFounderAvatars();
+  const productCache = useProductCache();
 
   useEffect(()=>{
+    // Wait for the cache to populate before resolving picks — otherwise we
+    // miss product data and silently drop picks.
+    if (!productCache.ready) return;
     async function load() {
       try {
         let snap;
@@ -8205,20 +8225,16 @@ function FounderPicksRow({onTap, friendScans={}}) {
         }
         if (snap.empty) { setLoading(false); return; }
         const pickData = snap.docs.map(d=>({id:d.id,...d.data()}));
-        const productIds = pickData.map(p=>p.productId).filter(Boolean);
-        let productMap = {};
-        if (productIds.length) {
-          for (let i=0; i<productIds.length; i+=10) {
-            const chunk = productIds.slice(i,i+10);
-            const pSnap = await getDocs(query(collection(db,"products"), where("__name__","in",chunk)));
-            pSnap.docs.forEach(d => { productMap[d.id] = {id:d.id,...d.data()}; });
-          }
-        }
+
         setPicks(pickData.map(pick => {
-          const p = productMap[pick.productId] || {};
-          // Compute live pore score from actual ingredients to ensure accuracy
+          // Look up canonical product from the cache. This is the single
+          // source of truth — same data the modal sees, no stale snapshots.
+          const p = productCache.get(pick.productId) || productCache.get(pick.productName) || {};
           const ingredients = p.ingredients || pick.ingredients || "";
-          let liveScore = pick.poreScore ?? p.poreScore ?? 99;
+          // Always recompute pore score from live ingredients. The stored
+          // p.poreScore may be stale if the comedogenic ingredient database
+          // has been updated since the product was first scored.
+          let liveScore = p.poreScore ?? pick.poreScore ?? 99;
           try {
             if (ingredients.trim().length > 10) {
               const r = analyzeIngredients(ingredients);
@@ -8227,18 +8243,19 @@ function FounderPicksRow({onTap, friendScans={}}) {
           } catch {}
           return {
             ...pick,
-            image: p.adminImage||p.image||pick.image||"",
+            image: getProductImage(p) || pick.image || "",
             poreScore: liveScore,
             ingredients,
-            buyUrl: p.buyUrl||pick.buyUrl||"",
-            communityRating: p.communityRating||pick.communityRating||null,
+            brand: p.brand || pick.brand || "",
+            buyUrl: p.buyUrl || pick.buyUrl || "",
+            communityRating: p.communityRating || pick.communityRating || null,
           };
         }).filter(pick => pick.poreScore <= 1));    // Explore-wide rule: only show clean (0-1) products
       } catch(e) { console.error("FounderPicks load error", e); }
       setLoading(false);
     }
     load();
-  },[]);
+  },[productCache.ready]);
 
   if (loading) return null;
   if (!picks.length) return null;
