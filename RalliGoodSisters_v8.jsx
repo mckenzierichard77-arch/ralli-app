@@ -1887,14 +1887,15 @@ function ShareProductModal({ user, product, onClose }) {
         }
       }
       // Load group conversations the user is in.
+      // Filter for isGroup client-side to avoid requiring a composite index
+      // on (participants array-contains, isGroup ==).
       try {
         const gq = query(collection(db, "conversations"),
           where("participants","array-contains", user.uid),
-          where("isGroup","==", true),
-          limit(20)
+          limit(50)
         );
         const gs = await getDocs(gq);
-        setGroups(gs.docs.map(d => ({ id: d.id, ...d.data() })));
+        setGroups(gs.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.isGroup));
       } catch(e) { /* ignore — groups optional */ }
       setLoading(false);
     }
@@ -2178,13 +2179,13 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
   const her = isMe ? "your" : "their";  // gender-neutral possessive avoids guessing
   const labelMap = {
     brokeout:  isMe ? `you said this broke you out`         : `${firstName} said this broke them out`,
-    wantToTry: isMe ? `you added this to your wishlist`     : `${firstName} added this to their wishlist`,
+    wantToTry: isMe ? `you want to try this`                : `${firstName} wants to try this`,
     loved:     isMe ? `you added this to your routine`      : `${firstName} added this to their routine`,
     commented: isMe ? `you commented on this`               : `${firstName} commented on this`,
   };
   const captionMap = {
     brokeout:  { icon: "⚠️", text: labelMap.brokeout,  verb: "broke out from" },
-    wantToTry: { icon: "👀", text: labelMap.wantToTry, verb: "added to wishlist" },
+    wantToTry: { icon: "👀", text: labelMap.wantToTry, verb: "wants to try" },
     loved:     { icon: "💖", text: labelMap.loved,     verb: "added to routine" },
     commented: { icon: "💬", text: labelMap.commented, verb: "commented on" },
   };
@@ -2234,7 +2235,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
               <div style={{display:"flex",alignItems:"center",gap:"0.25rem",marginTop:"1px"}}>
                 <span style={{display:"flex",alignItems:"center"}}>{typeIcon}</span>
                 <span style={{fontSize:"0.68rem",fontWeight:"600",color:typeAccent,fontFamily:"'Inter',sans-serif"}}>
-                  {post.postType==="brokeout"?"broke out":post.postType==="wantToTry"?"added to wishlist":post.postType==="loved"?"added to routine":"checked this"}
+                  {post.postType==="brokeout"?"broke out":post.postType==="wantToTry"?"wants to try":post.postType==="loved"?"added to routine":"checked this"}
                 </span>
               </div>
             </div>
@@ -14768,22 +14769,32 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, ch
     loadConnections();
   }, [user?.uid]);
 
-  // Listen to conversations
+  // Listen to conversations.
+  // We deliberately do NOT use Firestore's orderBy("lastAt") here — when a doc
+  // is just-created with serverTimestamp(), the local snapshot briefly has
+  // lastAt=null, and orderBy excludes null-valued docs from the result. That
+  // caused brand-new groups to "disappear" from the list until the server
+  // resolved the timestamp. Sorting client-side avoids the race entirely.
   useEffect(() => {
     if (!user?.uid) return;
     const q = query(
       collection(db, "conversations"),
       where("participants", "array-contains", user.uid),
-      orderBy("lastAt", "desc"),
-      limit(30)
+      limit(50)
     );
     const unsub = onSnapshot(q, snap => {
       const list = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-      setConvos(list);
+      // Sort by lastAt desc; treat null/undefined as "very recent" (just created).
+      list.sort((a, b) => {
+        const aTs = a.lastAt?.seconds ?? Date.now() / 1000;
+        const bTs = b.lastAt?.seconds ?? Date.now() / 1000;
+        return bTs - aTs;
+      });
+      setConvos(list.slice(0, 30));
       const total = list.reduce((sum, c) => sum + (c[`unread_${user.uid}`] || 0), 0);
       onUnreadChange?.(total);
       setLoading(false);
-    }, () => setLoading(false));
+    }, err => { console.warn("MessagesPage convos listener error:", err); setLoading(false); });
     return unsub;
   }, [user?.uid]);
 
@@ -15926,7 +15937,7 @@ const _origWarn  = console.warn;
 console.error = (...args) => { _origError(...args); debugLog("error", args.map(a=>typeof a==="object"?JSON.stringify(a):String(a)).join(" ")); };
 console.warn  = (...args) => { _origWarn(...args);  debugLog("warn",  args.map(a=>typeof a==="object"?JSON.stringify(a):String(a)).join(" ")); };
 
-function DebugPanel({ user }) {
+function DebugPanel({ user, hidden = false }) {
   const [open, setOpen] = React.useState(false);
   const [logs, setLogs] = React.useState([...debugLogs.entries]);
   const [filter, setFilter] = React.useState("all");
@@ -15938,6 +15949,7 @@ function DebugPanel({ user }) {
   }, []);
 
   if (!isAdmin(user)) return null;
+  if (hidden) return null;
 
   const filtered = filter === "all" ? logs : logs.filter(l => l.type === filter);
   const errorCount = logs.filter(l => l.type === "error").length;
@@ -16540,7 +16552,7 @@ function AppInner() {
           Auto-fix running… {afLog.filter(l=>l.type==="ok").length} fixed
         </div>
       )}
-      <DebugPanel user={user}/>
+      <DebugPanel user={user} hidden={chatOpen}/>
     </div></>
   );
 }
