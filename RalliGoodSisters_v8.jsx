@@ -8955,8 +8955,26 @@ function NotificationsPage({user, onUserTap}) {
 // Set your Firebase UID here to enable the admin tab
 const ADMIN_UIDS = []; // add your UID here once you see it in Profile
 const ADMIN_EMAILS = ["mckenzierichard77@gmail.com", "morganrichard777@gmail.com"];
+// VA / contractor emails — get full admin access but the dashboard defaults
+// them into "VA Mode" (focused queue, power tools tucked away).
+// Add the VA's email here once you've hired her.
+const VA_EMAILS = [
+  // "your-va@example.com",
+];
 function isAdmin(user) {
-  return ADMIN_UIDS.includes(user?.uid) || ADMIN_EMAILS.includes(user?.email);
+  return ADMIN_UIDS.includes(user?.uid) || ADMIN_EMAILS.includes(user?.email) || VA_EMAILS.includes(user?.email);
+}
+function isVA(user) {
+  return VA_EMAILS.includes(user?.email);
+}
+// Returns a short tag for the lastEnrichedBy field on product edits.
+// Helps you tell at a glance who touched a product.
+function enrichedByTag(user) {
+  const email = (user?.email||"").toLowerCase();
+  if (VA_EMAILS.map(e=>e.toLowerCase()).includes(email)) return "va";
+  if (email.includes("mckenzie")) return "mckenzie";
+  if (email.includes("morgan")) return "morgan";
+  return email.split("@")[0] || "admin";
 }
 
 
@@ -9536,7 +9554,7 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
 
 // ── Admin Products Tab ──────────────────────────────────────────────────────
 // Simple product manager: filter, edit inline, export/upload CSV
-function AdminProductHub() {
+function AdminProductHub({ user } = {}) {
   const [products, setProducts]   = React.useState([]);
   const [loading, setLoading]     = React.useState(true);
   const [mode, setMode]           = React.useState("list"); // list | swipe | add
@@ -9548,6 +9566,13 @@ function AdminProductHub() {
   const [savedId, setSavedId]     = React.useState(null);
   const [uploadingImg, setUploadingImg] = React.useState(false);
   const [liveScore, setLiveScore] = React.useState(null);
+
+  // VA Mode — defaults ON for VA users, OFF for founders.
+  // When ON: hides power tools (seed, top 100, dupe finder, bulk delete, CSV import)
+  // and surfaces a focused daily-queue panel at the top.
+  const [vaMode, setVaMode] = React.useState(() => isVA(user));
+  // Show/hide the "Advanced tools" expander inside VA mode (always collapsed by default).
+  const [showAdvanced, setShowAdvanced] = React.useState(false);
 
   // Seed clean brands
   const [seeding, setSeeding] = React.useState(false);
@@ -10031,6 +10056,14 @@ function AdminProductHub() {
     return s;
   }, [dupeGroups]);
 
+  // Editor identity — used to power the "👤 Mine" filter and the "edited by you"
+  // counter in Today's Queue.
+  const myTag = enrichedByTag(auth.currentUser);
+  const myEditCount = products.filter(p => p.lastEnrichedBy === myTag).length;
+  // Today only — for the daily progress display in Today's Queue.
+  const _startOfToday = (() => { const d=new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+  const myEditCountToday = products.filter(p => p.lastEnrichedBy === myTag && (p.lastEnrichedAt||0) >= _startOfToday).length;
+
   const filtered = products
     .filter(p => dupeView ? dupeIdSet.has(p.id) : true)
     .filter(p => {
@@ -10039,6 +10072,7 @@ function AdminProductHub() {
       if (filter==="hidden")        return !!p.hidden;
       // Every other filter excludes hidden products by default — they only show in the "hidden" view
       if (p.hidden) return false;
+      if (filter==="mine")          return p.lastEnrichedBy === myTag;
       if (filter==="featured")      return !!p.featuredOnExplore;
       if (filter==="enriched")      return !!p.lastEnrichedAt;
       if (filter==="unchecked")     return !p.lastEnrichedAt;
@@ -10162,6 +10196,8 @@ function AdminProductHub() {
     }
     if (isSwipe) setSwipeSaving(true); else setSaving(true);
     try {
+      // Tag the edit with who saved it — so you can filter "edited by VA" later
+      const editor = enrichedByTag(auth.currentUser);
       const updates = {
         productName: (src.productName||"").trim(),
         brand:       (src.brand||"").trim(),
@@ -10172,6 +10208,8 @@ function AdminProductHub() {
         buyUrl:      (src.buyUrl||"").trim(),
         approved:    true,
         pendingReview: false,   // cleared once admin has reviewed
+        lastEnrichedAt: Date.now(),
+        lastEnrichedBy: editor,
         updatedAt:   Date.now(),
       };
       if (src.adminImage) { updates.adminImage=src.adminImage; updates.image=src.adminImage; }
@@ -10230,6 +10268,7 @@ function AdminProductHub() {
     if (!addForm.productName.trim()||!addForm.brand.trim()) { alert("Product name and brand are required"); return; }
     setAddSaving(true);
     try {
+      const editor = enrichedByTag(auth.currentUser);
       const newDoc = {
         productName:   addForm.productName.trim(),
         brand:         addForm.brand.trim(),
@@ -10246,6 +10285,9 @@ function AdminProductHub() {
         image:         "",
         adminImage:    "",
         barcode:       "",
+        lastEnrichedAt: Date.now(),
+        lastEnrichedBy: editor,
+        addedBy:       editor,  // who originally created this product
         createdAt:     Date.now(),
         updatedAt:     Date.now(),
       };
@@ -10434,8 +10476,93 @@ function AdminProductHub() {
   // ─────────────────────────────────────────────────────────────────────────
   // LIST MODE
   // ─────────────────────────────────────────────────────────────────────────
+  // VA-friendly "Today's Queue" card — the daily landing strip at the top of
+  // the Products tab. Tells the editor (you or VA) exactly what to work on
+  // next, and one tap takes them straight there. Priority order:
+  //   1. Both image + ingredients missing  → swipe queue
+  //   2. Image missing                      → swipe queue
+  //   3. Ingredients missing                → swipe queue
+  //   4. Never checked by anyone            → list view (filter=unchecked)
+  // The "Mine" counter shows how many products this editor has saved — gives
+  // the VA a sense of progress.
+  // (myTag and myEditCount are declared above, before `filtered`.)
+  const todaySuggestion = (() => {
+    if (counts.both > 0)          return { filter:"both",          label:`${counts.both} products need image + ingredients`,  swipe:"both",          color:"#7C3AED" };
+    if (counts.noimage > 0)       return { filter:"noimage",       label:`${counts.noimage} products need an image`,          swipe:"noimage",       color:T.rose };
+    if (counts.noingredients > 0) return { filter:"noingredients", label:`${counts.noingredients} products need ingredients`, swipe:"noingredients", color:T.amber };
+    if (counts.unchecked > 0)     return { filter:"unchecked",     label:`${counts.unchecked} never checked — verify them`,    swipe:null,            color:"#EC4899" };
+    return null;
+  })();
+
   return (
     <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+
+      {/* Today's Queue — daily landing card */}
+      {todaySuggestion ? (
+        <div style={{background:`linear-gradient(135deg, ${todaySuggestion.color}10, ${todaySuggestion.color}22)`,border:`1.5px solid ${todaySuggestion.color}66`,borderRadius:"0.85rem",padding:"0.95rem 1rem",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.35rem"}}>
+            <div style={{fontSize:"0.6rem",fontWeight:"700",color:todaySuggestion.color,textTransform:"uppercase",letterSpacing:"0.08em"}}>📋 Today's Queue {vaMode && <span style={{color:T.textLight,marginLeft:"0.4rem",fontWeight:"400"}}>· VA mode</span>}</div>
+            <div style={{fontSize:"0.58rem",color:T.textLight}}>signed in as <strong style={{color:T.textMid}}>{myTag}</strong></div>
+          </div>
+          <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,marginBottom:"0.65rem",lineHeight:1.35}}>{todaySuggestion.label}</div>
+
+          {/* Daily progress strip — today's saves vs all-time saves */}
+          <div style={{display:"flex",gap:"0.4rem",marginBottom:"0.65rem"}}>
+            <div style={{flex:1,background:T.surface,borderRadius:"0.55rem",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`}}>
+              <div style={{fontSize:"0.55rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.05em",fontWeight:"600"}}>Today</div>
+              <div style={{fontSize:"1.15rem",fontWeight:"800",color:myEditCountToday>0?T.sage:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.1,marginTop:"0.15rem"}}>{myEditCountToday}</div>
+            </div>
+            <div style={{flex:1,background:T.surface,borderRadius:"0.55rem",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`}}>
+              <div style={{fontSize:"0.55rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.05em",fontWeight:"600"}}>All time</div>
+              <div style={{fontSize:"1.15rem",fontWeight:"800",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.1,marginTop:"0.15rem"}}>{myEditCount}</div>
+            </div>
+            <div style={{flex:1,background:T.surface,borderRadius:"0.55rem",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`}}>
+              <div style={{fontSize:"0.55rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.05em",fontWeight:"600"}}>In queue</div>
+              <div style={{fontSize:"1.15rem",fontWeight:"800",color:counts.both>0?T.amber:T.sage,fontFamily:"'Inter',sans-serif",lineHeight:1.1,marginTop:"0.15rem"}}>{counts.both}</div>
+            </div>
+          </div>
+
+          <div style={{display:"flex",gap:"0.4rem"}}>
+            {todaySuggestion.swipe ? (
+              <button onClick={()=>{setSwipeFilter(todaySuggestion.swipe); startSwipe();}}
+                style={{flex:2,padding:"0.7rem",background:todaySuggestion.color,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.78rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                👆 Start swiping
+              </button>
+            ) : (
+              <button onClick={()=>setFilter(todaySuggestion.filter)}
+                style={{flex:2,padding:"0.7rem",background:todaySuggestion.color,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.78rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                📋 View list
+              </button>
+            )}
+            <button onClick={()=>setMode("add")}
+              style={{flex:1,padding:"0.7rem",background:T.surface,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+              ＋ Add new
+            </button>
+          </div>
+
+          {/* Founder-only: toggle VA mode preview, or switch back to full view */}
+          {!isVA(user) && (
+            <button onClick={()=>setVaMode(v=>!v)}
+              style={{marginTop:"0.55rem",background:"none",border:"none",color:T.textLight,fontSize:"0.6rem",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif",textDecoration:"underline"}}>
+              {vaMode ? "Switch to full admin view" : "Preview VA mode"}
+            </button>
+          )}
+        </div>
+      ) : (
+        <div style={{background:T.sage+"15",border:`1.5px solid ${T.sage}55`,borderRadius:"0.85rem",padding:"0.95rem 1rem",fontFamily:"'Inter',sans-serif",textAlign:"center"}}>
+          <div style={{fontSize:"1.5rem",marginBottom:"0.25rem"}}>🎉</div>
+          <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.sage}}>All caught up!</div>
+          <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"0.25rem"}}>
+            Every product has an image and ingredients.{myEditCount > 0 && <> You contributed to {myEditCount}.</>}
+          </div>
+          {!isVA(user) && (
+            <button onClick={()=>setVaMode(v=>!v)}
+              style={{marginTop:"0.65rem",background:"none",border:"none",color:T.textLight,fontSize:"0.6rem",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif",textDecoration:"underline"}}>
+              {vaMode ? "Switch to full admin view" : "Preview VA mode"}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Mode switcher */}
       <div style={{display:"flex",gap:"0.5rem"}}>
@@ -10454,6 +10581,8 @@ function AdminProductHub() {
       </div>
 
       {/* Seed clean brands — bulk-imports ~175 real products from clean brands into swipe queue */}
+      {/* Power tools (seed, top 100, CSV import) — hidden in VA mode by default */}
+      {(!vaMode || showAdvanced) && (
       <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
         <div style={{display:"flex",gap:"0.4rem"}}>
           <button onClick={runSeed} disabled={seeding||bulkBusy}
@@ -10583,6 +10712,15 @@ function AdminProductHub() {
           </div>
         )}
       </div>
+      )}
+
+      {/* Toggle for VA mode — show advanced tools, or hide them again. */}
+      {vaMode && (
+        <button onClick={()=>setShowAdvanced(s=>!s)}
+          style={{padding:"0.4rem 0.75rem",background:"none",border:`1px dashed ${T.border}`,borderRadius:"0.5rem",fontSize:"0.65rem",color:T.textLight,cursor:"pointer",fontFamily:"'Inter',sans-serif",alignSelf:"flex-start"}}>
+          {showAdvanced ? "▾ Hide advanced tools" : "▸ Show advanced tools (Seed, Top 100, CSV import)"}
+        </button>
+      )}
 
       {/* Swipe filter selector */}
       <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
@@ -10599,16 +10737,21 @@ function AdminProductHub() {
       <div style={{display:"flex",gap:"0.5rem",alignItems:"center"}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…"
           style={{flex:1,padding:"0.55rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface}}/>
+        {/* Dupe finder + bulk select — destructive tools, hidden in VA mode by default */}
+        {(!vaMode || showAdvanced) && (
         <button onClick={dupeView ? exitDupeView : findDuplicates}
           title={dupeView ? "Exit duplicate view" : "Find duplicate products"}
           style={{padding:"0.55rem 0.75rem",background:dupeView?"#7C3AED":T.surfaceAlt,color:dupeView?"#fff":T.textMid,border:`1px solid ${dupeView?"#7C3AED":T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
           {dupeView ? "✕" : "👯"}
         </button>
+        )}
+        {(!vaMode || showAdvanced) && (
         <button onClick={()=>{ if(selectMode) exitSelectMode(); else setSelectMode(true); }}
           title={selectMode ? "Exit select mode" : "Select multiple to hide or delete"}
           style={{padding:"0.55rem 0.75rem",background:selectMode?T.accent:T.surfaceAlt,color:selectMode?"#fff":T.textMid,border:`1px solid ${selectMode?T.accent:T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
           {selectMode ? "✕" : "☑"}
         </button>
+        )}
         <button onClick={exportCsv} style={{padding:"0.55rem 0.85rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>⬇️</button>
         <button onClick={load} style={{padding:"0.55rem 0.75rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",color:T.textMid,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>↺</button>
       </div>
@@ -10646,7 +10789,7 @@ function AdminProductHub() {
 
       {/* Filter pills */}
       <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
-        {[["all",`All (${counts.all})`,null],["featured",`⭐ Featured (${counts.featured})`,"#D4A015"],["enriched",`✨ Enriched (${counts.enriched})`,"#6366F1"],["unchecked",`🤖 Never checked (${counts.unchecked})`,"#EC4899"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage],["hidden",`🙈 Hidden (${counts.hidden})`,T.textMid]].map(([id,label,color])=>(
+        {[["all",`All (${counts.all})`,null],["mine",`👤 Mine (${myEditCount})`,T.accent],["featured",`⭐ Featured (${counts.featured})`,"#D4A015"],["enriched",`✨ Enriched (${counts.enriched})`,"#6366F1"],["unchecked",`🤖 Never checked (${counts.unchecked})`,"#EC4899"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage],["hidden",`🙈 Hidden (${counts.hidden})`,T.textMid]].map(([id,label,color])=>(
           <button key={id} onClick={()=>setFilter(id)}
             style={{padding:"0.3rem 0.7rem",background:filter===id?(color||T.accent):T.surfaceAlt,color:filter===id?"#fff":T.textMid,border:`1px solid ${filter===id?(color||T.accent):T.border}`,borderRadius:"999px",fontSize:"0.65rem",fontWeight:filter===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
             {label}
@@ -12842,10 +12985,14 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
 
   if (!isAdmin(user)) return (
     <div style={{maxWidth:"480px",margin:"0 auto",padding:"3rem 1rem",textAlign:"center"}}>
-      
-      <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"600",color:T.textMid,marginBottom:"0.5rem"}}>Admin only</div>
-      <div style={{fontSize:"0.78rem",color:T.textLight,marginBottom:"1rem"}}>Add your UID to ADMIN_UIDS in the code to access this.</div>
-      <div style={{fontSize:"0.68rem",color:T.textLight,background:T.surface,padding:"0.5rem 0.75rem",borderRadius:"0.5rem",border:`1px solid ${T.border}`,fontFamily:"monospace",wordBreak:"break-all"}}>{user?.uid}</div>
+      <div style={{fontSize:"2rem",marginBottom:"0.75rem"}}>🔒</div>
+      <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"700",fontSize:"1rem",color:T.text,marginBottom:"0.5rem"}}>Admin access needed</div>
+      <div style={{fontSize:"0.78rem",color:T.textMid,marginBottom:"1.25rem",lineHeight:1.5}}>
+        This account isn't on the admin list yet.<br/>
+        Send the email below to McKenzie and she'll add you.
+      </div>
+      <div style={{fontSize:"0.7rem",color:T.text,background:T.surface,padding:"0.6rem 0.85rem",borderRadius:"0.55rem",border:`1px solid ${T.border}`,fontFamily:"monospace",wordBreak:"break-all",fontWeight:"600"}}>{user?.email||"(no email)"}</div>
+      <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"0.5rem",fontFamily:"monospace",wordBreak:"break-all"}}>UID: {user?.uid}</div>
     </div>
   );
 
@@ -12883,7 +13030,7 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
       {activeTab==="overview"&&<div style={{marginBottom:"0.9rem"}}/>}
 
       {/* Products — single hub */}
-      {activeTab==="products"&&<AdminProductHub/>}
+      {activeTab==="products"&&<AdminProductHub user={user}/>}
       {/* Content sub-tabs */}
       {activeTab==="schedule"&&<EditorialCalendar/>}
       {activeTab==="picks"&&<AdminFounderPicks/>}
