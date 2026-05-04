@@ -10998,12 +10998,14 @@ function AdminProductHub({ user } = {}) {
         {/* Reviewer dropdown — populated from actual reviewers in the catalog */}
         <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginLeft:"0.5rem",marginRight:"0.2rem"}}>Reviewed by:</div>
         <select value={reviewerFilter} onChange={e=>setReviewerFilter(e.target.value)}
-          style={{padding:"0.28rem 0.55rem",background:reviewerFilter==="all"?T.surfaceAlt:T.accent+"15",color:reviewerFilter==="all"?T.textMid:T.accent,border:`1px solid ${reviewerFilter==="all"?T.border:T.accent}`,borderRadius:"999px",fontSize:"0.62rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:reviewerFilter==="all"?"400":"600",appearance:"none",WebkitAppearance:"none",paddingRight:"1.4rem",backgroundImage:`url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3e%3cpath d='M3 4.5l3 3 3-3' stroke='%23${reviewerFilter==="all"?"4A5568":"111827"}' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3e%3c/svg%3e")`,backgroundRepeat:"no-repeat",backgroundPosition:"right 0.45rem center"}}>
+          style={{padding:"0.28rem 0.6rem",background:reviewerFilter==="all"?T.surfaceAlt:T.accent+"15",color:reviewerFilter==="all"?T.textMid:T.accent,border:`1px solid ${reviewerFilter==="all"?T.border:T.accent}`,borderRadius:"999px",fontSize:"0.62rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:reviewerFilter==="all"?"400":"600"}}>
           <option value="all">Anyone ({counts.all})</option>
           {notReviewedCount > 0 && <option value="none">🤖 Not reviewed ({notReviewedCount})</option>}
-          {reviewerOptions.map(([tag, n]) => (
-            <option key={tag} value={tag}>{reviewerInitials(tag)} · {tag} ({n})</option>
-          ))}
+          {reviewerOptions
+            .filter(([tag]) => !["cowork-csv","csv-import"].includes(tag))  // hide tool-generated tags
+            .map(([tag, n]) => (
+              <option key={tag} value={tag}>{tag} ({n})</option>
+            ))}
         </select>
       </div>
 
