@@ -9077,6 +9077,29 @@ function reviewerColor(tag) {
   for (let i = 0; i < tag.length; i++) hash = (hash * 31 + tag.charCodeAt(i)) >>> 0;
   return palette[hash % palette.length];
 }
+// Friendly display name for a reviewer tag (e.g. "mckenzie" → "McKenzie", "cowork-csv" → "Cowork").
+// Falls back to the tag itself for any reviewer not in the lookup.
+function reviewerLabel(tag) {
+  if (!tag) return "Unknown";
+  const map = {
+    "mckenzie":    "McKenzie",
+    "morgan":      "Morgan",
+    "va":          "VA",
+    "cowork-csv":  "Cowork",
+    "csv-import":  "Cowork",
+    "admin":       "Admin",
+  };
+  if (map[tag]) return map[tag];
+  // Generic fallback: capitalize the first letter of each word, drop common suffixes.
+  return tag
+    .replace(/[-_]+csv$/i, "")
+    .replace(/[-_]+import$/i, "")
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map(p => p[0].toUpperCase() + p.slice(1).toLowerCase())
+    .join(" ");
+}
+
 // Returns a short relative time string for a timestamp (ms). "just now", "3m ago", "2d ago", etc.
 function relTime(ts) {
   if (!ts) return "";
@@ -11001,11 +11024,9 @@ function AdminProductHub({ user } = {}) {
           style={{padding:"0.28rem 0.6rem",background:reviewerFilter==="all"?T.surfaceAlt:T.accent+"15",color:reviewerFilter==="all"?T.textMid:T.accent,border:`1px solid ${reviewerFilter==="all"?T.border:T.accent}`,borderRadius:"999px",fontSize:"0.62rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:reviewerFilter==="all"?"400":"600"}}>
           <option value="all">Anyone ({counts.all})</option>
           {notReviewedCount > 0 && <option value="none">🤖 Not reviewed ({notReviewedCount})</option>}
-          {reviewerOptions
-            .filter(([tag]) => !["cowork-csv","csv-import"].includes(tag))  // hide tool-generated tags
-            .map(([tag, n]) => (
-              <option key={tag} value={tag}>{tag} ({n})</option>
-            ))}
+          {reviewerOptions.map(([tag, n]) => (
+            <option key={tag} value={tag}>{reviewerLabel(tag)} ({n})</option>
+          ))}
         </select>
       </div>
 
@@ -11142,7 +11163,7 @@ function AdminProductHub({ user } = {}) {
                     {p.lastEnrichedAt ? (
                       <>
                         <div style={{width:"30px",height:"30px",borderRadius:"50%",background:reviewerColor(p.lastEnrichedBy||"admin"),color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.62rem",fontWeight:"700",fontFamily:"'Inter',sans-serif",letterSpacing:"0.02em"}}
-                          title={`Last reviewed ${new Date(p.lastEnrichedAt).toLocaleString()} by ${p.lastEnrichedBy || "team"}`}>
+                          title={`Last reviewed ${new Date(p.lastEnrichedAt).toLocaleString()} by ${reviewerLabel(p.lastEnrichedBy) || "Team"}`}>
                           {reviewerInitials(p.lastEnrichedBy||"admin")}
                         </div>
                         <div style={{fontSize:"0.55rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{relTime(p.lastEnrichedAt)}</div>
@@ -11180,7 +11201,7 @@ function AdminProductHub({ user } = {}) {
         })}
       </div>
 
-      {filtered.length>0&&<div style={{textAlign:"center",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",paddingBottom:selectMode&&selectedIds.size>0?"6rem":"2rem"}}>{filtered.length} of {products.length} products · {dupeView?"in duplicate groups":(selectMode?"tap to select":"tap to edit")}{reviewerFilter !== "all" && <> · reviewed by <strong style={{color:T.textMid}}>{reviewerFilter==="none"?"no one":reviewerFilter}</strong></>}</div>}
+      {filtered.length>0&&<div style={{textAlign:"center",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",paddingBottom:selectMode&&selectedIds.size>0?"6rem":"2rem"}}>{filtered.length} of {products.length} products · {dupeView?"in duplicate groups":(selectMode?"tap to select":"tap to edit")}{reviewerFilter !== "all" && <> · reviewed by <strong style={{color:T.textMid}}>{reviewerFilter==="none"?"no one":reviewerLabel(reviewerFilter)}</strong></>}</div>}
 
       {/* Sticky bulk action bar — visible when in select mode with selections */}
       {selectMode && selectedIds.size > 0 && (
@@ -11246,7 +11267,7 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:"0.62rem",fontWeight:"700",color:"#6366F1"}}>Last reviewed {enrichedRelTime}</div>
             <div style={{fontSize:"0.55rem",color:T.textLight,marginTop:"1px"}}>
-              by {src.lastEnrichedBy || "team"} · {new Date(src.lastEnrichedAt).toLocaleString()}
+              by {reviewerLabel(src.lastEnrichedBy) || "Team"} · {new Date(src.lastEnrichedAt).toLocaleString()}
             </div>
           </div>
         </div>
