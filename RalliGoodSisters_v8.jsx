@@ -8698,14 +8698,37 @@ function ShopPage({user, profile, onUpdateProfile}) {
               <div style={{fontFamily:"'Inter',sans-serif",fontWeight:"700",fontSize:"1rem",color:T.text,letterSpacing:"-0.02em"}}>{cat.label}</div>
               <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"1px"}}>{cat.total} products · sorted by pore safety</div>
             </div>
-            <button onClick={()=>setActiveCat(activeCat===cat.id?null:cat.id)}
+            <button onClick={()=>{
+                const expanding = activeCat !== cat.id;
+                setActiveCat(expanding ? cat.id : null);
+                if (expanding) {
+                  // Scroll to top on next paint so the user sees the start of the grid.
+                  requestAnimationFrame(() => window.scrollTo({top: 0, behavior: "smooth"}));
+                }
+              }}
               style={{fontSize:"0.68rem",color:T.accent,background:"none",border:`1px solid ${T.accent}33`,borderRadius:"999px",padding:"0.25rem 0.75rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"600",whiteSpace:"nowrap"}}>
               {activeCat===cat.id?"↑ Less":"See all →"}
             </button>
           </div>
 
-          {/* Horizontal scroll shelf */}
-          <div style={{display:"flex",gap:"0.7rem",overflowX:"auto",paddingBottom:"0.75rem",scrollbarWidth:"none",WebkitOverflowScrolling:"touch",marginLeft:"-1rem",paddingLeft:"1rem",marginRight:"-1rem",paddingRight:"1rem"}}>
+          {/* Layout: horizontal scroll by default, 2-col vertical grid when expanded ("See all" tapped) */}
+          <div style={cat.isExpanded ? {
+            display:"grid",
+            gridTemplateColumns:"1fr 1fr",
+            gap:"0.7rem",
+            paddingBottom:"0.75rem",
+          } : {
+            display:"flex",
+            gap:"0.7rem",
+            overflowX:"auto",
+            paddingBottom:"0.75rem",
+            scrollbarWidth:"none",
+            WebkitOverflowScrolling:"touch",
+            marginLeft:"-1rem",
+            paddingLeft:"1rem",
+            marginRight:"-1rem",
+            paddingRight:"1rem",
+          }}>
             {cat.products.map((p,i)=>{
               const liveCardScore = (p.ingredients && p.ingredients.trim().length >= 10) ? (() => { const r = analyzeIngredients(p.ingredients); return r.avgScore != null ? Math.round(r.avgScore) : null; })() : null;
               const ps = poreStyle(liveCardScore??0);
@@ -8713,12 +8736,16 @@ function ShopPage({user, profile, onUpdateProfile}) {
               const friends = getFriendRoutineUsers(friendScans, p.productName, p.id);
               return (
                 <button key={p.id} onClick={()=>setSelectedProduct(p)}
-                  style={{flexShrink:0,width:"148px",background:T.surface,borderRadius:"1.1rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",transition:"all 0.18s",display:"flex",flexDirection:"column",boxShadow:"0 1px 6px rgba(17,24,39,0.04)"}}
+                  style={cat.isExpanded ? {
+                    width:"100%",background:T.surface,borderRadius:"1.1rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",transition:"all 0.18s",display:"flex",flexDirection:"column",boxShadow:"0 1px 6px rgba(17,24,39,0.04)"
+                  } : {
+                    flexShrink:0,width:"148px",background:T.surface,borderRadius:"1.1rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",transition:"all 0.18s",display:"flex",flexDirection:"column",boxShadow:"0 1px 6px rgba(17,24,39,0.04)"
+                  }}
                   onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 8px 24px rgba(17,24,39,0.12)`;e.currentTarget.style.borderColor=T.accent;}}
                   onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="0 1px 6px rgba(17,24,39,0.04)";e.currentTarget.style.borderColor=T.border;}}>
 
                   {/* Big image area */}
-                  <div style={{width:"100%",height:"148px",background:"#ffffff",position:"relative",overflow:"hidden"}}>
+                  <div style={{width:"100%",aspectRatio:cat.isExpanded?"1/1":undefined,height:cat.isExpanded?undefined:"148px",background:"#ffffff",position:"relative",overflow:"hidden"}}>
                     {img
                       ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
                       : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}>
