@@ -2634,9 +2634,35 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
       if (inList) {
         await updateDoc(doc(db,"users",user.uid),{[field]:arrayRemove(name)});
         onUpdateProfile?.(p=>({...p,[field]:(p[field]||[]).filter(v=>v!==name)}));
+        // Also delete the corresponding feed post so untapping a list removes
+        // the activity card. Match by uid + productName + matching postType.
+        try {
+          const reactionType = field === "routine" ? "loved" : field === "brokeout" ? "brokeout" : field === "wantToTry" ? "wantToTry" : null;
+          if (reactionType) {
+            const q2 = query(collection(db,"posts"), where("uid","==",user.uid), where("productName","==",name), where("postType","==",reactionType), limit(5));
+            const snap = await getDocs(q2);
+            await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
+          }
+        } catch(e) { console.warn("toggleList: failed to delete linked post", e); }
       } else {
         await updateDoc(doc(db,"users",user.uid),{[field]:arrayUnion(name)});
         onUpdateProfile?.(p=>({...p,[field]:[...(p[field]||[]),name]}));
+        // Create a feed post so this reaction appears in the user's feed and
+        // their followers' feeds. Map list field → postType. The "loved" feed
+        // type fires when "Add to Routine" is tapped, since a routine product
+        // is implicitly something the user is using/loving.
+        try {
+          const reactionType = field === "routine" ? "loved" : field === "brokeout" ? "brokeout" : field === "wantToTry" ? "wantToTry" : null;
+          if (reactionType) {
+            const ingText  = product.ingredients || "";
+            const analysis = ingText ? analyzeIngredients(ingText) : { found: [], avgScore: 0 };
+            const ps       = ingText ? Math.round(analysis.avgScore ?? 0) : (product.poreScore || 0);
+            const dispName = profile?.displayName || user.displayName || "Anonymous";
+            const phURL    = profile?.photoURL || user.photoURL || "";
+            const brand    = product.brand || "";
+            await postScan(user.uid, dispName, phURL, name, brand, ps, null, ingText, analysis.found || [], reactionType);
+          }
+        } catch(e) { console.warn("toggleList: failed to create linked post", e); }
       }
       const listLabel = field==="routine"?"Routine":field==="loved"?"Loved":"Want to Try";
       const t = document.createElement("div"); t.className="save-toast"; t.textContent=inList?"Removed":`Added to ${listLabel} ✓`;
