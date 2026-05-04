@@ -7337,6 +7337,65 @@ function _normProductKey(brand, name) {
   return `${clean(brand)}|${clean(name)}`;
 }
 
+// Strips a brand name from the start of a product name when the two duplicate.
+// Examples:
+//   ("CeraVe", "CeraVe Hydrating Cleanser")       → "Hydrating Cleanser"
+//   ("The Ordinary", "The Ordinary Niacinamide")  → "Niacinamide"
+//   ("CeraVe", "CeraVe CeraVe Foaming Cleanser")  → "Foaming Cleanser"  (handles double-prefix)
+//   ("Glow Recipe", "Watermelon Glow Dew Drops")  → "Watermelon Glow Dew Drops"  (no change — brand not at start)
+//   ("L'Oréal", "L'oreal Paris Revitalift")       → "Paris Revitalift"  (case- + accent-insensitive)
+//   ("e.l.f.", "e.l.f. Holy Hydration!")          → "Holy Hydration!"  (handles punctuated brands)
+// If stripping would leave the name empty or under 3 chars, returns the original name unchanged.
+function stripBrandFromName(brand, name) {
+  if (!brand || !name) return name || "";
+  // Normalize for COMPARISON ONLY: lowercase, drop diacritics, drop punctuation, collapse whitespace.
+  const norm = s => (s||"")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const brandN = norm(brand);
+  if (!brandN) return name;
+
+  let working = name.trim();
+
+  // Loop in case the brand appears twice ("CeraVe CeraVe Foaming Cleanser")
+  for (let pass = 0; pass < 3; pass++) {
+    const workingN = norm(working);
+    if (workingN === brandN) return name;  // would empty — keep original
+    if (!workingN.startsWith(brandN + " ")) break;
+
+    // Walk through `working` character-by-character, tracking how many normalized
+    // tokens we've consumed. Stop when we've consumed exactly the brand's tokens.
+    const targetTokens = brandN.split(" ").length;
+    let consumedTokens = 0;
+    let inToken = false;
+    let cutAt = -1;
+    for (let i = 0; i < working.length; i++) {
+      const ch = working[i];
+      const isWord = /[a-zA-Z0-9]/.test(ch);
+      if (isWord) {
+        if (!inToken) {
+          consumedTokens++;
+          inToken = true;
+          if (consumedTokens > targetTokens) {
+            cutAt = i;
+            break;
+          }
+        }
+      } else {
+        inToken = false;
+      }
+    }
+    if (cutAt < 0) break;  // couldn't find a clean cut
+    const candidate = working.slice(cutAt).trim();
+    if (candidate.length < 3) break;  // too short to be a real product name
+    working = candidate;
+  }
+  return working;
+}
+
 // Seed clean-brand products into Firestore. Skips any duplicates already present.
 // Returns {added, skipped, total, examples: [first few added names]}.
 async function seedCleanBrands() {
@@ -8977,6 +9036,63 @@ function enrichedByTag(user) {
   return email.split("@")[0] || "admin";
 }
 
+// Reviewer avatar helpers — convert a tag like "mckenzie" or "va" or "csv-import"
+// into 1–2 capital letters (e.g., "MK", "VA", "CI") and a stable color.
+function reviewerInitials(tag) {
+  if (!tag) return "?";
+  const s = String(tag).trim();
+  if (!s) return "?";
+  // Drop common suffixes like "-csv" or "-import"
+  const core = s.split(/[-_\s]+/)[0];
+  if (core.length <= 2) return core.toUpperCase();
+  // Take first letter of first two parts, or first two letters of single word
+  const parts = s.split(/[-_\s]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (core.slice(0, 2)).toUpperCase();
+}
+function reviewerColor(tag) {
+  // Hash the tag to a hue, then pin saturation/lightness.
+  if (!tag) return "#9CA3AF";
+  const palette = [
+    "#7C3AED", // violet — McKenzie
+    "#2C7A5C", // sage — VA
+    "#D4A015", // amber — Morgan
+    "#1A73E8", // blue
+    "#EC4899", // pink
+    "#0EA5E9", // sky
+    "#F97316", // orange
+    "#10B981", // emerald
+  ];
+  // Lock in stable colors for known tags
+  const fixed = {
+    "mckenzie":   palette[0],
+    "morgan":     palette[2],
+    "va":         palette[1],
+    "csv-import": "#6B5CA5",
+    "admin":      "#6366F1",
+  };
+  if (fixed[tag]) return fixed[tag];
+  // Otherwise, hash
+  let hash = 0;
+  for (let i = 0; i < tag.length; i++) hash = (hash * 31 + tag.charCodeAt(i)) >>> 0;
+  return palette[hash % palette.length];
+}
+// Returns a short relative time string for a timestamp (ms). "just now", "3m ago", "2d ago", etc.
+function relTime(ts) {
+  if (!ts) return "";
+  const ms = Date.now() - ts;
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  const wks = Math.floor(days / 7);
+  if (wks < 4) return `${wks}w ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
 
 // -- Product catalog CRUD --------------------------------------
 // All products live in products/{barcode} — single source of truth
@@ -9589,7 +9705,7 @@ function AdminProductHub({ user } = {}) {
 
   // Swipe mode
   const [swipeIdx, setSwipeIdx]   = React.useState(0);
-  const [swipeFilter, setSwipeFilter] = React.useState("both"); // what to swipe through
+  const [swipeFilter, setSwipeFilter] = React.useState("needswork"); // what to swipe through
   const [swipeSaving, setSwipeSaving] = React.useState(false);
   const [swipeEdit, setSwipeEdit] = React.useState(null);
   const [swipeLiveScore, setSwipeLiveScore] = React.useState(null);
@@ -9631,7 +9747,7 @@ function AdminProductHub({ user } = {}) {
 
   async function runSeed() {
     if (seeding) return;
-    if (!window.confirm(`Seed ~${CLEAN_BRANDS_SEED.length} clean-brand products into your catalog?\n\nDuplicates already in your database will be skipped automatically. New products land in the swipe queue with empty ingredients + image so you can enrich them with the Coworker.`)) return;
+    if (!window.confirm(`Seed ~${CLEAN_BRANDS_SEED.length} clean-brand products into your catalog?\n\nDuplicates already in your database will be skipped automatically. New products land in the swipe queue with empty ingredients + image so you can fill them in.`)) return;
     setSeeding(true);
     setSeedResult(null);
     try {
@@ -9745,7 +9861,7 @@ function AdminProductHub({ user } = {}) {
     const result = { applied: 0, skipped: 0, errors: [] };
     for (const row of toApply) {
       try {
-        const patch = { lastEnrichedAt: Date.now(), lastEnrichedBy: "cowork-csv", updatedAt: serverTimestamp(), pendingReview: true };
+        const patch = { lastEnrichedAt: Date.now(), lastEnrichedBy: "csv-import", updatedAt: serverTimestamp(), pendingReview: true };
         if (csvReview.kind === "ingredients") {
           const cleaned = row.value.toLowerCase().trim().replace(/\s+/g," ").replace(/\s*,\s*/g,", ");
           if (cleaned.length < 10) { result.skipped++; continue; }
@@ -10014,8 +10130,77 @@ function AdminProductHub({ user } = {}) {
     setBulkBusy(false);
   }
 
+  // ── Catalog cleanup: strip duplicated brand prefix from product names ─────
+  // Walks every product, runs stripBrandFromName(brand, name) and writes only
+  // the ones that actually change. Shows a preview first.
+  async function runStripBrandFromNames() {
+    if (bulkBusy) return;
+    // First pass — find candidates without writing anything
+    const candidates = products
+      .map(p => ({ p, newName: stripBrandFromName(p.brand, p.productName) }))
+      .filter(({ p, newName }) => newName !== (p.productName||"").trim() && newName.length >= 3);
+
+    if (candidates.length === 0) {
+      alert("✓ No duplicate brand prefixes found — your product names are already clean.");
+      return;
+    }
+
+    // Show a preview of the first few changes
+    const previewLines = candidates.slice(0, 10).map(({ p, newName }) =>
+      `  ${p.brand} — "${p.productName}" → "${newName}"`
+    ).join("\n");
+    const more = candidates.length > 10 ? `\n  …and ${candidates.length - 10} more` : "";
+
+    if (!window.confirm(
+      `Strip duplicated brand prefix from ${candidates.length} product name${candidates.length===1?"":"s"}?\n\nPreview:\n${previewLines}${more}\n\nThis only changes the productName field. Brand stays the same. Cannot be undone.`
+    )) return;
+
+    setBulkBusy(true);
+    try {
+      const CHUNK = 400;
+      const editor = enrichedByTag(auth.currentUser);
+      for (let i = 0; i < candidates.length; i += CHUNK) {
+        const chunk = candidates.slice(i, i + CHUNK);
+        const batch = writeBatch(db);
+        chunk.forEach(({ p, newName }) => {
+          batch.update(doc(db, "products", p.id), {
+            productName: newName,
+            updatedAt: Date.now(),
+            // Don't update lastEnrichedBy — this isn't a content review, just a name fix
+            lastNameCleanedAt: Date.now(),
+            lastNameCleanedBy: editor,
+          });
+        });
+        await batch.commit();
+      }
+      // Reflect locally
+      const map = new Map(candidates.map(({ p, newName }) => [p.id, newName]));
+      setProducts(ps => ps.map(p => map.has(p.id) ? { ...p, productName: map.get(p.id) } : p));
+      alert(`✓ Cleaned ${candidates.length} product name${candidates.length===1?"":"s"}.`);
+    } catch(e) {
+      alert("Name cleanup failed: " + e.message);
+    }
+    setBulkBusy(false);
+  }
+
   const hasImg = p => { const u=(p.adminImage||p.image||"").trim(); return u.length>8&&!u.includes("openbeautyfacts")&&!u.startsWith("blob:"); };
   const hasIng = p => (p.ingredients||"").trim().length > 10;
+  // Newer completeness checks — a row "needs work" when any of these is missing.
+  const hasSkin = p => Array.isArray(p.skinTypes) ? p.skinTypes.length > 0 : (p.skinTypes||"").trim().length > 0;
+  const hasCategory = p => (p.category||"").trim().length > 0;
+  const hasBuyUrl = p => /^https?:\/\//.test((p.buyUrl||"").trim());
+  // A product is "complete" only when all five fields are present.
+  const isComplete = p => hasImg(p) && hasIng(p) && hasSkin(p) && hasCategory(p) && hasBuyUrl(p);
+  // What's missing on this product? Returns an array of short labels for UI badges.
+  const missingFields = p => {
+    const out = [];
+    if (!hasImg(p))      out.push("img");
+    if (!hasIng(p))      out.push("ing");
+    if (!hasSkin(p))     out.push("skin");
+    if (!hasCategory(p)) out.push("cat");
+    if (!hasBuyUrl(p))   out.push("buy");
+    return out;
+  };
 
   // prefillProduct — defined here inside AdminProductHub so it uses the right setPrefilling
   async function prefillProductAdmin(p) {
@@ -10078,8 +10263,12 @@ function AdminProductHub({ user } = {}) {
       if (filter==="unchecked")     return !p.lastEnrichedAt;
       if (filter==="noimage")       return !hasImg(p);
       if (filter==="noingredients") return !hasIng(p);
-      if (filter==="both")          return !hasImg(p)&&!hasIng(p);
-      if (filter==="ready")         return hasImg(p)&&hasIng(p);
+      if (filter==="noskin")        return !hasSkin(p);
+      if (filter==="nocategory")    return !hasCategory(p);
+      if (filter==="nobuy")         return !hasBuyUrl(p);
+      if (filter==="both")          return !hasImg(p)&&!hasIng(p);  // legacy
+      if (filter==="needswork")     return !isComplete(p);
+      if (filter==="ready")         return isComplete(p);
       return true;
     })
     .filter(p => { if(!search.trim()) return true; const q=search.toLowerCase(); return (p.productName||"").toLowerCase().includes(q)||(p.brand||"").toLowerCase().includes(q); })
@@ -10115,7 +10304,17 @@ function AdminProductHub({ user } = {}) {
     });
 
   const swipeQueue = products
-    .filter(p => { if(swipeFilter==="both") return !hasImg(p)&&!hasIng(p); if(swipeFilter==="noimage") return !hasImg(p); if(swipeFilter==="noingredients") return !hasIng(p); return true; })
+    .filter(p => {
+      if (p.hidden) return false;
+      if (swipeFilter==="needswork") return !isComplete(p);
+      if (swipeFilter==="both") return !hasImg(p) && !hasIng(p);
+      if (swipeFilter==="noimage") return !hasImg(p);
+      if (swipeFilter==="noingredients") return !hasIng(p);
+      if (swipeFilter==="noskin") return !hasSkin(p);
+      if (swipeFilter==="nocategory") return !hasCategory(p);
+      if (swipeFilter==="nobuy") return !hasBuyUrl(p);
+      return true;
+    })
     .sort((a,b) => {
       // Pending-review products (newly added via OBF scan/search) go first
       const aPending = a.pendingReview ? 0 : 1;
@@ -10132,8 +10331,15 @@ function AdminProductHub({ user } = {}) {
     unchecked: products.filter(p=>!p.hidden && !p.lastEnrichedAt).length,
     noimage: products.filter(p=>!p.hidden && !hasImg(p)).length,
     noingredients: products.filter(p=>!p.hidden && !hasIng(p)).length,
+    noskin: products.filter(p=>!p.hidden && !hasSkin(p)).length,
+    nocategory: products.filter(p=>!p.hidden && !hasCategory(p)).length,
+    nobuy: products.filter(p=>!p.hidden && !hasBuyUrl(p)).length,
+    // "needswork" — anything missing any of the five required fields. This is the new queue definition.
+    needswork: products.filter(p=>!p.hidden && !isComplete(p)).length,
+    // Legacy: kept for backward compat with code that hasn't been migrated yet.
     both: products.filter(p=>!p.hidden && !hasImg(p) && !hasIng(p)).length,
-    ready: products.filter(p=>!p.hidden && hasImg(p) && hasIng(p)).length,
+    // "ready" — fully complete (all five fields). Replaces the previous "image+ingredients only" definition.
+    ready: products.filter(p=>!p.hidden && isComplete(p)).length,
     hidden: products.filter(p=>p.hidden).length,
   };
 
@@ -10205,9 +10411,12 @@ function AdminProductHub({ user } = {}) {
     try {
       // Tag the edit with who saved it — so you can filter "edited by VA" later
       const editor = enrichedByTag(auth.currentUser);
+      const cleanBrand = (src.brand||"").trim();
+      // Auto-strip duplicated brand prefix from product name (e.g. "CeraVe CeraVe Foaming Cleanser" → "Foaming Cleanser")
+      const cleanName  = stripBrandFromName(cleanBrand, (src.productName||"").trim());
       const updates = {
-        productName: (src.productName||"").trim(),
-        brand:       (src.brand||"").trim(),
+        productName: cleanName,
+        brand:       cleanBrand,
         category:    src.category||"",
         skinTypes:   Array.isArray(src.skinTypes)?src.skinTypes:(src.skinTypes||"").split(",").map(s=>s.trim()).filter(Boolean),
         reason:      (src.reason||"").trim(),
@@ -10276,9 +10485,11 @@ function AdminProductHub({ user } = {}) {
     setAddSaving(true);
     try {
       const editor = enrichedByTag(auth.currentUser);
+      const cleanBrand = addForm.brand.trim();
+      const cleanName  = stripBrandFromName(cleanBrand, addForm.productName.trim());
       const newDoc = {
-        productName:   addForm.productName.trim(),
-        brand:         addForm.brand.trim(),
+        productName:   cleanName,
+        brand:         cleanBrand,
         category:      addForm.category||"",
         skinTypes:     addForm.skinTypes||[],
         ingredients:   addForm.ingredients.trim(),
@@ -10493,11 +10704,29 @@ function AdminProductHub({ user } = {}) {
   // The "Mine" counter shows how many products this editor has saved — gives
   // the VA a sense of progress.
   // (myTag and myEditCount are declared above, before `filtered`.)
+  // Today's Queue logic — what to surface as "the thing to do today."
+  // Priority: anything missing any required field (image, ingredients, skin type,
+  // category, or buy URL) is the queue. If everything is complete, fall through
+  // to "never reviewed" for verification work.
   const todaySuggestion = (() => {
-    if (counts.both > 0)          return { filter:"both",          label:`${counts.both} products need image + ingredients`,  swipe:"both",          color:"#7C3AED" };
-    if (counts.noimage > 0)       return { filter:"noimage",       label:`${counts.noimage} products need an image`,          swipe:"noimage",       color:T.rose };
-    if (counts.noingredients > 0) return { filter:"noingredients", label:`${counts.noingredients} products need ingredients`, swipe:"noingredients", color:T.amber };
-    if (counts.unchecked > 0)     return { filter:"unchecked",     label:`${counts.unchecked} never checked — verify them`,    swipe:null,            color:"#EC4899" };
+    if (counts.needswork > 0) {
+      // Build a friendly label that names what's most commonly missing.
+      const breakdown = [];
+      if (counts.noimage > 0)       breakdown.push(`${counts.noimage} no image`);
+      if (counts.noingredients > 0) breakdown.push(`${counts.noingredients} no ingredients`);
+      if (counts.noskin > 0)        breakdown.push(`${counts.noskin} no skin type`);
+      if (counts.nocategory > 0)    breakdown.push(`${counts.nocategory} no category`);
+      if (counts.nobuy > 0)         breakdown.push(`${counts.nobuy} no buy link`);
+      const subline = breakdown.slice(0, 3).join(" · ");
+      return {
+        filter: "needswork",
+        label: `${counts.needswork} product${counts.needswork===1?"":"s"} need${counts.needswork===1?"s":""} work`,
+        sublabel: subline,
+        swipe: "needswork",
+        color: "#7C3AED",
+      };
+    }
+    if (counts.unchecked > 0) return { filter:"unchecked", label:`${counts.unchecked} not yet reviewed — verify them`, sublabel:"", swipe:null, color:"#EC4899" };
     return null;
   })();
 
@@ -10511,7 +10740,10 @@ function AdminProductHub({ user } = {}) {
             <div style={{fontSize:"0.6rem",fontWeight:"700",color:todaySuggestion.color,textTransform:"uppercase",letterSpacing:"0.08em"}}>📋 Today's Queue</div>
             <div style={{fontSize:"0.58rem",color:T.textLight}}>signed in as <strong style={{color:T.textMid}}>{myTag}</strong></div>
           </div>
-          <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,marginBottom:"0.65rem",lineHeight:1.35}}>{todaySuggestion.label}</div>
+          <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,marginBottom:todaySuggestion.sublabel?"0.2rem":"0.65rem",lineHeight:1.35}}>{todaySuggestion.label}</div>
+          {todaySuggestion.sublabel && (
+            <div style={{fontSize:"0.65rem",color:T.textMid,marginBottom:"0.65rem",lineHeight:1.35}}>{todaySuggestion.sublabel}</div>
+          )}
 
           {/* Daily progress strip — today's saves vs all-time saves */}
           <div style={{display:"flex",gap:"0.4rem",marginBottom:"0.65rem"}}>
@@ -10525,7 +10757,7 @@ function AdminProductHub({ user } = {}) {
             </div>
             <div style={{flex:1,background:T.surface,borderRadius:"0.55rem",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`}}>
               <div style={{fontSize:"0.55rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.05em",fontWeight:"600"}}>In queue</div>
-              <div style={{fontSize:"1.15rem",fontWeight:"800",color:counts.both>0?T.amber:T.sage,fontFamily:"'Inter',sans-serif",lineHeight:1.1,marginTop:"0.15rem"}}>{counts.both}</div>
+              <div style={{fontSize:"1.15rem",fontWeight:"800",color:counts.needswork>0?T.amber:T.sage,fontFamily:"'Inter',sans-serif",lineHeight:1.1,marginTop:"0.15rem"}}>{counts.needswork}</div>
             </div>
           </div>
 
@@ -10566,7 +10798,7 @@ function AdminProductHub({ user } = {}) {
         </button>
         <button onClick={startSwipe}
           style={{flex:1,padding:"0.55rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-          👆 Swipe ({counts.both} missing)
+          👆 Swipe ({counts.needswork} need work)
         </button>
         <button onClick={()=>setMode("add")}
           style={{flex:1,padding:"0.55rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
@@ -10590,13 +10822,18 @@ function AdminProductHub({ user } = {}) {
           </button>
         </div>
 
-        {/* CSV import row — for Cowork-produced research files */}
+        {/* CSV import row — bulk-update ingredients or images from a CSV */}
         <div style={{display:"flex",gap:"0.4rem"}}>
           <input type="file" accept=".csv,text/csv" ref={csvFileRef} onChange={onCsvChosen} style={{display:"none"}}/>
           <button onClick={()=>csvFileRef.current?.click()} disabled={csvImporting||csvApplying||bulkBusy||seeding}
-            title="Upload a CSV from Cowork with product_name, brand, ingredients (or image_url) columns"
+            title="Upload a CSV with product_name, brand, ingredients (or image_url) columns to bulk-update products"
             style={{flex:1,padding:"0.6rem 0.85rem",background:(csvImporting||csvApplying)?T.surfaceAlt:`linear-gradient(135deg, #6B5CA5, #8B7BC5)`,color:(csvImporting||csvApplying)?T.textMid:"#fff",border:`1px solid ${(csvImporting||csvApplying)?T.border:"#6B5CA5"}`,borderRadius:"0.6rem",fontSize:"0.7rem",fontWeight:"700",cursor:(csvImporting||csvApplying)?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
             {csvImporting ? "⏳ Parsing…" : "📥 Import CSV"}
+          </button>
+          <button onClick={runStripBrandFromNames} disabled={bulkBusy||seeding}
+            title="Strip duplicated brand prefix from every product name (e.g. 'CeraVe CeraVe Hydrating Cleanser' → 'Hydrating Cleanser'). Shows a preview first."
+            style={{flex:1,padding:"0.6rem 0.85rem",background:(bulkBusy||seeding)?T.surfaceAlt:`linear-gradient(135deg, #2C7A5C, #4A9B7E)`,color:(bulkBusy||seeding)?T.textMid:"#fff",border:`1px solid ${(bulkBusy||seeding)?T.border:T.sage}`,borderRadius:"0.6rem",fontSize:"0.7rem",fontWeight:"700",cursor:(bulkBusy||seeding)?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
+            🧹 Clean brand prefixes
           </button>
         </div>
 
@@ -10691,7 +10928,7 @@ function AdminProductHub({ user } = {}) {
             </div>
             <div style={{fontSize:"0.62rem",color:T.textMid,lineHeight:1.5}}>
               {seedResult.added > 0
-                ? <>New products are in the <strong>swipe queue</strong> with empty ingredients + image. Tap <strong>👆 Swipe</strong> above, or use the Coworker prompt to bulk-enrich them.</>
+                ? <>New products are in the <strong>swipe queue</strong> with empty ingredients + image. Tap <strong>👆 Swipe</strong> above to fill them in.</>
                 : <>All {seedResult.total} seed products were already in your catalog — nothing to add.</>}
             </div>
             {seedResult.examples?.length > 0 && (
@@ -10716,9 +10953,9 @@ function AdminProductHub({ user } = {}) {
 
       {/* Swipe queue filter — only shown in advanced; Today's Queue card auto-picks the right queue otherwise. */}
       {showAdvanced && (
-      <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
+      <div style={{display:"flex",gap:"0.3rem",alignItems:"center",flexWrap:"wrap"}}>
         <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Swipe queue:</div>
-        {[["both","Missing both"],["noimage","No image"],["noingredients","No ingredients"]].map(([id,label])=>(
+        {[["needswork","Needs work"],["noimage","No image"],["noingredients","No ingredients"],["noskin","No skin type"],["nocategory","No category"],["nobuy","No buy link"]].map(([id,label])=>(
           <button key={id} onClick={()=>setSwipeFilter(id)}
             style={{padding:"0.25rem 0.6rem",background:swipeFilter===id?T.accent:T.surfaceAlt,color:swipeFilter===id?"#fff":T.textMid,border:`1px solid ${swipeFilter===id?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.6rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
             {label}
@@ -10789,11 +11026,11 @@ function AdminProductHub({ user } = {}) {
       </div>
       )}
 
-      {/* Filter pills — trimmed set: All / No image / No ingredients / Both missing / Complete / Mine. Featured/Enriched/Never checked/Hidden show only in Advanced. */}
+      {/* Filter pills — default set: All / Needs work / No image / No ingredients / No skin / No buy / Complete / Mine. Advanced exposes everything. */}
       <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
         {(showAdvanced
-          ? [["all",`All (${counts.all})`,null],["mine",`👤 Mine (${myEditCount})`,T.accent],["featured",`⭐ Featured (${counts.featured})`,"#D4A015"],["enriched",`✨ Enriched (${counts.enriched})`,"#6366F1"],["unchecked",`🤖 Never checked (${counts.unchecked})`,"#EC4899"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage],["hidden",`🙈 Hidden (${counts.hidden})`,T.textMid]]
-          : [["all",`All (${counts.all})`,null],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["both",`Both missing (${counts.both})`,"#7C3AED"],["ready",`Complete (${counts.ready})`,T.sage],["mine",`👤 Mine (${myEditCount})`,T.accent]]
+          ? [["all",`All (${counts.all})`,null],["needswork",`🚧 Needs work (${counts.needswork})`,"#7C3AED"],["mine",`👤 Mine (${myEditCount})`,T.accent],["featured",`⭐ Featured (${counts.featured})`,"#D4A015"],["enriched",`✨ Reviewed (${counts.enriched})`,"#6366F1"],["unchecked",`🤖 Not reviewed (${counts.unchecked})`,"#EC4899"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["noskin",`No skin type (${counts.noskin})`,T.amber],["nocategory",`No category (${counts.nocategory})`,T.amber],["nobuy",`No buy link (${counts.nobuy})`,T.amber],["ready",`Complete (${counts.ready})`,T.sage],["hidden",`🙈 Hidden (${counts.hidden})`,T.textMid]]
+          : [["all",`All (${counts.all})`,null],["needswork",`🚧 Needs work (${counts.needswork})`,"#7C3AED"],["noimage",`No image (${counts.noimage})`,T.rose],["noingredients",`No ingredients (${counts.noingredients})`,T.amber],["noskin",`No skin type (${counts.noskin})`,T.amber],["nobuy",`No buy link (${counts.nobuy})`,T.amber],["ready",`Complete (${counts.ready})`,T.sage],["mine",`👤 Mine (${myEditCount})`,T.accent]]
         ).map(([id,label,color])=>(
           <button key={id} onClick={()=>setFilter(id)}
             style={{padding:"0.3rem 0.7rem",background:filter===id?(color||T.accent):T.surfaceAlt,color:filter===id?"#fff":T.textMid,border:`1px solid ${filter===id?(color||T.accent):T.border}`,borderRadius:"999px",fontSize:"0.65rem",fontWeight:filter===id?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
@@ -10808,23 +11045,26 @@ function AdminProductHub({ user } = {}) {
           {filter === "mine"          && <>👤 <strong>Mine</strong> — products you ({myTag}) personally edited or saved. Useful for reviewing your own work.</>}
           {filter === "noimage"       && <>📷 <strong>No image</strong> — products missing a clean product photo. Tap one to find and upload an image.</>}
           {filter === "noingredients" && <>🧪 <strong>No ingredients</strong> — products missing the INCI ingredient list. Tap one to look it up and paste it in.</>}
-          {filter === "both"          && <>🚧 <strong>Both missing</strong> — products that need both an image and ingredients. Highest-priority queue.</>}
-          {filter === "ready"         && <>✅ <strong>Complete</strong> — products with both image and ingredients. Ready for users.</>}
+          {filter === "noskin"        && <>🧴 <strong>No skin type</strong> — products without skin-type tags. Tap one to add at least one (Oily, Dry, Sensitive, etc.).</>}
+          {filter === "nocategory"    && <>📂 <strong>No category</strong> — products with no category set. Tap one to assign Face Wash / Moisturiser / Serum / etc.</>}
+          {filter === "nobuy"         && <>🛒 <strong>No buy link</strong> — products with no Amazon, Sephora, or brand purchase URL.</>}
+          {filter === "needswork"     && <>🚧 <strong>Needs work</strong> — products missing one or more of: image, ingredients, skin type, category, or buy link. The full daily queue.</>}
+          {filter === "ready"         && <>✅ <strong>Complete</strong> — products with image, ingredients, skin type, category, and buy link. Ready for users.</>}
           {filter === "featured"      && <>⭐ <strong>Featured</strong> — products currently shown in "What We're Loving" on Explore.</>}
-          {filter === "enriched"      && <>✨ <strong>Enriched</strong> — products that have been checked at least once by you, the VA, or Cowork.</>}
-          {filter === "unchecked"     && <>🤖 <strong>Never checked</strong> — products no one has reviewed yet. May have stale or auto-fetched data.</>}
+          {filter === "enriched"      && <>✨ <strong>Reviewed</strong> — products that have been verified at least once by you or the team.</>}
+          {filter === "unchecked"     && <>🤖 <strong>Not reviewed</strong> — products no one has verified yet. May have stale or auto-fetched data.</>}
           {filter === "hidden"        && <>🙈 <strong>Hidden</strong> — products excluded from the app. Still in the database, can be unhidden anytime.</>}
         </div>
       )}
 
-      {/* Copy filtered list → clipboard for Cowork */}
+      {/* Copy filtered list → clipboard. Useful when sharing a working list with the team. */}
       {filter !== "all" && filtered.length > 0 && (
         <button onClick={async ()=>{
           const lines = filtered.map(p => `${p.brand || "?"} — ${p.productName || "?"}`);
           const text = lines.join("\n");
           try {
             await navigator.clipboard.writeText(text);
-            alert(`Copied ${filtered.length} product${filtered.length===1?"":"s"} to clipboard.\n\nPaste into Cowork after triggering the "Ralli Catalog Research" shortcut.`);
+            alert(`Copied ${filtered.length} product${filtered.length===1?"":"s"} to clipboard.`);
           } catch(e) {
             // Fallback for iOS Safari or blocked clipboard: show the text in a textarea
             const ta = document.createElement("textarea");
@@ -10844,7 +11084,7 @@ function AdminProductHub({ user } = {}) {
             ta.addEventListener("blur", () => ta.remove(), { once: true });
           }
         }} style={{padding:"0.5rem 0.85rem",background:`linear-gradient(135deg, #6B5CA5, #8B7BC5)`,color:"#fff",border:"none",borderRadius:"0.5rem",fontSize:"0.7rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.4rem",alignSelf:"flex-start"}}>
-          📋 Copy {filtered.length} product{filtered.length===1?"":"s"} for Cowork
+          📋 Copy {filtered.length} product{filtered.length===1?"":"s"} to clipboard
         </button>
       )}
 
@@ -10907,44 +11147,52 @@ function AdminProductHub({ user } = {}) {
                   <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:"0.4rem"}}>
                     {isKeep && <span style={{fontSize:"0.5rem",fontWeight:"700",color:T.sage,background:T.sage+"22",padding:"0.12rem 0.4rem",borderRadius:"999px",textTransform:"uppercase",letterSpacing:"0.06em",flexShrink:0}}>★ KEEP</span>}
                     {p.featuredOnExplore && <span title="Featured on Explore" style={{fontSize:"0.55rem",fontWeight:"700",color:"#D4A015",flexShrink:0}}>⭐</span>}
-                    {p.lastEnrichedAt && <span title={`Last checked ${new Date(p.lastEnrichedAt).toLocaleDateString()} by ${p.lastEnrichedBy||"coworker"}`} style={{fontSize:"0.55rem",fontWeight:"700",color:"#6366F1",flexShrink:0}}>✨</span>}
-                    {!p.lastEnrichedAt && <span title="Never checked by Claude" style={{fontSize:"0.55rem",fontWeight:"700",color:"#EC4899",flexShrink:0}}>🤖</span>}
                     <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>{p.productName}</span>
                     {p.hidden&&<span style={{fontSize:"0.55rem",color:T.rose,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.05em",flexShrink:0}}>· hidden</span>}
                   </div>
                   <div style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
                     {p.brand}{p.category?` · ${p.category}`:""}{scans>0&&<span style={{color:T.accent,fontWeight:"600"}}> · {scans} scans</span>}{dupeView&&<span style={{color:T.textMid}}> · ID {p.id.slice(0,12)}…</span>}
                   </div>
-                  {/* Checked by + when — shown when the product has been enriched */}
-                  {p.lastEnrichedAt ? (
-                    <div style={{fontSize:"0.58rem",color:"#6366F1",fontFamily:"'Inter',sans-serif",marginTop:"2px",fontWeight:"500"}}>
-                      ✨ checked {(() => {
-                        const ms = Date.now() - p.lastEnrichedAt;
-                        const mins = Math.floor(ms / 60000);
-                        if (mins < 1) return "just now";
-                        if (mins < 60) return `${mins}m ago`;
-                        const hrs = Math.floor(mins / 60);
-                        if (hrs < 24) return `${hrs}h ago`;
-                        const days = Math.floor(hrs / 24);
-                        if (days < 7) return `${days}d ago`;
-                        const wks = Math.floor(days / 7);
-                        if (wks < 4) return `${wks}w ago`;
-                        return new Date(p.lastEnrichedAt).toLocaleDateString();
-                      })()} by <strong>{p.lastEnrichedBy || "coworker"}</strong>
-                    </div>
-                  ) : (
-                    <div style={{fontSize:"0.58rem",color:"#EC4899",fontFamily:"'Inter',sans-serif",marginTop:"2px",fontWeight:"500"}}>
-                      🤖 never checked
-                    </div>
-                  )}
                 </div>
                 {!selectMode && (
-                  <div style={{display:"flex",flexDirection:"column",gap:"0.2rem",alignItems:"flex-end",flexShrink:0}}>
-                    <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:imgOk?T.sage+"22":T.rose+"22",color:imgOk?T.sage:T.rose,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{imgOk?"img ✓":"no img"}</span>
-                    <span style={{fontSize:"0.58rem",padding:"0.12rem 0.4rem",borderRadius:"999px",background:ingOk?T.sage+"22":T.amber+"22",color:ingOk?T.sage:T.amber,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{ingOk?"ing ✓":"no ing"}</span>
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"0.25rem",flexShrink:0,minWidth:"54px"}}>
+                    {/* Reviewer avatar — initials + relative time */}
+                    {p.lastEnrichedAt ? (
+                      <>
+                        <div style={{width:"30px",height:"30px",borderRadius:"50%",background:reviewerColor(p.lastEnrichedBy||"admin"),color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.62rem",fontWeight:"700",fontFamily:"'Inter',sans-serif",letterSpacing:"0.02em"}}
+                          title={`Last reviewed ${new Date(p.lastEnrichedAt).toLocaleString()} by ${p.lastEnrichedBy || "team"}`}>
+                          {reviewerInitials(p.lastEnrichedBy||"admin")}
+                        </div>
+                        <div style={{fontSize:"0.55rem",color:T.textLight,fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>{relTime(p.lastEnrichedAt)}</div>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{width:"30px",height:"30px",borderRadius:"50%",background:T.surfaceAlt,border:`1.5px dashed ${"#EC4899"}`,color:"#EC4899",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.7rem",fontFamily:"'Inter',sans-serif"}}
+                          title="Not yet reviewed">
+                          🤖
+                        </div>
+                        <div style={{fontSize:"0.55rem",color:"#EC4899",fontFamily:"'Inter',sans-serif",fontWeight:"600"}}>new</div>
+                      </>
+                    )}
+                    {/* Missing-field badges — small dots underneath */}
+                    {(() => {
+                      const miss = missingFields(p);
+                      if (miss.length === 0) return <span style={{fontSize:"0.5rem",color:T.sage,fontWeight:"700",letterSpacing:"0.05em"}}>✓ COMPLETE</span>;
+                      return (
+                        <div style={{display:"flex",gap:"2px",flexWrap:"wrap",justifyContent:"center",maxWidth:"54px"}}>
+                          {miss.map(f => (
+                            <span key={f} title={`Missing: ${f}`}
+                              style={{fontSize:"0.5rem",padding:"0.08rem 0.3rem",borderRadius:"999px",background:T.rose+"22",color:T.rose,fontFamily:"'Inter',sans-serif",fontWeight:"700",lineHeight:1.3}}>
+                              {f}
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
-                {!selectMode && <div style={{fontSize:"0.65rem",color:T.textLight,flexShrink:0}}>›</div>}
+                )}
+                {!selectMode && <div style={{fontSize:"0.65rem",color:T.textLight,flexShrink:0,marginLeft:"0.25rem"}}>›</div>}
               </div>
             </React.Fragment>
           );
@@ -11015,9 +11263,9 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
         <div style={{padding:"0.5rem 0.75rem",background:"#6366F112",border:"1px solid #6366F140",borderRadius:"0.55rem",display:"flex",alignItems:"center",gap:"0.5rem",fontFamily:"'Inter',sans-serif"}}>
           <span style={{fontSize:"0.85rem"}}>✨</span>
           <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:"0.62rem",fontWeight:"700",color:"#6366F1"}}>Last checked {enrichedRelTime}</div>
+            <div style={{fontSize:"0.62rem",fontWeight:"700",color:"#6366F1"}}>Last reviewed {enrichedRelTime}</div>
             <div style={{fontSize:"0.55rem",color:T.textLight,marginTop:"1px"}}>
-              by {src.lastEnrichedBy || "coworker"} · {new Date(src.lastEnrichedAt).toLocaleString()}
+              by {src.lastEnrichedBy || "team"} · {new Date(src.lastEnrichedAt).toLocaleString()}
             </div>
           </div>
         </div>
@@ -11025,9 +11273,9 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
         <div style={{padding:"0.5rem 0.75rem",background:"#EC489912",border:"1px solid #EC489940",borderRadius:"0.55rem",display:"flex",alignItems:"center",gap:"0.5rem",fontFamily:"'Inter',sans-serif"}}>
           <span style={{fontSize:"0.85rem"}}>🤖</span>
           <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:"0.62rem",fontWeight:"700",color:"#EC4899"}}>Never checked by Claude</div>
+            <div style={{fontSize:"0.62rem",fontWeight:"700",color:"#EC4899"}}>Not yet reviewed</div>
             <div style={{fontSize:"0.55rem",color:T.textLight,marginTop:"1px"}}>
-              Run the Cowork research prompt to verify ingredients + image against brand sources
+              Verify the ingredients and image against the brand's official source before saving.
             </div>
           </div>
         </div>
