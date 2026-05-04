@@ -689,6 +689,37 @@ const INGDB = {
   "uvinul t 150":               {score:0, note:"UVB filter — non-comedogenic per chemical sunscreen family", aliases:[]},
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Canonical product-image resolver. Use this EVERYWHERE instead of inlining
+// `p.adminImage || p.image || …` chains.
+//
+// Why: different code paths historically read different field combinations,
+// so the same product would render an image in one place and a placeholder
+// in another. This function is the single source of truth.
+//
+// Priority order:
+//   1. adminImage  — manually curated by McKenzie / VA (highest quality)
+//   2. image       — auto-fetched / OBF / scan upload
+//   3. productImage — denormalized snapshot stored on posts/comments/ratings
+//
+// Filters out garbage: empty strings, blob URLs (browser-local, won't load
+// across sessions), known-bad OBF URLs.
+//
+// Usage: getProductImage(productOrPostObject)  →  string URL or empty string
+// ─────────────────────────────────────────────────────────────────────────────
+function getProductImage(p) {
+  if (!p) return "";
+  const candidates = [p.adminImage, p.image, p.productImage];
+  for (const raw of candidates) {
+    const url = (raw || "").trim();
+    if (!url) continue;
+    if (!url.startsWith("http")) continue;     // blob: / data: / relative paths
+    if (url.includes("openbeautyfacts")) continue; // OBF images are too low-quality
+    return url;
+  }
+  return "";
+}
+
 // -- ProductImg — image with graceful branded fallback ---------
 function ProductImg({ src, alt, style = {}, brand = "" }) {
   const [errored, setErrored] = React.useState(false);
@@ -1958,15 +1989,26 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
   const [posting, setPosting] = useState(false);
   const isOwner = post.uid === currentUid;
 
-  // Use post image, or look up from productImageMap
-  const mappedImage = productImageMap[(post.productName||"").toLowerCase().trim()] || "";
-  const liveImage = post.productImage || post.image || mappedImage;
+  // Canonical product lookup — falls back to the post snapshot if the cache
+  // doesn't have this product yet. This means edits to a product (image,
+  // ingredients, brand) propagate to all feed cards within seconds.
+  const canonicalProduct = useProduct(post.productId || post.productName, null);
 
-  const livePostScore = (post.ingredients && post.ingredients.trim().length > 10)
-    ? (() => { const r = analyzeIngredients(post.ingredients); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })()
+  // Image: canonical first, snapshot second, productImageMap third.
+  const mappedImage = productImageMap[(post.productName||"").toLowerCase().trim()] || "";
+  const liveImage = (canonicalProduct ? getProductImage(canonicalProduct) : "") || post.productImage || post.image || mappedImage;
+
+  // Pore score: re-derive from canonical ingredients if available, otherwise
+  // fall back to the post's ingredients, otherwise the post's stored score.
+  const liveIngredients = canonicalProduct?.ingredients || post.ingredients || "";
+  const livePostScore = (liveIngredients && liveIngredients.trim().length > 10)
+    ? (() => { const r = analyzeIngredients(liveIngredients); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })()
     : null;
-  const displayScore = livePostScore ?? post.poreScore ?? null;
+  const displayScore = livePostScore ?? canonicalProduct?.poreScore ?? post.poreScore ?? null;
   const ps = poreStyle(displayScore??0);
+  // Brand falls back through canonical → snapshot. Components that displayed
+  // post.brand directly should now render this instead.
+  const liveBrand = canonicalProduct?.brand || post.brand || "";
   const [likeAnim, setLikeAnim] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [swipeX, setSwipeX] = useState(0);
@@ -2121,8 +2163,8 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
             </div>
             {/* Name + brand */}
             <div style={{flex:1,minWidth:0}}>
-              {post.brand&&<div style={{fontSize:"0.58rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.1rem",fontFamily:"'Inter',sans-serif"}}>{post.brand}</div>}
-              <div style={{fontWeight:"600",color:T.text,fontSize:"0.85rem",fontFamily:"'Inter',sans-serif",lineHeight:1.25,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{post.productName}</div>
+              {liveBrand&&<div style={{fontSize:"0.58rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.1rem",fontFamily:"'Inter',sans-serif"}}>{liveBrand}</div>}
+              <div style={{fontWeight:"600",color:T.text,fontSize:"0.85rem",fontFamily:"'Inter',sans-serif",lineHeight:1.25,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{canonicalProduct?.productName||post.productName}</div>
               {post.communityRating&&<div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px",fontFamily:"'Inter',sans-serif"}}>★ {(post.communityRating/2).toFixed(1)} community</div>}
             </div>
             {/* Dot + score — A1 style */}
@@ -2351,8 +2393,32 @@ function ProductModal({product, onClose, user, profile, onUpdateProfile, onUserT
   );
 }
 
-function ProductModalInner({product, onClose, user, profile, onUpdateProfile, onUserTap}) {
-  const productName = product?.productName || product?.name || "";
+function ProductModalInner({product: incomingProduct, onClose, user, profile, onUpdateProfile, onUserTap}) {
+  const productName = incomingProduct?.productName || incomingProduct?.name || "";
+
+  // Canonical product lookup. The `incomingProduct` prop is a snapshot built
+  // by the caller (a feed card, a routine list, a scan result, etc.) — it may
+  // be stale or partial. Prefer the live cached product whenever available so
+  // image/ingredients/brand/score match what the admin has actually saved.
+  const canonicalProduct = useProduct(incomingProduct?.id || incomingProduct?.productId || productName, null);
+
+  // `product` is the merged view used by everything below: canonical fields
+  // take precedence, falling back to the snapshot for anything not in cache.
+  // Rebinding `product` here means the rest of the component reads canonical
+  // data automatically without 40+ targeted edits.
+  const product = React.useMemo(() => {
+    if (!canonicalProduct) return incomingProduct || {};
+    return {
+      ...(incomingProduct || {}),
+      ...canonicalProduct,
+      // Preserve any incoming snapshot fields that aren't on the cached doc
+      // (e.g. flaggedIngredients pre-computed by the caller).
+      flaggedIngredients: canonicalProduct.flaggedIngredients || incomingProduct?.flaggedIngredients || [],
+      // Always resolve image through the canonical resolver.
+      image: getProductImage(canonicalProduct) || incomingProduct?.image || "",
+    };
+  }, [incomingProduct, canonicalProduct]);
+
   const [whyScoreOpen, setWhyScoreOpen] = React.useState(false);
   const [selectedIngredient, setSelectedIngredient] = React.useState(null);
   const modalRef = React.useRef(null);
@@ -2387,6 +2453,57 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
   const [showFriendsList, setShowFriendsList] = useState(false);
   const [reportState, setReportState] = useState("idle");
   const [reportText, setReportText] = useState("");
+
+  // "Users like you rated this X.X" — averages community ratings from raters
+  // who share at least one skin type with the current user. Null while loading,
+  // then either { avg, count, mySkinTypes } or null if no matching raters.
+  const [skinTwinRating, setSkinTwinRating] = useState(null);
+
+  // Compute "users like you" rating when product or user changes.
+  React.useEffect(() => {
+    if (!productName) { setSkinTwinRating(null); return; }
+    const mySkinTypes = Array.isArray(profile?.skinTypes) ? profile.skinTypes.filter(Boolean) : [];
+    if (mySkinTypes.length === 0) { setSkinTwinRating(null); return; }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        // Pull ratings for this product. Limit 100 — sufficient signal, bounded cost.
+        const snap = await getDocs(query(
+          collection(db, "ratings"),
+          where("productName", "==", productName),
+          limit(100)
+        ));
+        if (cancelled) return;
+        // Filter raters who share at least one skin type AND aren't the current user.
+        const matches = snap.docs
+          .map(d => d.data())
+          .filter(r => r.uid !== user?.uid)
+          .filter(r => {
+            const theirs = Array.isArray(r.raterSkinTypes) ? r.raterSkinTypes : [];
+            return theirs.some(t => mySkinTypes.includes(t));
+          })
+          .map(r => Number(r.communityRating))
+          .filter(n => !isNaN(n) && n > 0);
+
+        if (matches.length === 0) {
+          setSkinTwinRating(null);
+        } else {
+          const sum = matches.reduce((a, b) => a + b, 0);
+          setSkinTwinRating({
+            avg: sum / matches.length,
+            count: matches.length,
+            mySkinTypes,
+          });
+        }
+      } catch(e) {
+        console.warn("skinTwinRating fetch failed:", e);
+        if (!cancelled) setSkinTwinRating(null);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [productName, user?.uid, profile?.skinTypes?.join("|")]);
 
   // Seed + real friends
   const SEED_FRIENDS = [
@@ -2459,7 +2576,10 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
       const displayName = profile?.displayName || user.displayName || "Anonymous";
       const photoURL = profile?.photoURL || user.photoURL || "";
       const ratingDocId = `${user.uid}_${productName.toLowerCase().replace(/[^a-z0-9]/g,'_').slice(0,60)}`;
-      await setDoc(doc(db, "ratings", ratingDocId), { uid:user.uid, displayName, photoURL, productName, productId:product.id||product.productId||"", brand:product.brand||"", poreScore:autoPoreScore, communityRating:myCommunityRating, productImage:product.adminImage||product.image||product.productImage||"", ingredients:ingredients.slice(0,500), updatedAt:serverTimestamp(), createdAt:serverTimestamp() }, { merge: true });
+      // Denormalize the rater's skin types onto the rating doc itself — lets us
+      // efficiently compute "users like you rated X" without an N+1 user lookup.
+      const raterSkinTypes = Array.isArray(profile?.skinTypes) ? profile.skinTypes : [];
+      await setDoc(doc(db, "ratings", ratingDocId), { uid:user.uid, displayName, photoURL, productName, productId:product.id||product.productId||"", brand:product.brand||"", poreScore:autoPoreScore, communityRating:myCommunityRating, productImage:product.adminImage||product.image||product.productImage||"", ingredients:ingredients.slice(0,500), raterSkinTypes, updatedAt:serverTimestamp(), createdAt:serverTimestamp() }, { merge: true });
       await postScan(user.uid, displayName, photoURL, productName, product.brand||"", autoPoreScore, myCommunityRating, ingredients, analysis.found);
       setSubmitted(true); setExistingRating(myCommunityRating);
       onUpdateProfile?.(p=>({...p, _ratingsRefresh: Date.now()}));
@@ -2535,7 +2655,7 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
         </div>
         {/* -- 1. Product image -- */}
         <div style={{width:"100%",height:"190px",background:`linear-gradient(135deg,${T.iceBlue}40,${T.surfaceAlt})`,borderRadius:"1rem",overflow:"hidden",marginBottom:"1.1rem",display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${T.iceBlue}66`}}>
-          <ProductImage src={product.image} name={product.productName} brand={product.brand} barcode={product.barcode}/>
+          <ProductImage src={getProductImage(product)} name={product.productName} brand={product.brand} barcode={product.barcode}/>
         </div>
 
         {/* -- 2. Brand pill + Name -- */}
@@ -2592,6 +2712,30 @@ function ProductModalInner({product, onClose, user, profile, onUpdateProfile, on
               <div style={{width:8,height:8,borderRadius:"50%",flexShrink:0,background:T.sage}}/>
             </div>
           )}
+          {/* "Users like you rated this X.X/10" — averages ratings from raters who share at least one skin type with the current user. */}
+          {skinTwinRating && skinTwinRating.count > 0 && (() => {
+            const dotColor = skinTwinRating.avg >= 7 ? T.sage : skinTwinRating.avg >= 5 ? T.amber : T.rose;
+            const skinTwinLabel = skinTwinRating.mySkinTypes.length === 1
+              ? `${skinTwinRating.mySkinTypes[0].toLowerCase()} skin`
+              : "skin like yours";
+            return (
+              <div style={{display:"flex",alignItems:"center",gap:"0.65rem",padding:"0.6rem 0",borderBottom:`0.5px solid ${T.border}`}}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="1.5" style={{flexShrink:0}}>
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                  <circle cx="9" cy="7" r="4"/>
+                  <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                </svg>
+                <span style={{fontSize:"0.8rem",color:T.textMid,flex:1,fontFamily:"'Inter',sans-serif"}}>
+                  Users with {skinTwinLabel}
+                </span>
+                <span style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>
+                  {skinTwinRating.avg.toFixed(1)}/10 · {skinTwinRating.count}
+                </span>
+                <div style={{width:8,height:8,borderRadius:"50%",flexShrink:0,background:dotColor}}/>
+              </div>
+            );
+          })()}
           {followersWhoUse.length>0&&(
             <div style={{display:"flex",alignItems:"center",gap:"0.65rem",padding:"0.6rem 0",borderBottom:`0.5px solid ${T.border}`}}>
               <div style={{display:"flex",flexShrink:0}}>
@@ -4293,7 +4437,12 @@ function ScanPage({user, profile, onPosted, onUpdateProfile}) {
 // -- NetworkGroupCard — shown when 2+ people you follow use the same product --
 function NetworkGroupCard({productName, brand, productImage, poreScore, users, onProductTap, onUserTap, currentUid}) {
   const [shareOpen, setShareOpen] = useState(false);
-  const ps = poreStyle(poreScore??0);
+  // Canonical lookup so the image/brand/score match the admin source of truth.
+  const canonical = useProduct(productName, null);
+  const liveBrand = canonical?.brand || brand;
+  const liveImage = (canonical ? getProductImage(canonical) : "") || productImage;
+  const liveScore = canonical?.poreScore ?? poreScore;
+  const ps = poreStyle(liveScore??0);
   const names = users.slice(0,3).map(u=>u.displayName?.split(" ")[0]||"Someone");
   const label = names.length === 1
     ? `${names[0]} uses this`
@@ -4321,16 +4470,16 @@ function NetworkGroupCard({productName, brand, productImage, poreScore, users, o
       {/* Product pill */}
       <div onClick={onProductTap} style={{display:"flex",gap:"0.75rem",alignItems:"center",background:T.surfaceAlt,borderRadius:"0.85rem",padding:"0.7rem 0.75rem",cursor:onProductTap?"pointer":"default"}}>
         <div style={{width:"52px",height:"52px",flexShrink:0,borderRadius:"0.5rem",overflow:"hidden",background:T.surface}}>
-          {productImage
-            ? <img src={productImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
+          {liveImage
+            ? <img src={liveImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
             : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",color:T.border}}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
           }
         </div>
         <div style={{flex:1,minWidth:0}}>
-          {brand&&<div style={{fontSize:"0.6rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.09em",marginBottom:"0.1rem",fontFamily:"'Inter',sans-serif"}}>{brand}</div>}
+          {liveBrand&&<div style={{fontSize:"0.6rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.09em",marginBottom:"0.1rem",fontFamily:"'Inter',sans-serif"}}>{liveBrand}</div>}
           <div style={{fontWeight:"600",color:T.text,fontSize:"0.9rem",fontFamily:"'Inter',sans-serif",lineHeight:1.25,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{productName}</div>
         </div>
-        <PoreScoreBadge score={poreScore} size="md"/>
+        <PoreScoreBadge score={liveScore} size="md"/>
       </div>
       {currentUid&&(
         <button onClick={e=>{e.stopPropagation();setShareOpen(true);}} style={{display:"flex",alignItems:"center",gap:"0.35rem",background:"none",border:"none",padding:"0.5rem 0 0.1rem",cursor:"pointer",color:T.textLight,fontSize:"0.68rem",fontFamily:"'Inter',sans-serif"}}>
@@ -4346,6 +4495,7 @@ function NetworkGroupCard({productName, brand, productImage, poreScore, users, o
 
 // -- TrendingSection — extracted from FeedPage IIFE to fix Rules of Hooks --
 function TrendingSection({ openProductFromPost, trendingList }) {
+  const productCache = useProductCache();
   const [trendData, setTrendData] = React.useState([]);
   const [trendReady, setTrendReady] = React.useState(false);
   React.useEffect(()=>{
@@ -4386,6 +4536,11 @@ const weekStr = weekStart.toLocaleDateString("en-US",{month:"short",day:"numeric
 const endStr = now.toLocaleDateString("en-US",{month:"short",day:"numeric"});
 const topProduct = trendData[0];
 const rest = trendData.slice(1);
+// Canonical top product — picks up admin edits live.
+const topLive = productCache.get(topProduct?.id) || productCache.get(topProduct?.productName) || topProduct;
+const topImage = getProductImage(topLive) || topProduct.productImage || topProduct.image || "";
+const topBrand = topLive?.brand || topProduct?.brand || "";
+const topScore = topLive?.poreScore ?? topProduct?.poreScore ?? 0;
 return (
   <div style={{marginBottom:"1rem"}}>
     {/* Header */}
@@ -4404,21 +4559,21 @@ return (
       onMouseLeave={e=>e.currentTarget.style.transform=""}>
       {/* Product image */}
       <div style={{width:72,height:72,flexShrink:0,background:T.surfaceAlt,borderRadius:"0.65rem",overflow:"hidden",position:"relative"}}>
-        <ProductImage src={topProduct.productImage||topProduct.image||null} name={topProduct.productName} brand={topProduct.brand||""} barcode={topProduct.barcode||""} size="full"/>
+        <ProductImage src={topImage||null} name={topProduct.productName} brand={topBrand} barcode={topProduct.barcode||""} size="full"/>
         <div style={{position:"absolute",top:4,left:4,background:T.navy,borderRadius:"999px",padding:"1px 6px"}}>
           <span style={{fontSize:"0.48rem",fontWeight:"700",color:"#fff"}}>#1</span>
         </div>
       </div>
       {/* Info */}
       <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:"0.58rem",color:T.textLight,marginBottom:"0.15rem",textTransform:"uppercase",letterSpacing:"0.06em"}}>{topProduct.brand||""}</div>
+        <div style={{fontSize:"0.58rem",color:T.textLight,marginBottom:"0.15rem",textTransform:"uppercase",letterSpacing:"0.06em"}}>{topBrand}</div>
         <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,marginBottom:"0.4rem",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{topProduct.productName}</div>
         {/* Score row */}
         <div style={{display:"flex",alignItems:"center",gap:"0.6rem",marginBottom:"0.35rem"}}>
-          {(()=>{const ps=poreStyle(topProduct.poreScore??0);return(
+          {(()=>{const ps=poreStyle(topScore);return(
             <div style={{display:"flex",alignItems:"center",gap:"0.3rem"}}>
               <div style={{width:8,height:8,borderRadius:"50%",background:ps.color,flexShrink:0}}/>
-              <span style={{fontSize:"0.7rem",fontWeight:"600",color:ps.color}}>{topProduct.poreScore??0}/5</span>
+              <span style={{fontSize:"0.7rem",fontWeight:"600",color:ps.color}}>{topScore}/5</span>
               <span style={{fontSize:"0.65rem",color:T.textLight}}>pore score</span>
             </div>
           );})()}
@@ -4444,20 +4599,25 @@ return (
         {rest.map((p,i)=>{
           const rank = i+2;
           const rankColor = T.navy;
+          // Canonical lookup so the rest cards match the modal/admin.
+          const liveP = productCache.get(p.id) || productCache.get(p.productName) || p;
+          const liveImg = getProductImage(liveP) || p.productImage || p.image || null;
+          const liveBr = liveP.brand || p.brand || "";
+          const liveSc = liveP.poreScore ?? p.poreScore ?? 0;
           return (
             <button key={p.productName+rank} onClick={()=>openProductFromPost(p)}
               style={{flexShrink:0,width:"110px",background:T.surface,borderRadius:"0.85rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 1px 4px rgba(0,0,0,0.05)",transition:"transform 0.15s"}}
               onMouseEnter={e=>e.currentTarget.style.transform="translateY(-2px)"}
               onMouseLeave={e=>e.currentTarget.style.transform=""}>
               <div style={{width:"100%",aspectRatio:"1/1",background:T.surfaceAlt,position:"relative",overflow:"hidden"}}>
-                <ProductImage src={p.productImage||p.image||null} name={p.productName} brand={p.brand||""} barcode={p.barcode||""} size="full"/>
+                <ProductImage src={liveImg} name={p.productName} brand={liveBr} barcode={p.barcode||""} size="full"/>
                 <div style={{position:"absolute",top:"5px",left:"5px",width:"18px",height:"18px",borderRadius:"50%",background:rankColor,display:"flex",alignItems:"center",justifyContent:"center"}}>
                   <span style={{fontSize:"0.5rem",fontWeight:"800",color:"#fff"}}>{rank}</span>
                 </div>
-                <div style={{position:"absolute",top:"5px",right:"5px"}}><PoreScoreBadge score={p.poreScore??0} size="sm"/></div>
+                <div style={{position:"absolute",top:"5px",right:"5px"}}><PoreScoreBadge score={liveSc} size="sm"/></div>
               </div>
               <div style={{padding:"0.4rem 0.45rem 0.5rem",flex:1,display:"flex",flexDirection:"column",gap:"0.12rem"}}>
-                <div style={{fontSize:"0.56rem",color:T.textLight,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.brand||""}</div>
+                <div style={{fontSize:"0.56rem",color:T.textLight,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{liveBr}</div>
                 <div style={{fontSize:"0.66rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",lineHeight:1.3}}>{p.productName}</div>
                 <div style={{display:"flex",alignItems:"center",gap:"0.2rem",marginTop:"auto",paddingTop:"0.15rem"}}>
                   {p.lovedCount>0&&<span style={{fontSize:"0.52rem",color:T.sage}}>💚{p.lovedCount}</span>}
@@ -5151,6 +5311,7 @@ function ListItemImage({name, color}) {
 }
 
 function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onTogglePrivacy, readOnly, onItemTap, allProducts=[]}) {
+  const productCache = useProductCache();
   const [input, setInput] = useState("");
   const [adding, setAdding] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -5254,10 +5415,13 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
       {items.length > 0 ? (
         <div style={{overflowX:"auto",scrollbarWidth:"none",msOverflowStyle:"none",WebkitOverflowScrolling:"touch",padding:"0.85rem 1rem",display:"flex",gap:"0.65rem",alignItems:"stretch"}}>
           {items.map((item,i)=>{
-            const prod = allProducts.find(p=>(p.productName||"").toLowerCase()===item.toLowerCase())
+            // Canonical product first (cache by name); fall back to the legacy
+            // allProducts prop which is a snapshot of shopProducts + posts.
+            const prod = productCache.get(item)
+              || allProducts.find(p=>(p.productName||"").toLowerCase()===item.toLowerCase())
               || allProducts.find(p=>(p.productName||"").toLowerCase().includes(item.toLowerCase().split(" ").slice(0,2).join(" ")));
             const ps = prod?.poreScore!=null ? poreStyle(prod.poreScore) : null;
-            const imgSrc = prod?.adminImage||prod?.image||prod?.productImage||"";
+            const imgSrc = getProductImage(prod);
             const hasImg = imgSrc.startsWith("http");
             return (
               <div key={i} onClick={()=>onItemTap&&onItemTap(item)}
@@ -6097,7 +6261,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
         const ingB = (post.ingredients||"").trim();
         const ing = ingA.length >= ingB.length ? (ingA||ingB) : (ingB||ingA);
         const liveScore = ing.length > 10 ? (() => { const r = analyzeIngredients(ing); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })() : null;
-        setSelectedProduct({ productName: p.productName||post.productName, brand: p.brand||post.brand, image: p.adminImage||p.image||post.productImage||post.image||"", poreScore: liveScore ?? p.poreScore ?? post.poreScore ?? 0, communityRating: p.communityRating||post.communityRating, ingredients: ing, flaggedIngredients: ing ? analyzeIngredients(ing).found : [], buyUrl: p.buyUrl||post.buyUrl||amazonUrl(p.productName||post.productName, p.brand||post.brand, p.barcode||post.barcode, p.asin||post.asin, p.buyUrl||post.buyUrl) });
+        setSelectedProduct({ id: p.id, productId: p.id, productName: p.productName||post.productName, brand: p.brand||post.brand, image: p.adminImage||p.image||post.productImage||post.image||"", poreScore: liveScore ?? p.poreScore ?? post.poreScore ?? 0, communityRating: p.communityRating||post.communityRating, ingredients: ing, flaggedIngredients: ing ? analyzeIngredients(ing).found : [], buyUrl: p.buyUrl||post.buyUrl||amazonUrl(p.productName||post.productName, p.brand||post.brand, p.barcode||post.barcode, p.asin||post.asin, p.buyUrl||post.buyUrl) });
         return;
       }
     } catch(e) {}
@@ -6420,18 +6584,25 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
         <div className="fu">
           {(()=>{
             const allProds = [...shopProducts, ...posts];
+            // The modal does its own canonical product lookup via the
+            // ProductCacheContext. We just need to give it enough identity to
+            // look up — the product name is enough. Snapshot fallback fields
+            // come from allProds so the modal renders something useful even
+            // before/if the cache misses.
             function openListItem(name) {
               const found = allProds.find(p=>(p.productName||p.name||"").toLowerCase()===name.toLowerCase());
               setSelectedProduct({
+                id: found?.id || "",
+                productId: found?.id || "",
                 productName: name,
                 brand: found?.brand||"",
                 poreScore: found?.poreScore??0,
                 communityRating: found?.communityRating||null,
-                image: found?.adminImage||found?.image||found?.productImage||"",
+                image: getProductImage(found),
+                adminImage: found?.adminImage||"",
                 ingredients: found?.ingredients||"",
                 flaggedIngredients: found?.flaggedIngredients||[],
                 buyUrl: found?.buyUrl||"",
-                id: found?.id||"",
               });
             }
             return (<>
@@ -7463,6 +7634,7 @@ const CAT_ORDER = ["face-wash","moisturizer","serum","exfoliant","spf","eye","bo
 
 // -- Explore page recommended products carousel ----------------
 function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productImageMap={}}) {
+  const productCache = useProductCache();
   const skinType = Array.isArray(profile?.skinType) ? profile.skinType : profile?.skinType ? [profile.skinType] : [];
   const concerns = profile?.concerns || [];
 
@@ -7534,9 +7706,12 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
       </div>
       <div style={{display:"flex",gap:"0.55rem",overflowX:"auto",paddingBottom:"0.4rem",marginLeft:"-1rem",paddingLeft:"1rem",marginRight:"-1rem",paddingRight:"1rem",scrollbarWidth:"none",WebkitOverflowScrolling:"touch"}}>
         {recs.map(rec => {
-          const liveRecScore = (rec.ingredients && rec.ingredients.trim().length >= 10) ? (() => { const r = analyzeIngredients(rec.ingredients); return r.avgScore != null ? Math.round(r.avgScore) : null; })() : null;
+          // Canonical lookup so what shows here matches the modal/admin.
+          const live = productCache.get(rec.id) || productCache.get(rec.productName) || rec;
+          const liveIngredients = live.ingredients || rec.ingredients || "";
+          const liveRecScore = (liveIngredients && liveIngredients.trim().length >= 10) ? (() => { const r = analyzeIngredients(liveIngredients); return r.avgScore != null ? Math.round(r.avgScore) : null; })() : null;
           const ps = poreStyle(liveRecScore??0);
-          const img = (rec.adminImage||rec.image||rec.productImage||productImageMap[(rec.productName||"").toLowerCase().trim()]||"").trim();
+          const img = (getProductImage(live) || productImageMap[(rec.productName||"").toLowerCase().trim()] || "").trim();
           const recFriends = getFriendRoutineUsers(friendScans, rec.productName, rec.id);
           return (
             <button key={rec.id} onClick={()=>onTap(rec)}
@@ -7554,7 +7729,7 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
                 <FriendRoutinePill friends={recFriends}/>
               </div>
               <div style={{padding:"0.45rem 0.55rem 0.5rem"}}>
-                {rec.brand&&<div style={{fontSize:"0.5rem",color:T.accent,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{rec.brand}</div>}
+                {(live.brand||rec.brand)&&<div style={{fontSize:"0.5rem",color:T.accent,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{live.brand||rec.brand}</div>}
                 <div style={{fontSize:"0.7rem",fontWeight:"600",color:T.text,lineHeight:1.2,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{rec.productName}</div>
               </div>
             </button>
@@ -8196,7 +8371,7 @@ function ShopPage({user, profile, onUpdateProfile}) {
         const ingB = (post.ingredients||"").trim();
         const ing = ingA.length >= ingB.length ? (ingA||ingB) : (ingB||ingA);
         const liveScore = ing.length > 10 ? (() => { const r = analyzeIngredients(ing); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })() : null;
-        setSelectedProduct({ productName: p.productName||post.productName, brand: p.brand||post.brand, image: p.adminImage||p.image||post.productImage||post.image||"", poreScore: liveScore ?? p.poreScore ?? post.poreScore ?? 0, communityRating: p.communityRating||post.communityRating, ingredients: ing, flaggedIngredients: ing ? analyzeIngredients(ing).found : [], buyUrl: p.buyUrl||post.buyUrl||amazonUrl(p.productName||post.productName, p.brand||post.brand, p.barcode||post.barcode, p.asin||post.asin, p.buyUrl||post.buyUrl) });
+        setSelectedProduct({ id: p.id, productId: p.id, productName: p.productName||post.productName, brand: p.brand||post.brand, image: p.adminImage||p.image||post.productImage||post.image||"", poreScore: liveScore ?? p.poreScore ?? post.poreScore ?? 0, communityRating: p.communityRating||post.communityRating, ingredients: ing, flaggedIngredients: ing ? analyzeIngredients(ing).found : [], buyUrl: p.buyUrl||post.buyUrl||amazonUrl(p.productName||post.productName, p.brand||post.brand, p.barcode||post.barcode, p.asin||post.asin, p.buyUrl||post.buyUrl) });
         return;
       }
     } catch(e) {}
@@ -15067,11 +15242,223 @@ function DebugPanel({ user }) {
   );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Toast system — replaces native alert() across the app.
+//
+// Usage:
+//   const { toast } = useToast();
+//   toast("Saved!");                              // info (default)
+//   toast("Saved!", "success");                   // green
+//   toast("Couldn't save — try again", "error");  // red
+//   toast("Heads up — long action", "warning");   // amber
+//
+// Multi-line messages: pass `\n` in the message string. Auto-dismiss 3.5s for
+// success/info, 5s for error/warning. User can dismiss manually by tapping.
+// ────────────────────────────────────────────────────────────────────────────
+const ToastContext = React.createContext({ toast: () => {} });
+
+function useToast() {
+  return React.useContext(ToastContext);
+}
+
+function ToastProvider({ children }) {
+  const [toasts, setToasts] = React.useState([]);
+  const idRef = React.useRef(0);
+
+  const dismiss = React.useCallback((id) => {
+    setToasts(ts => ts.filter(t => t.id !== id));
+  }, []);
+
+  const toast = React.useCallback((message, kind = "info") => {
+    const id = ++idRef.current;
+    const ttl = (kind === "error" || kind === "warning") ? 5000 : 3500;
+    setToasts(ts => [...ts, { id, message, kind }]);
+    setTimeout(() => dismiss(id), ttl);
+    return id;
+  }, [dismiss]);
+
+  // Make available globally as a backstop, in case any non-component code
+  // (Firestore handlers, async functions outside React) needs to surface a message.
+  React.useEffect(() => {
+    window.__ralli_toast = toast;
+    return () => { delete window.__ralli_toast; };
+  }, [toast]);
+
+  return (
+    <ToastContext.Provider value={{ toast, dismiss }}>
+      {children}
+      <ToastViewport toasts={toasts} onDismiss={dismiss} />
+    </ToastContext.Provider>
+  );
+}
+
+function ToastViewport({ toasts, onDismiss }) {
+  if (!toasts.length) return null;
+  const styles = {
+    success: { bg: "#2C7A5C", icon: "✓" },
+    error:   { bg: "#AA4F57", icon: "!" },
+    warning: { bg: "#8B6914", icon: "⚠" },
+    info:    { bg: "#111827", icon: "" },
+  };
+  return ReactDOM.createPortal(
+    <div style={{position:"fixed",bottom:"5.5rem",left:"50%",transform:"translateX(-50%)",zIndex:99999,display:"flex",flexDirection:"column-reverse",gap:"0.5rem",pointerEvents:"none",maxWidth:"calc(100% - 2rem)",width:"max-content"}}>
+      {toasts.map(t => {
+        const s = styles[t.kind] || styles.info;
+        return (
+          <div key={t.id} onClick={() => onDismiss(t.id)}
+            style={{background:s.bg,color:"#fff",padding:"0.65rem 1rem",borderRadius:"0.65rem",fontSize:"0.78rem",fontWeight:"500",fontFamily:"'Inter',sans-serif",boxShadow:"0 8px 30px rgba(0,0,0,0.25), 0 2px 8px rgba(0,0,0,0.12)",display:"flex",alignItems:"flex-start",gap:"0.55rem",pointerEvents:"auto",cursor:"pointer",lineHeight:1.4,maxWidth:"calc(100vw - 2rem)",width:"max-content",animation:"toastIn 0.18s ease-out"}}>
+            {s.icon && <span style={{fontWeight:"800",flexShrink:0,fontSize:"0.85rem",lineHeight:1.3}}>{s.icon}</span>}
+            <div style={{whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{t.message}</div>
+          </div>
+        );
+      })}
+      <style>{`
+        @keyframes toastIn {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+    </div>,
+    document.body
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ProductCache — single source of truth for product data.
+//
+// Why this exists: the app has 90+ places that render a product's image, name,
+// ingredients, brand, score, etc. Historically each component carried its own
+// snapshot — denormalized onto a post, a rating, a routine entry — and they
+// drifted from the canonical product doc as admins edited it. This cache makes
+// every component look up live data by ID (or name), so a single edit in the
+// admin panel propagates everywhere within seconds.
+//
+// Architecture:
+//   - One Firestore onSnapshot listener on the products collection runs at the
+//     app root. It maintains two indexes: byId and byNameLower.
+//   - useProduct(idOrName) returns the canonical product object, or null if
+//     not loaded yet / not found.
+//   - useProductImage(idOrName) returns the canonical image URL.
+//   - For posts/comments/ratings that carry denormalized snapshots, components
+//     should always prefer the live cached data and fall back to the snapshot.
+//
+// Usage:
+//   const product = useProduct(post.productId || post.productName);
+//   const imgUrl  = product ? getProductImage(product) : (post.productImage || "");
+// ────────────────────────────────────────────────────────────────────────────
+const ProductCacheContext = React.createContext({
+  byId: {}, byNameLower: {}, ready: false,
+  get: () => null, getImage: () => "",
+});
+
+function ProductCacheProvider({ children }) {
+  const [byId, setById] = React.useState({});
+  const [byNameLower, setByNameLower] = React.useState({});
+  const [ready, setReady] = React.useState(false);
+
+  React.useEffect(() => {
+    let unsub = () => {};
+    try {
+      // Live subscription — admin edits propagate to all open clients.
+      unsub = onSnapshot(collection(db, "products"), (snap) => {
+        const ix = {};
+        const ixn = {};
+        snap.forEach(d => {
+          const data = { id: d.id, ...d.data() };
+          ix[d.id] = data;
+          const nameLower = (data.productName || "").toLowerCase().trim();
+          if (nameLower) {
+            // For duplicate names, prefer the one with more complete data
+            // (richer wins so the UI shows the best version).
+            const existing = ixn[nameLower];
+            if (!existing) ixn[nameLower] = data;
+            else {
+              const score = p => (p.adminImage?2:0) + (p.image?1:0) + ((p.ingredients||"").length>10?2:0) + (p.communityRating?1:0) + (p.scanCount||0)*0.01;
+              if (score(data) > score(existing)) ixn[nameLower] = data;
+            }
+          }
+        });
+        setById(ix);
+        setByNameLower(ixn);
+        setReady(true);
+      }, (err) => {
+        console.warn("ProductCache snapshot error:", err);
+        setReady(true);  // unblock the UI even on permission errors
+      });
+    } catch(e) {
+      console.warn("ProductCache subscribe failed:", e);
+      setReady(true);
+    }
+    return () => { try { unsub(); } catch {} };
+  }, []);
+
+  const get = React.useCallback((idOrName) => {
+    if (!idOrName) return null;
+    const key = String(idOrName).trim();
+    if (!key) return null;
+    if (byId[key]) return byId[key];
+    const lower = key.toLowerCase();
+    if (byNameLower[lower]) return byNameLower[lower];
+    return null;
+  }, [byId, byNameLower]);
+
+  const getImage = React.useCallback((idOrName) => {
+    const p = get(idOrName);
+    return p ? getProductImage(p) : "";
+  }, [get]);
+
+  const value = React.useMemo(() => ({ byId, byNameLower, ready, get, getImage }), [byId, byNameLower, ready, get, getImage]);
+  return <ProductCacheContext.Provider value={value}>{children}</ProductCacheContext.Provider>;
+}
+
+// Hooks for consuming the cache.
+function useProductCache() { return React.useContext(ProductCacheContext); }
+
+// Returns the canonical product object for a given id-or-name, or null.
+// `fallback` (e.g. a post snapshot) is returned only if the cache miss is real
+// — useful so components don't have to wait for the cache to populate before
+// rendering anything.
+function useProduct(idOrName, fallback = null) {
+  const cache = useProductCache();
+  const live = cache.get(idOrName);
+  return live || fallback;
+}
+
+// Returns the canonical image URL for a product, given an id-or-name.
+// Falls back to a provided snapshot URL if the cache hasn't found the product.
+function useProductImage(idOrName, fallback = "") {
+  const cache = useProductCache();
+  const live = cache.get(idOrName);
+  if (live) {
+    const url = getProductImage(live);
+    if (url) return url;
+  }
+  return fallback || "";
+}
+
 export default function App() {
-  return <ErrorBoundary><AppInner/></ErrorBoundary>;
+  return <ErrorBoundary><ToastProvider><ProductCacheProvider><AppInner/></ProductCacheProvider></ToastProvider></ErrorBoundary>;
 }
 
 function AppInner() {
+  const { toast } = useToast();
+
+  // Replace native alert() with our toast. Every existing alert(...) call site
+  // continues to work unchanged but now renders inside the Ralli UI.
+  // We sniff the message for success/error markers to pick the kind.
+  React.useEffect(() => {
+    const orig = window.alert;
+    window.alert = (msg) => {
+      const text = String(msg ?? "");
+      let kind = "info";
+      if (/^✓|^✅|done|success|saved|copied|added|cleaned/i.test(text)) kind = "success";
+      else if (/failed|error|couldn't|could not|cannot|denied|invalid/i.test(text)) kind = "error";
+      else if (/heads up|warning|⚠|caution/i.test(text)) kind = "warning";
+      toast(text, kind);
+    };
+    return () => { window.alert = orig; };
+  }, [toast]);
+
   // -- Global autofix runner state (persists across all navigation) --
   const [afRunning, setAfRunning]   = useState(false);
   const [afLog, setAfLog]           = useState([]);
