@@ -14642,11 +14642,14 @@ async function sendToConversation(cid, fromUid, msg) {
   }
 
   // Bump unread for everyone except the sender, reset for the sender.
+  // Also clear `hiddenFor` for every participant — a new message should
+  // resurface a chat someone previously hid/deleted on their side.
   const meta = {
     participants,
     isGroup,
     lastMessage: msg.type === "text" ? msg.text : msg.type === "product" ? `📦 ${msg.productName}` : "📷 Photo",
     lastAt: ts,
+    hiddenFor: [],
     [`unread_${fromUid}`]: 0,
   };
   participants.filter(uid => uid !== fromUid).forEach(uid => {
@@ -14781,7 +14784,11 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, ch
       limit(50)
     );
     const unsub = onSnapshot(q, snap => {
-      const list = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+      const list = snap.docs.map(d => ({ ...d.data(), id: d.id }))
+        // Hide convos the user has explicitly deleted/dismissed (they'll
+        // come back automatically when the other side sends a new message —
+        // sendToConversation clears hiddenFor on every new message).
+        .filter(c => !((c.hiddenFor || []).includes(user.uid)));
       // Sort by lastAt desc; treat null/undefined as "very recent" (just created).
       list.sort((a, b) => {
         const aTs = a.lastAt?.seconds ?? Date.now() / 1000;
@@ -14906,11 +14913,24 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, ch
                 <div style={{ fontSize:"0.6rem", fontWeight:"700", color:T.textLight, textTransform:"uppercase", letterSpacing:"0.12em", marginBottom:"0.5rem", fontFamily:"'Inter',sans-serif" }}>Recent</div>
                 {convos.map(c => {
                   const unread = c[`unread_${user.uid}`] || 0;
+                  // Long-press handler: confirm + hide chat for current user.
+                  const handleDelete = async () => {
+                    const isGrp = !!c.isGroup;
+                    const verb = isGrp ? "Delete this group chat from your inbox?" : "Delete this chat from your inbox?";
+                    const detail = "It will reappear if anyone sends a new message." + (isGrp ? " Use 'Leave group' inside the chat to leave permanently." : "");
+                    if (!confirm(verb + "\n\n" + detail)) return;
+                    try {
+                      await updateDoc(doc(db, "conversations", c.id), {
+                        hiddenFor: arrayUnion(user.uid),
+                        [`unread_${user.uid}`]: 0,
+                      });
+                    } catch(e) { alert("Couldn't delete: " + (e?.message || "unknown")); }
+                  };
                   if (c.isGroup) {
-                    return <GroupConvoRow key={c.id} convo={c} unread={unread} currentUid={user.uid} onOpen={() => openChat(c)}/>;
+                    return <GroupConvoRow key={c.id} convo={c} unread={unread} currentUid={user.uid} onOpen={() => openChat(c)} onDelete={handleDelete}/>;
                   }
                   const otherUid = c.participants?.find(p => p !== user.uid);
-                  return <ConvoRow key={c.id} convoId={c.id} otherUid={otherUid} lastMessage={c.lastMessage} lastAt={c.lastAt} unread={unread} onOpen={openChat} currentUid={user.uid}/>;
+                  return <ConvoRow key={c.id} convoId={c.id} otherUid={otherUid} lastMessage={c.lastMessage} lastAt={c.lastAt} unread={unread} onOpen={openChat} currentUid={user.uid} onDelete={handleDelete}/>;
                 })}
               </>
             )}
@@ -15137,14 +15157,26 @@ function NewGroupModal({ user, profile, connections, onClose, onCreated }) {
 }
 
 // -- GroupConvoRow — list item for a group conversation in MessagesPage --
-function GroupConvoRow({ convo, unread, currentUid, onOpen }) {
+function GroupConvoRow({ convo, unread, currentUid, onOpen, onDelete }) {
   const [members, setMembers] = useState([]); // resolved user docs for participants
+  const lpTimer = React.useRef(null);
+  const lpFired = React.useRef(false);
   useEffect(() => {
     const ids = (convo.participants || []).filter(uid => uid !== currentUid).slice(0, 4);
     if (!ids.length) return;
     Promise.all(ids.map(uid => getDoc(doc(db, "users", uid)).catch(() => null)))
       .then(snaps => setMembers(snaps.filter(s => s && s.exists()).map(s => ({ uid: s.id, ...s.data() }))));
   }, [convo.id, currentUid]);
+
+  function startLP() {
+    lpFired.current = false;
+    lpTimer.current = setTimeout(() => {
+      lpFired.current = true;
+      if (navigator.vibrate) navigator.vibrate(20);
+      onDelete?.();
+    }, 550);
+  }
+  function endLP() { clearTimeout(lpTimer.current); }
 
   const ts = convo.lastAt?.seconds ? timeAgo({ seconds: convo.lastAt.seconds }) : "";
   // Title: explicit name, otherwise derived from participant names.
@@ -15156,7 +15188,11 @@ function GroupConvoRow({ convo, unread, currentUid, onOpen }) {
   })();
 
   return (
-    <button onClick={onOpen}
+    <button
+      onClick={() => { if (lpFired.current) return; onOpen?.(); }}
+      onTouchStart={startLP} onTouchEnd={endLP} onTouchMove={endLP} onTouchCancel={endLP}
+      onMouseDown={startLP} onMouseUp={endLP} onMouseLeave={endLP}
+      onContextMenu={e => { e.preventDefault(); onDelete?.(); }}
       style={{ width:"100%", display:"flex", alignItems:"center", gap:"0.75rem", padding:"0.85rem 0", background:"none", border:"none", borderBottom:`1px solid ${T.border}40`, cursor:"pointer", textAlign:"left" }}>
       {/* Stacked group avatars */}
       <div style={{ position:"relative", flexShrink:0, width:"44px", height:"44px" }}>
@@ -15182,16 +15218,35 @@ function GroupConvoRow({ convo, unread, currentUid, onOpen }) {
   );
 }
 
-function ConvoRow({ convoId, otherUid, lastMessage, lastAt, unread, onOpen, currentUid }) {
+function ConvoRow({ convoId, otherUid, lastMessage, lastAt, unread, onOpen, currentUid, onDelete }) {
   const [other, setOther] = useState(null);
+  const lpTimer = React.useRef(null);
+  const lpFired = React.useRef(false);
   useEffect(() => {
     if (!otherUid) return;
     getDoc(doc(db, "users", otherUid)).then(d => { if (d.exists()) setOther({ uid: d.id, ...d.data() }); }).catch(() => {});
   }, [otherUid]);
   if (!other) return null;
   const ts = lastAt?.seconds ? timeAgo({ seconds: lastAt.seconds }) : "";
+
+  function startLP() {
+    lpFired.current = false;
+    lpTimer.current = setTimeout(() => {
+      lpFired.current = true;
+      if (navigator.vibrate) navigator.vibrate(20);
+      onDelete?.();
+    }, 550);
+  }
+  function endLP() {
+    clearTimeout(lpTimer.current);
+  }
+
   return (
-    <button onClick={() => onOpen(other)}
+    <button
+      onClick={() => { if (lpFired.current) return; onOpen(other); }}
+      onTouchStart={startLP} onTouchEnd={endLP} onTouchMove={endLP} onTouchCancel={endLP}
+      onMouseDown={startLP} onMouseUp={endLP} onMouseLeave={endLP}
+      onContextMenu={e => { e.preventDefault(); onDelete?.(); }}
       style={{ width:"100%", display:"flex", alignItems:"center", gap:"0.75rem", padding:"0.85rem 0", background:"none", border:"none", borderBottom:`1px solid ${T.border}40`, cursor:"pointer", textAlign:"left" }}>
       <div style={{ position:"relative", flexShrink:0 }}>
         <Avatar photoURL={other.photoURL} name={other.displayName} size={44}/>
@@ -15432,6 +15487,7 @@ function ChatView({ user, profile, other, kind = "dm", conversation = null, onBa
   const [otherTyping, setOtherTyping] = useState(false);
   const [longPressMsg, setLongPressMsg] = useState(null); // {id, isMe}
   const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false);
   const [groupConv, setGroupConv] = useState(conversation);   // live group doc, kept fresh
   const [memberDocs, setMemberDocs] = useState({});           // uid -> {displayName, photoURL}
   const bottomRef = React.useRef(null);
@@ -15517,6 +15573,24 @@ function ChatView({ user, profile, other, kind = "dm", conversation = null, onBa
   async function deleteMessage(msgId) {
     setLongPressMsg(null);
     await deleteDoc(doc(db, "conversations", cid, "messages", msgId)).catch(() => {});
+  }
+
+  async function hideChat() {
+    if (!cid) return;
+    const verb = isGroup ? "Delete this group chat from your inbox?" : "Delete this chat from your inbox?";
+    const detail = "It will reappear if anyone sends a new message. " + (isGroup ? "Use 'Leave group' if you want to leave permanently." : "");
+    if (!confirm(verb + "\n\n" + detail)) return;
+    setShowHeaderMenu(false);
+    try {
+      await updateDoc(doc(db, "conversations", cid), {
+        hiddenFor: arrayUnion(user.uid),
+        [`unread_${user.uid}`]: 0,
+      });
+      onBack?.();
+    } catch(e) {
+      console.error("hideChat failed:", e);
+      alert("Couldn't delete chat: " + (e?.message || "unknown"));
+    }
   }
 
   async function send() {
@@ -15610,6 +15684,36 @@ function ChatView({ user, profile, other, kind = "dm", conversation = null, onBa
             <span style={{ fontSize:"0.9rem", fontWeight:"700", color:T.text, fontFamily:"'Inter',sans-serif" }}>{other.displayName}</span>
           </button>
         )}
+        {/* Header overflow menu — push to the right */}
+        <div style={{ flex:1 }}/>
+        <div style={{ position:"relative", flexShrink:0 }}>
+          <button onClick={() => setShowHeaderMenu(m => !m)}
+            style={{ background:"none", border:"none", cursor:"pointer", padding:"0.4rem", color:T.textMid, display:"flex" }}
+            aria-label="Chat options">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+          </button>
+          {showHeaderMenu && (
+            <>
+              {/* Backdrop to dismiss */}
+              <div onClick={() => setShowHeaderMenu(false)}
+                style={{ position:"fixed", top:0, left:0, right:0, bottom:0, zIndex:90 }}/>
+              <div style={{ position:"absolute", top:"100%", right:0, marginTop:"0.4rem", background:T.surface, borderRadius:"0.7rem", border:`1px solid ${T.border}`, boxShadow:"0 6px 24px rgba(17,24,39,0.12)", minWidth:"180px", zIndex:91, overflow:"hidden" }}>
+                {isGroup && (
+                  <button onClick={() => { setShowHeaderMenu(false); setShowGroupInfo(true); }}
+                    style={{ width:"100%", padding:"0.7rem 0.85rem", background:"none", border:"none", borderBottom:`1px solid ${T.border}40`, cursor:"pointer", textAlign:"left", display:"flex", alignItems:"center", gap:"0.6rem", color:T.text, fontSize:"0.8rem", fontFamily:"'Inter',sans-serif" }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                    Group info
+                  </button>
+                )}
+                <button onClick={hideChat}
+                  style={{ width:"100%", padding:"0.7rem 0.85rem", background:"none", border:"none", cursor:"pointer", textAlign:"left", display:"flex", alignItems:"center", gap:"0.6rem", color:T.rose, fontSize:"0.8rem", fontFamily:"'Inter',sans-serif", fontWeight:"600" }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                  Delete chat
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
       {showGroupInfo && isGroup && (
         <GroupInfoSheet
