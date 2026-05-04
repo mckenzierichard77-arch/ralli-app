@@ -14757,13 +14757,11 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, ch
       const followerIds = data.followers || [];
       const allIds = [...new Set([...followingIds, ...followerIds])].filter(id => id !== user.uid);
       if (!allIds.length) return;
-      const chunks = [];
-      for (let i = 0; i < allIds.length; i += 10) chunks.push(allIds.slice(i, i + 10));
-      const users = [];
-      for (const chunk of chunks) {
-        const s = await getDocs(query(collection(db, "users"), where("__name__", "in", chunk))).catch(() => null);
-        if (s) s.docs.forEach(d => users.push({ uid: d.id, ...d.data() }));
-      }
+      // Per-doc fetches — `where("__name__","in", chunk)` returns empty silently
+      // when given string IDs (it expects DocumentReferences). Per-doc getDoc
+      // is bulletproof and runs in parallel.
+      const snaps = await Promise.all(allIds.map(uid => getDoc(doc(db, "users", uid)).catch(() => null)));
+      const users = snaps.filter(s => s && s.exists()).map(s => ({ uid: s.id, ...s.data() }));
       setConnections(users);
     }
     loadConnections();
@@ -14962,15 +14960,63 @@ function ConnectionRow({ u, i, onClick }) {
 function NewGroupModal({ user, profile, connections, onClose, onCreated }) {
   const { toast } = useToast();
   const [selected, setSelected] = useState(new Set());
+  const [selectedDocs, setSelectedDocs] = useState({}); // uid -> user doc, so chips work for non-connections too
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
 
-  const candidates = connections
-    .filter(u => !search.trim() || (u.displayName||"").toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => (a.displayName||"").localeCompare(b.displayName||""));
+  // When typing, query Firestore for users by displayName so you can add
+  // people you don't already follow. Connections still show up by default.
+  // Firestore's range query is case-sensitive, so we try both as-typed and
+  // a Title-Cased variant ("morgan" → "Morgan") to catch the common case
+  // where users have capitalised display names.
+  useEffect(() => {
+    const q = search.trim();
+    if (!q) { setSearchResults([]); return; }
+    setSearching(true);
+    const t = setTimeout(async () => {
+      const titleCased = q.charAt(0).toUpperCase() + q.slice(1).toLowerCase();
+      const variants = [...new Set([q, titleCased])];
+      try {
+        const snaps = await Promise.all(variants.map(v => getDocs(query(
+          collection(db, "users"),
+          where("displayName", ">=", v),
+          where("displayName", "<=", v + "\uf8ff"),
+          limit(15)
+        )).catch(() => null)));
+        const seen = new Set();
+        const found = [];
+        snaps.forEach(snap => {
+          if (!snap) return;
+          snap.docs.forEach(d => {
+            if (d.id === user.uid || seen.has(d.id)) return;
+            seen.add(d.id);
+            found.push({ uid: d.id, ...d.data() });
+          });
+        });
+        setSearchResults(found);
+      } catch { setSearchResults([]); }
+      setSearching(false);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [search, user.uid]);
 
-  function togglePick(uid) {
+  // Default view (no search) shows your connections; while searching, merge
+  // global Firestore matches with any local connections that also match.
+  const candidates = (() => {
+    if (!search.trim()) {
+      return [...connections].sort((a, b) => (a.displayName||"").localeCompare(b.displayName||""));
+    }
+    const merged = new Map();
+    connections.filter(u => (u.displayName||"").toLowerCase().includes(search.toLowerCase())).forEach(u => merged.set(u.uid, u));
+    searchResults.forEach(u => { if (!merged.has(u.uid)) merged.set(u.uid, u); });
+    return [...merged.values()].sort((a, b) => (a.displayName||"").localeCompare(b.displayName||""));
+  })();
+
+  function togglePick(u) {
+    const uid = typeof u === "string" ? u : u.uid;
     setSelected(s => {
       const n = new Set(s);
       if (n.has(uid)) n.delete(uid);
@@ -14978,6 +15024,10 @@ function NewGroupModal({ user, profile, connections, onClose, onCreated }) {
       else n.add(uid);
       return n;
     });
+    // Cache the user doc so we can render chips for non-connections too.
+    if (typeof u !== "string") {
+      setSelectedDocs(d => ({ ...d, [uid]: u }));
+    }
   }
 
   async function handleCreate() {
@@ -15029,7 +15079,7 @@ function NewGroupModal({ user, profile, connections, onClose, onCreated }) {
         {selected.size > 0 && (
           <div style={{padding:"0 1rem 0.6rem",display:"flex",flexWrap:"wrap",gap:"0.3rem"}}>
             {[...selected].map(uid => {
-              const u = connections.find(c => c.uid === uid);
+              const u = connections.find(c => c.uid === uid) || selectedDocs[uid];
               if (!u) return null;
               return (
                 <button key={uid} onClick={()=>togglePick(uid)}
@@ -15052,17 +15102,22 @@ function NewGroupModal({ user, profile, connections, onClose, onCreated }) {
 
         {/* Candidates list */}
         <div style={{flex:1,overflowY:"auto",padding:"0 1rem 1.5rem"}}>
-          {candidates.length === 0 && (
-            <div style={{padding:"2rem 1rem",textAlign:"center",color:T.textLight,fontSize:"0.78rem"}}>
-              {connections.length === 0
-                ? "Follow some people first — your followers and following will show up here."
-                : `No one matches "${search}".`}
+          {candidates.length === 0 && !searching && (
+            <div style={{padding:"2rem 1rem",textAlign:"center",color:T.textLight,fontSize:"0.78rem",lineHeight:1.5}}>
+              {search.trim()
+                ? `No users found for "${search}". Try a different name.`
+                : connections.length === 0
+                  ? "Search for people by name above, or follow some people to see them here."
+                  : "No connections to show."}
             </div>
+          )}
+          {searching && candidates.length === 0 && (
+            <div style={{padding:"2rem 1rem",textAlign:"center",color:T.textLight,fontSize:"0.78rem"}}>Searching…</div>
           )}
           {candidates.map(u => {
             const isSel = selected.has(u.uid);
             return (
-              <button key={u.uid} onClick={()=>togglePick(u.uid)}
+              <button key={u.uid} onClick={()=>togglePick(u)}
                 style={{width:"100%",display:"flex",alignItems:"center",gap:"0.7rem",padding:"0.65rem 0.4rem",background:isSel?T.accent+"12":"transparent",borderRadius:"0.6rem",border:"none",cursor:"pointer",textAlign:"left",marginBottom:"0.15rem"}}>
                 <Avatar photoURL={u.photoURL} name={u.displayName} size={38}/>
                 <div style={{flex:1,minWidth:0}}>
