@@ -3714,16 +3714,21 @@ function AddProductModal({onClose, onAdded, user, prefillBarcode="", prefillName
 
 
 function SearchResultCard({p, onSelect}) {
-  const fromCatalog = p.source === "catalog";
-  const ingText = p.ingredients||"";
+  // Canonical lookup so search results show the same image/score as the modal.
+  const productCache = useProductCache();
+  const live = productCache.get(p._productId) || productCache.get(p.code) || productCache.get(p.name) || null;
+  const fromCatalog = p.source === "catalog" || !!live;
+  const ingText = live?.ingredients || p.ingredients || "";
   const hasIng = ingText.trim().length > 0;
   // Always recalculate live from ingredients so score is always accurate
-  const pScore = hasIng ? Math.round(analyzeIngredients(ingText).avgScore||0) : (p.poreScore??null);
+  const pScore = hasIng ? Math.round(analyzeIngredients(ingText).avgScore||0) : (live?.poreScore ?? p.poreScore ?? null);
   const ps = pScore !== null ? poreStyle(pScore) : null;
+  const liveImg = (live ? getProductImage(live) : "") || p.image || null;
+  const liveBr = live?.brand || p.brand || "";
   return (
     <button onClick={()=>onSelect(p)} style={{background:T.surface,border:`1.5px solid ${fromCatalog?T.sage+"66":T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",padding:0,overflow:"hidden",transition:"all 0.15s",display:"flex",flexDirection:"column",position:"relative"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=fromCatalog?T.sage+"66":T.border;}}>
       <div style={{width:"100%",aspectRatio:"1/1",background:"#FFFFFF",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",position:"relative"}}>
-        <ProductImage src={p.image||null} name={p.name} brand={p.brand||""} barcode={p.code||""}/>
+        <ProductImage src={liveImg} name={p.name} brand={liveBr} barcode={p.code||""}/>
         {pScore!=null&&<div style={{position:"absolute",top:"6px",right:"6px"}}><PoreScoreBadge score={pScore} size="sm"/></div>}
         {fromCatalog&&<div style={{position:"absolute",top:"5px",left:"5px",fontSize:"0.48rem",fontWeight:"700",background:T.sage,color:"#fff",borderRadius:"999px",padding:"0.12rem 0.4rem",letterSpacing:"0.04em",display:"flex",alignItems:"center",gap:"2px"}}>✓ Verified</div>}
         {!fromCatalog&&p.source==="makeup"&&<div style={{position:"absolute",top:"5px",left:"5px",fontSize:"0.48rem",fontWeight:"700",background:T.rose+"22",color:T.rose,border:`1px solid ${T.rose}33`,borderRadius:"999px",padding:"0.1rem 0.35rem",textTransform:"uppercase",letterSpacing:"0.04em"}}>Makeup</div>}
@@ -3731,7 +3736,7 @@ function SearchResultCard({p, onSelect}) {
       </div>
       <div style={{padding:"0.5rem 0.6rem"}}>
         <div style={{fontSize:"0.75rem",color:T.text,fontWeight:"600",lineHeight:"1.3",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{p.name}</div>
-        {p.brand&&<div style={{fontSize:"0.65rem",color:T.textMid,fontWeight:"400",marginTop:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.brand}</div>}
+        {liveBr&&<div style={{fontSize:"0.65rem",color:T.textMid,fontWeight:"400",marginTop:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{liveBr}</div>}
         {(p.communityRating||p.scanCount>0)&&(
           <div style={{display:"flex",alignItems:"center",gap:"0.35rem",marginTop:"0.3rem",flexWrap:"wrap"}}>
             {p.communityRating&&<span style={{fontSize:"0.58rem",color:T.textMid,fontWeight:"600"}}>⭐ {p.communityRating}/10</span>}
@@ -7036,6 +7041,7 @@ function PoreScoreInfo({ score, inline=false }) {
 
 // -- Trending Page ---------------------------------------------
 function TrendingPage({user, profile, onProductTap}) {
+  const productCache = useProductCache();
   const [trending, setTrending] = useState([]);
   const [loading, setLoading]   = useState(true);
   const [selectedProduct, setSelectedProduct] = useState(null);
@@ -7046,6 +7052,8 @@ function TrendingPage({user, profile, onProductTap}) {
 
   function openProduct(p) {
     setSelectedProduct({
+      id: p.id || p.productId || "",
+      productId: p.id || p.productId || "",
       productName: p.productName,
       brand: p.brand||"",
       image: p.adminImage||p.image||null,
@@ -7085,9 +7093,15 @@ function TrendingPage({user, profile, onProductTap}) {
       {!loading&&trending.length>0&&(
         <div style={{display:"flex",flexDirection:"column",gap:"0.6rem"}}>
           {trending.map((p,i)=>{
-            const livePs = (p.ingredients&&p.ingredients.trim().length>10) ? Math.round(analyzeIngredients(p.ingredients).avgScore||0) : (p.poreScore||0); const ps = poreStyle(livePs);
+            // Canonical lookup so trending rows match the modal/admin view.
+            const live = productCache.get(p.id) || productCache.get(p.productName) || p;
+            const liveIng = live.ingredients || p.ingredients || "";
+            const livePs = (liveIng && liveIng.trim().length>10) ? Math.round(analyzeIngredients(liveIng).avgScore||0) : (live.poreScore ?? p.poreScore ?? 0);
+            const ps = poreStyle(livePs);
+            const liveImg = getProductImage(live) || p.adminImage || p.image || null;
+            const liveBr = live.brand || p.brand || "";
             return (
-              <button key={p.id||i} onClick={()=>openProduct(p)}
+              <button key={p.id||i} onClick={()=>openProduct({...p, ...live})}
                 style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"0.75rem",display:"flex",alignItems:"center",gap:"0.85rem",cursor:"pointer",textAlign:"left",transition:"all 0.15s",width:"100%"}}
                 onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.transform="translateX(2px)";}}
                 onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.transform="none";}}>
@@ -7097,12 +7111,12 @@ function TrendingPage({user, profile, onProductTap}) {
                 </div>
                 {/* Image */}
                 <div style={{width:"44px",height:"44px",background:"#fff",borderRadius:"0.5rem",overflow:"hidden",flexShrink:0,border:`1px solid ${T.border}`}}>
-                  <ProductImage src={p.adminImage||p.image||null} name={p.productName} brand={p.brand||""} barcode={p.barcode||""} size="full"/>
+                  <ProductImage src={liveImg} name={p.productName} brand={liveBr} barcode={p.barcode||""} size="full"/>
                 </div>
                 {/* Info */}
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
-                  {p.brand&&<div style={{fontSize:"0.72rem",fontWeight:"400",color:T.textMid,marginTop:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.brand}</div>}
+                  {liveBr&&<div style={{fontSize:"0.72rem",fontWeight:"400",color:T.textMid,marginTop:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{liveBr}</div>}
                   <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>{p.scanCount} check{p.scanCount!==1?"s":""}{p.avgCommunity?` · ${p.avgCommunity}/10 Rallier score`:""}</div>
                 </div>
                 {/* Pore badge */}
@@ -14422,6 +14436,8 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, ch
           ? (() => { const r = analyzeIngredients(ing); return r.avgScore != null ? Math.round(r.avgScore) : null; })()
           : null;
         setChatProduct({
+          id: p.id,
+          productId: p.id,
           productName: p.productName || snap.productName,
           brand: p.brand || snap.brand,
           image: p.adminImage || p.image || snap.productImage || "",
@@ -14656,6 +14672,7 @@ function ConvoRow({ convoId, otherUid, lastMessage, lastAt, unread, onOpen, curr
 
 // -- ChatView --------------------------------------------------
 function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
+  const productCache = useProductCache();
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -14786,27 +14803,34 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
                   <img src={m.photoData} alt="Skin photo" style={{ width:"100%", display:"block", maxHeight:"280px", objectFit:"cover" }}/>
                 </div>
               )}
-              {m.type === "product" && (
-                <button onClick={() => onProductTap?.({ productName: m.productName, brand: m.brand, productImage: m.productImage, poreScore: m.poreScore })}
+              {m.type === "product" && (() => {
+                // Canonical lookup so the chat bubble matches what the modal/admin shows.
+                const live = productCache.get(m.productId) || productCache.get(m.productName) || null;
+                const liveImg = (live ? getProductImage(live) : "") || m.productImage || "";
+                const liveBr = live?.brand || m.brand || "";
+                const liveSc = live?.poreScore ?? m.poreScore;
+                return (
+                <button onClick={() => onProductTap?.({ id: live?.id || m.productId, productId: live?.id || m.productId, productName: m.productName, brand: liveBr, productImage: liveImg, poreScore: liveSc })}
                   style={{ maxWidth:"75%", background: T.surfaceAlt, border:`1px solid ${T.border}`, borderRadius:"0.85rem", overflow:"hidden", cursor:"pointer", textAlign:"left", padding:0 }}>
                   <div style={{ display:"flex", gap:"0.6rem", alignItems:"center", padding:"0.65rem 0.75rem" }}>
-                    {m.productImage && (
+                    {liveImg && (
                       <div style={{ width:"44px", height:"44px", flexShrink:0, borderRadius:"0.5rem", overflow:"hidden", background:T.surface }}>
-                        <img src={m.productImage} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"3px", mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)" }}/>
+                        <img src={liveImg} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"3px", mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)" }}/>
                       </div>
                     )}
                     <div style={{ flex:1, minWidth:0 }}>
-                      {m.brand && <div style={{ fontSize:"0.58rem", fontWeight:"600", color:T.textLight, textTransform:"uppercase", letterSpacing:"0.09em" }}>{m.brand}</div>}
+                      {liveBr && <div style={{ fontSize:"0.58rem", fontWeight:"600", color:T.textLight, textTransform:"uppercase", letterSpacing:"0.09em" }}>{liveBr}</div>}
                       <div style={{ fontSize:"0.82rem", fontWeight:"600", color:T.text, fontFamily:"'Inter',sans-serif", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.productName}</div>
-                      {m.hasScore && m.poreScore !== null && m.poreScore !== undefined
-                        ? <div style={{ fontSize:"0.68rem", fontWeight:"700", color:poreStyle(m.poreScore).color, marginTop:"2px" }}>{m.poreScore}/5 · {poreStyle(m.poreScore).label}</div>
+                      {m.hasScore && liveSc !== null && liveSc !== undefined
+                        ? <div style={{ fontSize:"0.68rem", fontWeight:"700", color:poreStyle(liveSc).color, marginTop:"2px" }}>{liveSc}/5 · {poreStyle(liveSc).label}</div>
                         : <div style={{ fontSize:"0.68rem", color:T.textLight, marginTop:"2px" }}>Tap to view details</div>
                       }
                     </div>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
                   </div>
                 </button>
-              )}
+                );
+              })()}
             </div>
           );
         })}
