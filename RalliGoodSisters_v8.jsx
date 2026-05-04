@@ -1568,7 +1568,7 @@ async function postScan(uid, displayName, photoURL, productName, brand, poreScor
   // Generate a stable ID from brand+name for products without barcodes
   const stableId = "manual_" + (brand||"").toLowerCase().replace(/\s+/g,"_") + "_" + productName.toLowerCase().replace(/\s+/g,"_");
   await upsertProduct(stableId, {productName, brand, poreScore, ingredients, source:"scan"});
-  return recordScan(uid, displayName, photoURL, stableId, productName, brand, poreScore, ingredients, found, communityRating);
+  return recordScan(uid, displayName, photoURL, stableId, productName, brand, poreScore, ingredients, found, communityRating, postType);
 }
 
 async function getFeed(followingIds, currentUid) {
@@ -1852,6 +1852,7 @@ function CardReveal({children, delay=0}) {
 // -- ShareProductModal — pick a follower to send a product to --
 function ShareProductModal({ user, product, onClose }) {
   const [following, setFollowing] = useState([]);
+  const [groups, setGroups] = useState([]);   // group conversations the user is in
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sent, setSent] = useState(null);
@@ -1885,6 +1886,16 @@ function ShareProductModal({ user, product, onClose }) {
           });
         }
       }
+      // Load group conversations the user is in.
+      try {
+        const gq = query(collection(db, "conversations"),
+          where("participants","array-contains", user.uid),
+          where("isGroup","==", true),
+          limit(20)
+        );
+        const gs = await getDocs(gq);
+        setGroups(gs.docs.map(d => ({ id: d.id, ...d.data() })));
+      } catch(e) { /* ignore — groups optional */ }
       setLoading(false);
     }
     load();
@@ -1904,49 +1915,68 @@ function ShareProductModal({ user, product, onClose }) {
     }).catch(() => {});
   }, [searchQ]);
 
+  // Build the product payload once — used for both 1:1 and group sends.
+  async function buildProductPayload() {
+    let productName = product.productName || product.name || "Product";
+    let brand = product.brand || "";
+    let productImage = product.productImage || product.image || "";
+    let poreScore = null;
+    let hasScore = false;
+
+    const postIng = product.ingredients || "";
+    if (postIng.trim().length > 10) {
+      const r = analyzeIngredients(postIng);
+      if (r.avgScore != null) { poreScore = Math.round(r.avgScore); hasScore = true; }
+    }
+
+    if (!hasScore) {
+      try {
+        const q = query(collection(db, "products"), where("productName", "==", productName), limit(1));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const p = snap.docs[0].data();
+          brand = p.brand || brand;
+          productImage = p.adminImage || p.image || productImage;
+          const ing = p.ingredients || "";
+          if (ing.trim().length > 10) {
+            const r = analyzeIngredients(ing);
+            if (r.avgScore != null) { poreScore = Math.round(r.avgScore); hasScore = true; }
+          }
+        }
+      } catch { /* use what we have */ }
+    }
+    return { type: "product", productName, brand, productImage, poreScore, hasScore };
+  }
+
+  async function shareToGroup(group) {
+    if (!user?.uid) { alert("Please sign in to share products"); return; }
+    if (!group?.id) return;
+    try {
+      const payload = await buildProductPayload();
+      // Pull in the current user's profile snapshot so group bubbles can
+      // show "From <Name>" — same shape as ChatView's send().
+      const profileSnap = await getDoc(doc(db, "users", user.uid)).catch(() => null);
+      const me = profileSnap?.exists() ? profileSnap.data() : {};
+      await sendToConversation(group.id, user.uid, {
+        ...payload,
+        senderName: me.displayName || user.displayName || "",
+        senderPhoto: me.photoURL || user.photoURL || "",
+      });
+      const groupTitle = (group.name || "").trim() || "the group";
+      setSent(groupTitle);
+      setTimeout(onClose, 1400);
+    } catch(e) {
+      console.error("share to group failed", e);
+      alert("Failed to send: " + (e?.message || "unknown error"));
+    }
+  }
+
   async function shareToUser(toUser) {
     if (!user?.uid) { alert("Please sign in to share products"); return; }
     if (!toUser?.uid) { alert("Could not find that user — please try again"); return; }
     try {
-      let productName = product.productName || product.name || "Product";
-      let brand = product.brand || "";
-      let productImage = product.productImage || product.image || "";
-      let poreScore = null;
-      let hasScore = false;
-
-      // First try: use ingredients already on the post/product object
-      const postIng = product.ingredients || "";
-      if (postIng.trim().length > 10) {
-        const r = analyzeIngredients(postIng);
-        if (r.avgScore != null) { poreScore = Math.round(r.avgScore); hasScore = true; }
-      }
-
-      // Second try: look up from Firestore products collection
-      if (!hasScore) {
-        try {
-          const q = query(collection(db, "products"), where("productName", "==", productName), limit(1));
-          const snap = await getDocs(q);
-          if (!snap.empty) {
-            const p = snap.docs[0].data();
-            brand = p.brand || brand;
-            productImage = p.adminImage || p.image || productImage;
-            const ing = p.ingredients || "";
-            if (ing.trim().length > 10) {
-              const r = analyzeIngredients(ing);
-              if (r.avgScore != null) { poreScore = Math.round(r.avgScore); hasScore = true; }
-            }
-          }
-        } catch { /* use what we have */ }
-      }
-
-      await sendMessage(user.uid, toUser.uid, {
-        type: "product",
-        productName,
-        brand,
-        productImage,
-        poreScore,
-        hasScore,
-      });
+      const payload = await buildProductPayload();
+      await sendMessage(user.uid, toUser.uid, payload);
       setSent(toUser.displayName?.split(" ")[0] || "them");
       setTimeout(onClose, 1400);
     } catch(e) {
@@ -1988,7 +2018,36 @@ function ShareProductModal({ user, product, onClose }) {
               style={{ padding:"0.55rem 0.85rem", borderRadius:"999px", border:`1px solid ${T.border}`, fontSize:"0.82rem", fontFamily:"'Inter',sans-serif", color:T.text, background:T.surfaceAlt, outline:"none", marginBottom:"0.75rem" }}/>
             <div style={{ overflowY:"auto", flex:1 }}>
               {loading && <div style={{ textAlign:"center", color:T.textLight, padding:"1.5rem", fontSize:"0.78rem" }}>Loading…</div>}
-              {!loading && filtered.length === 0 && (
+
+              {/* Groups section — only visible when not actively searching for individual people */}
+              {!loading && !searchQ.trim() && groups.length > 0 && (
+                <>
+                  <div style={{ fontSize:"0.6rem", fontWeight:"700", color:T.textLight, textTransform:"uppercase", letterSpacing:"0.12em", margin:"0.25rem 0 0.5rem", fontFamily:"'Inter',sans-serif" }}>Your groups</div>
+                  {groups.map((g, i) => {
+                    // Build a title — explicit name or stitched-together first names
+                    const otherIds = (g.participants || []).filter(uid => uid !== user.uid).slice(0, 3);
+                    const title = (g.name || "").trim() || `Group of ${g.participants?.length || 0}`;
+                    return (
+                      <button key={g.id} onClick={() => shareToGroup(g)}
+                        style={{ width:"100%", display:"flex", alignItems:"center", gap:"0.75rem", padding:"0.75rem 0.5rem", background:"none", border:"none", borderTop: i > 0 ? `1px solid ${T.border}30` : "none", cursor:"pointer", textAlign:"left", borderRadius:"0.5rem" }}
+                        onMouseEnter={e=>e.currentTarget.style.background=T.surfaceAlt}
+                        onMouseLeave={e=>e.currentTarget.style.background="none"}>
+                        <div style={{ width:"38px", height:"38px", borderRadius:"50%", background:T.accent+"18", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:"1rem" }}>👥</div>
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontSize:"0.85rem", fontWeight:"600", color:T.text, fontFamily:"'Inter',sans-serif", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{title}</div>
+                          <div style={{ fontSize:"0.65rem", color:T.textLight, fontFamily:"'Inter',sans-serif" }}>{g.participants?.length || 0} people</div>
+                        </div>
+                        <div style={{ width:"30px", height:"30px", borderRadius:"50%", background:T.navy, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        </div>
+                      </button>
+                    );
+                  })}
+                  <div style={{ fontSize:"0.6rem", fontWeight:"700", color:T.textLight, textTransform:"uppercase", letterSpacing:"0.12em", margin:"1.1rem 0 0.5rem", fontFamily:"'Inter',sans-serif" }}>People</div>
+                </>
+              )}
+
+              {!loading && filtered.length === 0 && groups.length === 0 && (
                 <div style={{ textAlign:"center", color:T.textLight, padding:"1.5rem", fontSize:"0.78rem" }}>
                   {searchQ.trim() ? "No users found" : following.length === 0 ? "Search for someone to share with" : "No matches"}
                 </div>
@@ -2111,11 +2170,23 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
   if (deleted) return null;
 
   const firstName = post.displayName?.split(" ")[0] || "Someone";
+  // Activity labels mirror the profile list categories so the feed reads as
+  // "Mckenzie added this to her routine" not generic "Mckenzie loves this".
+  // For the user's own posts, switch to second-person ("you added this to your routine").
+  const isMe = post.uid === currentUid;
+  const she = isMe ? "you" : firstName;
+  const her = isMe ? "your" : "their";  // gender-neutral possessive avoids guessing
+  const labelMap = {
+    brokeout:  isMe ? `you said this broke you out`         : `${firstName} said this broke them out`,
+    wantToTry: isMe ? `you added this to your wishlist`     : `${firstName} added this to their wishlist`,
+    loved:     isMe ? `you added this to your routine`      : `${firstName} added this to their routine`,
+    commented: isMe ? `you commented on this`               : `${firstName} commented on this`,
+  };
   const captionMap = {
-    brokeout:  { icon: "⚠️", text: `${firstName} broke out from this`,        verb: "broke out from" },
-    wantToTry: { icon: "👀", text: `${firstName} wants to try this`,           verb: "wants to try" },
-    loved:     { icon: "💖", text: `${firstName} loves this`,                  verb: "loves" },
-    commented: { icon: "💬", text: `${firstName} commented on this`,           verb: "commented on" },
+    brokeout:  { icon: "⚠️", text: labelMap.brokeout,  verb: "broke out from" },
+    wantToTry: { icon: "👀", text: labelMap.wantToTry, verb: "added to wishlist" },
+    loved:     { icon: "💖", text: labelMap.loved,     verb: "added to routine" },
+    commented: { icon: "💬", text: labelMap.commented, verb: "commented on" },
   };
   const caption = captionMap[post.postType] || null;
 
@@ -2123,15 +2194,12 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
   const contextLine = (() => {
     if (post._context) return post._context;
     const type = post.postType;
-    if (type === "brokeout")  return { text: `${firstName} broke out from this` };
-    if (type === "wantToTry") return { text: `${firstName} wants to try this` };
-    if (type === "loved")     return { text: `${firstName} loves this` };
-    if (type === "commented") return { text: `${firstName} commented on this` };
+    if (labelMap[type]) return { text: labelMap[type] };
     // scan/search/type — show what the score revealed
-    if (displayScore === 0) return { text: `${firstName} checked the ingredients — pore safe ✓` };
-    if (displayScore === 1) return { text: `${firstName} checked the ingredients — low risk` };
-    if (displayScore >= 2) return { text: `${firstName} checked the ingredients — flagged ${displayScore}/5` };
-    return { text: `${firstName} checked the ingredients` };
+    if (displayScore === 0) return { text: `${she} checked the ingredients — pore safe ✓` };
+    if (displayScore === 1) return { text: `${she} checked the ingredients — low risk` };
+    if (displayScore >= 2) return { text: `${she} checked the ingredients — flagged ${displayScore}/5` };
+    return { text: `${she} checked the ingredients` };
   })();
 
   const typeAccent = post.postType==="brokeout" ? T.rose : post.postType==="wantToTry" ? T.amber : T.sage;
@@ -2166,7 +2234,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
               <div style={{display:"flex",alignItems:"center",gap:"0.25rem",marginTop:"1px"}}>
                 <span style={{display:"flex",alignItems:"center"}}>{typeIcon}</span>
                 <span style={{fontSize:"0.68rem",fontWeight:"600",color:typeAccent,fontFamily:"'Inter',sans-serif"}}>
-                  {post.postType==="brokeout"?"broke out from this":post.postType==="wantToTry"?"wants to try this":post.postType==="loved"?"loves this":"checked this"}
+                  {post.postType==="brokeout"?"broke out":post.postType==="wantToTry"?"added to wishlist":post.postType==="loved"?"added to routine":"checked this"}
                 </span>
               </div>
             </div>
@@ -4762,7 +4830,30 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
 
 
   useEffect(()=>{
-    loadFeed();
+    // Live feed subscription — when the user (or anyone they follow) creates
+    // a post via toggleList in the product modal, the feed updates within
+    // ~1 second with no manual refresh. Replaces the previous one-shot fetch.
+    const ids = [...(profile?.following||[]), user?.uid].filter(Boolean).slice(0, 10);
+    if (!ids.length) { setLoading(false); return; }
+    let unsubFeed = () => {};
+    try {
+      const q = query(collection(db,"posts"), where("uid","in",ids), orderBy("createdAt","desc"), limit(30));
+      unsubFeed = onSnapshot(q, snap => {
+        const fetched = snap.docs.map(d => ({id:d.id, ...d.data()}));
+        const FEED_TYPES = new Set(["brokeout","wantToTry","loved","commented"]);
+        const realPosts = fetched.filter(post => FEED_TYPES.has(post.postType))
+          .sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+        // Seeds always append — real posts take priority if same product name
+        const realNames = new Set(realPosts.map(p => p.productName?.toLowerCase()));
+        const seedPosts = MOCK_POSTS.filter(m => !realNames.has(m.productName?.toLowerCase()));
+        setPosts([...realPosts, ...seedPosts]);
+        setLoading(false);
+      }, err => { console.warn("feed subscription error:", err); setLoading(false); });
+    } catch(e) { console.warn("feed subscribe failed:", e); setLoading(false); }
+
+    // Notifications run separately (still one-shot — they're updated via separate flows).
+    getNotifications(user?.uid).then(setNotifs).catch(()=>{});
+
     // Load friend routines for social proof on rec cards
     async function loadFriendRoutines() {
       const following = profile?.following||[];
@@ -4787,7 +4878,8 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
       } catch(e) {}
     }
     loadFriendRoutines();
-  },[refreshKey,user?.uid]);
+    return () => { try { unsubFeed(); } catch {} };
+  },[refreshKey,user?.uid,profile?.following?.length]);
 
   // -- Mock community posts — show a lively feed out of the box --
   const MOCK_POSTS = [
@@ -14487,33 +14579,102 @@ function PageHero({pageTitle, pageIcon, fixed, rightAction}) {
 function convId(uid1, uid2) {
   return [uid1, uid2].sort().join("_");
 }
+
+// Generates a fresh group conversation ID. Pattern `group_<random>` so we can
+// tell it apart from 1:1 IDs (which look like `uidA_uidB` with sorted UIDs).
+function newGroupId() {
+  return "group_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+// Creates a new group conversation. participants must include the creator.
+// Returns the new conversation ID. Up to 10 participants per group (including creator).
+async function createGroupConversation({ creatorUid, participants, name = "" }) {
+  if (!creatorUid) throw new Error("Missing creatorUid");
+  const allParticipants = Array.from(new Set([creatorUid, ...(participants || [])])).filter(Boolean);
+  if (allParticipants.length < 3) throw new Error("Group needs at least 3 people (you + 2 others)");
+  if (allParticipants.length > 10) throw new Error("Group can have at most 10 people");
+
+  const cid = newGroupId();
+  const convRef = doc(db, "conversations", cid);
+  const unreadInit = {};
+  allParticipants.forEach(uid => { unreadInit[`unread_${uid}`] = 0; });
+  await setDoc(convRef, {
+    isGroup: true,
+    participants: allParticipants,
+    name: (name || "").trim().slice(0, 60),
+    createdBy: creatorUid,
+    createdAt: serverTimestamp(),
+    lastAt: serverTimestamp(),
+    lastMessage: "",
+    ...unreadInit,
+  });
+  return cid;
+}
+
+// Send a message to ANY conversation (1:1 or group), given just the cid.
+// For 1:1 we infer participants from the cid format. For groups we read the
+// conversation doc to get the participants list, then bump unread for all
+// non-senders. Returns the message ref.
+async function sendToConversation(cid, fromUid, msg) {
+  if (!cid || !fromUid) throw new Error("Missing cid or fromUid");
+  const convRef = doc(db, "conversations", cid);
+  const msgCol = collection(db, "conversations", cid, "messages");
+  const ts = serverTimestamp();
+  const cleanMsg = Object.fromEntries(Object.entries({ ...msg, fromUid, createdAt: ts }).filter(([,v]) => v !== undefined));
+  await addDoc(msgCol, cleanMsg);
+
+  // Resolve participants. For groups we need to read the doc; for 1:1 we
+  // can derive from the sorted-uid cid.
+  let participants = [];
+  let isGroup = false;
+  try {
+    const snap = await getDoc(convRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      participants = data.participants || [];
+      isGroup = !!data.isGroup;
+    }
+  } catch {}
+  if (!participants.length && cid.includes("_") && !cid.startsWith("group_")) {
+    // 1:1 fallback — derive both UIDs from the cid.
+    participants = cid.split("_");
+  }
+
+  // Bump unread for everyone except the sender, reset for the sender.
+  const meta = {
+    participants,
+    isGroup,
+    lastMessage: msg.type === "text" ? msg.text : msg.type === "product" ? `📦 ${msg.productName}` : "📷 Photo",
+    lastAt: ts,
+    [`unread_${fromUid}`]: 0,
+  };
+  participants.filter(uid => uid !== fromUid).forEach(uid => {
+    meta[`unread_${uid}`] = increment(1);
+  });
+  setDoc(convRef, meta, { merge: true }).catch(e => console.warn("[sendToConversation] meta failed:", e.message));
+
+  // In-app notifications for every participant except sender.
+  const notifText = msg.type === "text" ? msg.text : msg.type === "product" ? `Shared a product: ${msg.productName}` : "Sent you a photo";
+  participants.filter(uid => uid !== fromUid).forEach(uid => {
+    addDoc(collection(db, "notifications"), {
+      toUid: uid,
+      fromUid,
+      type: "message",
+      conversationId: cid,
+      isGroup,
+      text: notifText,
+      read: false,
+      createdAt: ts,
+    }).catch(() => {});
+  });
+}
+
+// Backward-compat wrapper. Existing call sites that still pass (fromUid, toUid, msg)
+// continue to work via this thin shim that resolves to a 1:1 conversation.
 async function sendMessage(fromUid, toUid, msg) {
   if (!fromUid || !toUid) throw new Error("Missing uid: fromUid=" + fromUid + " toUid=" + toUid);
   const cid = convId(fromUid, toUid);
-  const convRef = doc(db, "conversations", cid);
-  const msgRef = collection(db, "conversations", cid, "messages");
-  const ts = serverTimestamp();
-  // Clean undefined values — Firestore rejects them
-  const cleanMsg = Object.fromEntries(Object.entries({ ...msg, fromUid, createdAt: ts }).filter(([,v]) => v !== undefined));
-  // Message write is the critical op — surface errors from this only
-  await addDoc(msgRef, cleanMsg);
-  // Conversation metadata — best effort, don't surface errors to user
-  setDoc(convRef, {
-    participants: [fromUid, toUid],
-    lastMessage: msg.type === "text" ? msg.text : msg.type === "product" ? `📦 ${msg.productName}` : "📷 Photo",
-    lastAt: ts,
-    [`unread_${toUid}`]: increment(1),
-    [`unread_${fromUid}`]: 0,
-  }, { merge: true }).catch(e => console.warn("[sendMessage] conv meta failed:", e.message));
-  // In-app notification for recipient
-  addDoc(collection(db, "notifications"), {
-    toUid,
-    fromUid,
-    type: "message",
-    text: msg.type === "text" ? msg.text : msg.type === "product" ? `Shared a product: ${msg.productName}` : "Sent you a photo",
-    read: false,
-    createdAt: ts,
-  }).catch(() => {});
+  return sendToConversation(cid, fromUid, msg);
 }
 
 // -- MessagesPage ----------------------------------------------
@@ -14530,7 +14691,22 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, ch
   const [chatProduct, setChatProduct] = useState(null);
   const [chatProductLoading, setChatProductLoading] = useState(false);
 
-  function openChat(other) { setOpenConvo(other); onChatOpen?.(true); }
+  // openChat accepts EITHER a single-user object (1:1) or a conversation
+  // object (group). Internally we always pass a single payload to ChatView
+  // with a discriminator: { kind: "dm" | "group", ... }
+  function openChat(payload) {
+    // 1:1 — payload is a user object {uid, displayName, photoURL}
+    if (payload && payload.uid && !payload.isGroup) {
+      setOpenConvo({ kind: "dm", other: payload });
+    } else if (payload && payload.isGroup) {
+      // Group — payload is a conversation doc
+      setOpenConvo({ kind: "group", conversation: payload });
+    } else {
+      setOpenConvo(payload);  // legacy fallback
+    }
+    onChatOpen?.(true);
+  }
+  const [showNewGroup, setShowNewGroup] = useState(false);
 
   async function openChatProduct(snap) {
     setChatProductLoading(true);
@@ -14627,15 +14803,24 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, ch
     return (
       <>
         <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, zIndex:60, background:T.bg, display:"flex", flexDirection:"column", height:"100%", maxHeight:"-webkit-fill-available"}}>
-          <ChatView user={user} profile={profile} other={openConvo} onBack={() => { setOpenConvo(null); onChatOpen?.(false); }} onUserTap={onUserTap} onProductTap={openChatProduct}/>
+          <ChatView
+            user={user}
+            profile={profile}
+            kind={openConvo.kind || "dm"}
+            other={openConvo.other || openConvo}
+            conversation={openConvo.conversation}
+            onBack={() => { setOpenConvo(null); onChatOpen?.(false); }}
+            onUserTap={onUserTap}
+            onProductTap={openChatProduct}
+          />
         </div>
         {chatProduct && <ProductModal product={chatProduct} user={user} profile={profile} onUpdateProfile={()=>{}} onClose={() => setChatProduct(null)} onUserTap={onUserTap}/>}
       </>
     );
   }
 
-  // Connections who don't have an existing convo yet
-  const existingConvoUids = new Set(convos.map(c => c.participants?.find(p => p !== user.uid)).filter(Boolean));
+  // Connections who don't have an existing 1:1 convo yet (groups don't count)
+  const existingConvoUids = new Set(convos.filter(c => !c.isGroup).map(c => c.participants?.find(p => p !== user.uid)).filter(Boolean));
   const newConnections = connections.filter(u => !existingConvoUids.has(u.uid));
 
   const activeList = searchQ.trim() ? searchRes : null;
@@ -14647,12 +14832,21 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, ch
         <div>
           <div style={{ fontSize: "1.1rem", fontWeight: "700", color: T.navy, fontFamily: "'Inter',sans-serif", letterSpacing: "-0.02em", lineHeight: 1 }}>Messages</div>
         </div>
-        {convos.length > 0 && (
-          <div style={{ fontSize: "0.65rem", color: T.textLight, fontFamily: "'Inter',sans-serif" }}>
-            {convos.length} conversation{convos.length !== 1 ? "s" : ""}
-          </div>
-        )}
+        <button onClick={() => setShowNewGroup(true)}
+          style={{ display:"flex", alignItems:"center", gap:"0.3rem", padding:"0.4rem 0.7rem", borderRadius:"999px", background:T.accent+"12", border:`1px solid ${T.accent}55`, color:T.accent, cursor:"pointer", fontSize:"0.7rem", fontWeight:"600", fontFamily:"'Inter',sans-serif" }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          New group
+        </button>
       </div>
+      {showNewGroup && (
+        <NewGroupModal
+          user={user}
+          profile={profile}
+          connections={connections}
+          onClose={() => setShowNewGroup(false)}
+          onCreated={(cid, conv) => { setShowNewGroup(false); openChat({ ...conv, id: cid }); }}
+        />
+      )}
       <div style={{ padding: "0 1rem 0.75rem" }}>
         {/* Search bar with + button */}
         <div style={{ position: "relative", marginBottom: "1rem", display:"flex", gap:"0.5rem", alignItems:"center" }}>
@@ -14702,8 +14896,11 @@ function MessagesPage({ user, profile, onUserTap, onUnreadChange, onChatOpen, ch
               <>
                 <div style={{ fontSize:"0.6rem", fontWeight:"700", color:T.textLight, textTransform:"uppercase", letterSpacing:"0.12em", marginBottom:"0.5rem", fontFamily:"'Inter',sans-serif" }}>Recent</div>
                 {convos.map(c => {
-                  const otherUid = c.participants?.find(p => p !== user.uid);
                   const unread = c[`unread_${user.uid}`] || 0;
+                  if (c.isGroup) {
+                    return <GroupConvoRow key={c.id} convo={c} unread={unread} currentUid={user.uid} onOpen={() => openChat(c)}/>;
+                  }
+                  const otherUid = c.participants?.find(p => p !== user.uid);
                   return <ConvoRow key={c.id} convoId={c.id} otherUid={otherUid} lastMessage={c.lastMessage} lastAt={c.lastAt} unread={unread} onOpen={openChat} currentUid={user.uid}/>;
                 })}
               </>
@@ -14750,6 +14947,175 @@ function ConnectionRow({ u, i, onClick }) {
 }
 
 
+// -- NewGroupModal — pick 2-9 followers to start a group chat --
+function NewGroupModal({ user, profile, connections, onClose, onCreated }) {
+  const { toast } = useToast();
+  const [selected, setSelected] = useState(new Set());
+  const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const candidates = connections
+    .filter(u => !search.trim() || (u.displayName||"").toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => (a.displayName||"").localeCompare(b.displayName||""));
+
+  function togglePick(uid) {
+    setSelected(s => {
+      const n = new Set(s);
+      if (n.has(uid)) n.delete(uid);
+      else if (n.size >= 9) { toast("Groups can have at most 10 people including you", "warning"); return n; }
+      else n.add(uid);
+      return n;
+    });
+  }
+
+  async function handleCreate() {
+    if (selected.size < 2) { toast("Pick at least 2 people", "warning"); return; }
+    setCreating(true);
+    try {
+      const cid = await createGroupConversation({
+        creatorUid: user.uid,
+        participants: [...selected],
+        name: name.trim(),
+      });
+      const conv = {
+        isGroup: true,
+        id: cid,
+        participants: [user.uid, ...selected],
+        name: name.trim(),
+        createdBy: user.uid,
+      };
+      onCreated?.(cid, conv);
+    } catch(e) {
+      toast("Couldn't create group: " + (e?.message || "unknown"), "error");
+    }
+    setCreating(false);
+  }
+
+  return ReactDOM.createPortal(
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9700,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center",background:"rgba(17,24,39,0.4)"}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        {/* Header */}
+        <div style={{padding:"0.85rem 1rem 0.65rem",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:"0.5rem"}}>
+          <button onClick={onClose} style={{background:"none",border:"none",padding:"0.3rem",cursor:"pointer",color:T.textMid,fontSize:"1.1rem"}}>✕</button>
+          <div style={{flex:1,fontSize:"0.95rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>New group chat</div>
+          <button onClick={handleCreate} disabled={selected.size < 2 || creating}
+            style={{padding:"0.4rem 0.85rem",borderRadius:"999px",background:selected.size>=2?T.accent:T.surfaceAlt,color:selected.size>=2?"#fff":T.textLight,border:"none",cursor:selected.size>=2?"pointer":"not-allowed",fontSize:"0.78rem",fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>
+            {creating ? "…" : `Create${selected.size>0?` (${selected.size+1})`:""}`}
+          </button>
+        </div>
+
+        {/* Optional name */}
+        <div style={{padding:"0.85rem 1rem 0.5rem"}}>
+          <input value={name} onChange={e=>setName(e.target.value.slice(0,60))}
+            placeholder="Group name (optional)"
+            style={{width:"100%",padding:"0.6rem 0.85rem",borderRadius:"0.75rem",border:`1px solid ${T.border}`,fontSize:"0.85rem",color:T.text,background:T.bg,outline:"none",fontFamily:"'Inter',sans-serif",boxSizing:"border-box"}}/>
+        </div>
+
+        {/* Selected chips */}
+        {selected.size > 0 && (
+          <div style={{padding:"0 1rem 0.6rem",display:"flex",flexWrap:"wrap",gap:"0.3rem"}}>
+            {[...selected].map(uid => {
+              const u = connections.find(c => c.uid === uid);
+              if (!u) return null;
+              return (
+                <button key={uid} onClick={()=>togglePick(uid)}
+                  style={{display:"flex",alignItems:"center",gap:"0.35rem",padding:"0.3rem 0.6rem 0.3rem 0.35rem",borderRadius:"999px",background:T.accent+"15",border:`1px solid ${T.accent}40`,color:T.accent,cursor:"pointer",fontSize:"0.72rem",fontWeight:"600",fontFamily:"'Inter',sans-serif"}}>
+                  <Avatar photoURL={u.photoURL} name={u.displayName} size={20}/>
+                  <span>{u.displayName?.split(" ")[0]||"User"}</span>
+                  <span style={{opacity:0.7}}>✕</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Search */}
+        <div style={{padding:"0 1rem 0.6rem"}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search people…"
+            style={{width:"100%",padding:"0.55rem 0.85rem",borderRadius:"999px",border:`1px solid ${T.border}`,fontSize:"0.78rem",color:T.text,background:T.bg,outline:"none",fontFamily:"'Inter',sans-serif",boxSizing:"border-box"}}/>
+        </div>
+
+        {/* Candidates list */}
+        <div style={{flex:1,overflowY:"auto",padding:"0 1rem 1.5rem"}}>
+          {candidates.length === 0 && (
+            <div style={{padding:"2rem 1rem",textAlign:"center",color:T.textLight,fontSize:"0.78rem"}}>
+              {connections.length === 0
+                ? "Follow some people first — your followers and following will show up here."
+                : `No one matches "${search}".`}
+            </div>
+          )}
+          {candidates.map(u => {
+            const isSel = selected.has(u.uid);
+            return (
+              <button key={u.uid} onClick={()=>togglePick(u.uid)}
+                style={{width:"100%",display:"flex",alignItems:"center",gap:"0.7rem",padding:"0.65rem 0.4rem",background:isSel?T.accent+"12":"transparent",borderRadius:"0.6rem",border:"none",cursor:"pointer",textAlign:"left",marginBottom:"0.15rem"}}>
+                <Avatar photoURL={u.photoURL} name={u.displayName} size={38}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:"0.82rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{u.displayName}</div>
+                </div>
+                <div style={{width:"22px",height:"22px",borderRadius:"50%",border:`2px solid ${isSel?T.accent:T.border}`,background:isSel?T.accent:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  {isSel && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// -- GroupConvoRow — list item for a group conversation in MessagesPage --
+function GroupConvoRow({ convo, unread, currentUid, onOpen }) {
+  const [members, setMembers] = useState([]); // resolved user docs for participants
+  useEffect(() => {
+    const ids = (convo.participants || []).filter(uid => uid !== currentUid).slice(0, 4);
+    if (!ids.length) return;
+    Promise.all(ids.map(uid => getDoc(doc(db, "users", uid)).catch(() => null)))
+      .then(snaps => setMembers(snaps.filter(s => s && s.exists()).map(s => ({ uid: s.id, ...s.data() }))));
+  }, [convo.id, currentUid]);
+
+  const ts = convo.lastAt?.seconds ? timeAgo({ seconds: convo.lastAt.seconds }) : "";
+  // Title: explicit name, otherwise derived from participant names.
+  const title = (convo.name || "").trim() || (() => {
+    const names = members.map(m => m.displayName?.split(" ")[0] || "Someone");
+    if (names.length === 0) return "Group chat";
+    if (names.length <= 2) return names.join(" & ");
+    return `${names[0]}, ${names[1]} & ${(convo.participants?.length || 0) - 3} more`;
+  })();
+
+  return (
+    <button onClick={onOpen}
+      style={{ width:"100%", display:"flex", alignItems:"center", gap:"0.75rem", padding:"0.85rem 0", background:"none", border:"none", borderBottom:`1px solid ${T.border}40`, cursor:"pointer", textAlign:"left" }}>
+      {/* Stacked group avatars */}
+      <div style={{ position:"relative", flexShrink:0, width:"44px", height:"44px" }}>
+        {members.slice(0, 3).map((m, i) => (
+          <div key={m.uid} style={{ position:"absolute", top: i===0?0:i===1?14:0, left: i===0?0:i===1?16:24, zIndex: 3-i }}>
+            <Avatar photoURL={m.photoURL} name={m.displayName} size={i===0?28:24}/>
+          </div>
+        ))}
+        {unread > 0 && <div style={{ position:"absolute", top:0, right:0, width:"10px", height:"10px", borderRadius:"50%", background:T.rose, border:`2px solid ${T.bg}`, zIndex:10 }}/>}
+      </div>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
+          <span style={{ fontSize:"0.85rem", fontWeight: unread > 0 ? "700" : "600", color:T.text, fontFamily:"'Inter',sans-serif", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+            <span style={{ color:T.accent, marginRight:"0.3rem" }}>👥</span>{title}
+          </span>
+          <span style={{ fontSize:"0.62rem", color:T.textLight, flexShrink:0, marginLeft:"0.5rem" }}>{ts}</span>
+        </div>
+        <div style={{ fontSize:"0.75rem", color: unread > 0 ? T.text : T.textLight, fontWeight: unread > 0 ? "500" : "400", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", marginTop:"1px", fontFamily:"'Inter',sans-serif" }}>
+          {convo.lastMessage || "No messages yet — say hi!"}
+        </div>
+      </div>
+    </button>
+  );
+}
+
 function ConvoRow({ convoId, otherUid, lastMessage, lastAt, unread, onOpen, currentUid }) {
   const [other, setOther] = useState(null);
   useEffect(() => {
@@ -14778,8 +15144,219 @@ function ConvoRow({ convoId, otherUid, lastMessage, lastAt, unread, onOpen, curr
   );
 }
 
+// -- GroupInfoSheet — view participants, add new ones, leave group ----
+function GroupInfoSheet({ user, profile, conversation, memberDocs, onClose, onLeave }) {
+  const { toast } = useToast();
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  if (!conversation) return null;
+  const participants = conversation.participants || [];
+
+  async function removeMember(uid) {
+    if (busy) return;
+    if (uid === user.uid) {
+      // Leaving the group
+      if (!confirm("Leave this group? You'll stop receiving messages from it.")) return;
+    } else {
+      const m = memberDocs[uid];
+      const name = m?.displayName || "this person";
+      if (!confirm(`Remove ${name} from the group?`)) return;
+    }
+    setBusy(true);
+    try {
+      await updateDoc(doc(db, "conversations", conversation.id), {
+        participants: arrayRemove(uid),
+        [`unread_${uid}`]: 0,
+      });
+      // Post a system message so everyone sees the change.
+      const removedName = memberDocs[uid]?.displayName || "Someone";
+      const isLeave = uid === user.uid;
+      await addDoc(collection(db, "conversations", conversation.id, "messages"), {
+        type: "system",
+        text: isLeave ? `${profile?.displayName || "Someone"} left the group` : `${profile?.displayName || "Someone"} removed ${removedName}`,
+        fromUid: user.uid,
+        createdAt: serverTimestamp(),
+      });
+      if (uid === user.uid) onLeave?.();
+    } catch(e) {
+      toast("Couldn't remove: " + (e?.message || "unknown"), "error");
+    }
+    setBusy(false);
+  }
+
+  return ReactDOM.createPortal(
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9700,background:"rgba(17,24,39,0.4)",display:"flex",flexDirection:"column",justifyContent:"flex-end"}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{width:"100%",maxWidth:"480px",margin:"0 auto",background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",maxHeight:"80vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        <div style={{padding:"0.85rem 1rem",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:"0.5rem"}}>
+          <button onClick={onClose} style={{background:"none",border:"none",padding:"0.3rem",cursor:"pointer",color:T.textMid,fontSize:"1.1rem"}}>✕</button>
+          <div style={{flex:1,fontSize:"0.95rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>
+            {(conversation.name || "").trim() || "Group chat"} · {participants.length} people
+          </div>
+        </div>
+
+        <div style={{flex:1,overflowY:"auto",padding:"0.5rem 1rem 1.5rem"}}>
+          {participants.map(uid => {
+            const m = memberDocs[uid];
+            const isMe = uid === user.uid;
+            return (
+              <div key={uid} style={{display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.6rem 0",borderBottom:`1px solid ${T.border}40`}}>
+                <Avatar photoURL={m?.photoURL} name={m?.displayName} size={38}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>
+                    {isMe ? "You" : (m?.displayName || "Loading…")}
+                    {uid === conversation.createdBy && <span style={{fontSize:"0.6rem",color:T.textLight,fontWeight:"500",marginLeft:"0.4rem"}}>· creator</span>}
+                  </div>
+                </div>
+                <button onClick={() => removeMember(uid)} disabled={busy}
+                  style={{padding:"0.3rem 0.65rem",background:isMe?T.rose+"15":"transparent",color:isMe?T.rose:T.textLight,border:`1px solid ${isMe?T.rose+"40":T.border}`,borderRadius:"0.5rem",fontSize:"0.65rem",fontWeight:"600",cursor:busy?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif"}}>
+                  {isMe ? "Leave group" : "Remove"}
+                </button>
+              </div>
+            );
+          })}
+
+          {/* Add member button */}
+          {participants.length < 10 && (
+            <button onClick={()=>setAdding(true)}
+              style={{marginTop:"0.85rem",width:"100%",padding:"0.7rem 1rem",background:T.accent+"10",color:T.accent,border:`1px dashed ${T.accent}55`,borderRadius:"0.7rem",fontSize:"0.78rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+              ＋ Add people ({10 - participants.length} slots left)
+            </button>
+          )}
+          {participants.length >= 10 && (
+            <div style={{marginTop:"0.85rem",textAlign:"center",fontSize:"0.7rem",color:T.textLight}}>
+              Group is full (10 / 10)
+            </div>
+          )}
+        </div>
+      </div>
+
+      {adding && (
+        <AddGroupMembersModal
+          user={user}
+          profile={profile}
+          conversation={conversation}
+          existingUids={new Set(participants)}
+          onClose={()=>setAdding(false)}
+          onAdded={()=>{setAdding(false);}}
+        />
+      )}
+    </div>,
+    document.body
+  );
+}
+
+// -- AddGroupMembersModal — pick people to add to an existing group ----
+function AddGroupMembersModal({ user, profile, conversation, existingUids, onClose, onAdded }) {
+  const { toast } = useToast();
+  const [connections, setConnections] = useState([]);
+  const [selected, setSelected] = useState(new Set());
+  const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Load followers + following same as MessagesPage
+  useEffect(() => {
+    if (!user?.uid) return;
+    (async () => {
+      const snap = await getDoc(doc(db, "users", user.uid)).catch(() => null);
+      const data = snap?.data() || {};
+      const allIds = [...new Set([...(data.following||[]), ...(data.followers||[])])].filter(id => id !== user.uid && !existingUids.has(id));
+      if (!allIds.length) return;
+      const chunks = [];
+      for (let i = 0; i < allIds.length; i += 10) chunks.push(allIds.slice(i, i + 10));
+      const users = [];
+      for (const chunk of chunks) {
+        const s = await getDocs(query(collection(db, "users"), where("__name__", "in", chunk))).catch(() => null);
+        if (s) s.docs.forEach(d => users.push({ uid: d.id, ...d.data() }));
+      }
+      setConnections(users);
+    })();
+  }, [user?.uid]);
+
+  const slotsLeft = 10 - existingUids.size;
+  const candidates = connections
+    .filter(u => !search.trim() || (u.displayName||"").toLowerCase().includes(search.toLowerCase()))
+    .sort((a,b) => (a.displayName||"").localeCompare(b.displayName||""));
+
+  function togglePick(uid) {
+    setSelected(s => {
+      const n = new Set(s);
+      if (n.has(uid)) n.delete(uid);
+      else if (n.size >= slotsLeft) { toast(`Only ${slotsLeft} slot${slotsLeft===1?"":"s"} left`, "warning"); return n; }
+      else n.add(uid);
+      return n;
+    });
+  }
+
+  async function handleAdd() {
+    if (!selected.size) return;
+    setBusy(true);
+    try {
+      const newIds = [...selected];
+      // Add to participants and zero their unread.
+      const update = { participants: arrayUnion(...newIds) };
+      newIds.forEach(uid => { update[`unread_${uid}`] = 0; });
+      await updateDoc(doc(db, "conversations", conversation.id), update);
+      // System message
+      const names = newIds.map(uid => connections.find(c => c.uid === uid)?.displayName || "Someone");
+      await addDoc(collection(db, "conversations", conversation.id, "messages"), {
+        type: "system",
+        text: `${profile?.displayName || "Someone"} added ${names.join(", ")}`,
+        fromUid: user.uid,
+        createdAt: serverTimestamp(),
+      });
+      onAdded?.();
+    } catch(e) {
+      toast("Couldn't add: " + (e?.message || "unknown"), "error");
+    }
+    setBusy(false);
+  }
+
+  return ReactDOM.createPortal(
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9800,background:"rgba(17,24,39,0.5)",display:"flex",flexDirection:"column",justifyContent:"flex-end"}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{width:"100%",maxWidth:"480px",margin:"0 auto",background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",maxHeight:"82vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        <div style={{padding:"0.85rem 1rem",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:"0.5rem"}}>
+          <button onClick={onClose} style={{background:"none",border:"none",padding:"0.3rem",cursor:"pointer",color:T.textMid,fontSize:"1.1rem"}}>✕</button>
+          <div style={{flex:1,fontSize:"0.95rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>Add to group</div>
+          <button onClick={handleAdd} disabled={!selected.size || busy}
+            style={{padding:"0.4rem 0.85rem",borderRadius:"999px",background:selected.size?T.accent:T.surfaceAlt,color:selected.size?"#fff":T.textLight,border:"none",cursor:selected.size?"pointer":"not-allowed",fontSize:"0.78rem",fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>
+            {busy ? "…" : `Add${selected.size>0?` (${selected.size})`:""}`}
+          </button>
+        </div>
+        <div style={{padding:"0.7rem 1rem 0.5rem"}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search people…"
+            style={{width:"100%",padding:"0.55rem 0.85rem",borderRadius:"999px",border:`1px solid ${T.border}`,fontSize:"0.78rem",color:T.text,background:T.bg,outline:"none",fontFamily:"'Inter',sans-serif",boxSizing:"border-box"}}/>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:"0 1rem 1.5rem"}}>
+          {candidates.length === 0 && (
+            <div style={{padding:"2rem 1rem",textAlign:"center",color:T.textLight,fontSize:"0.78rem"}}>
+              {connections.length === 0 ? "Everyone you follow is already in this group." : `No matches for "${search}".`}
+            </div>
+          )}
+          {candidates.map(u => {
+            const isSel = selected.has(u.uid);
+            return (
+              <button key={u.uid} onClick={()=>togglePick(u.uid)}
+                style={{width:"100%",display:"flex",alignItems:"center",gap:"0.7rem",padding:"0.55rem 0.4rem",background:isSel?T.accent+"12":"transparent",borderRadius:"0.6rem",border:"none",cursor:"pointer",textAlign:"left"}}>
+                <Avatar photoURL={u.photoURL} name={u.displayName} size={36}/>
+                <div style={{flex:1,minWidth:0,fontSize:"0.82rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{u.displayName}</div>
+                <div style={{width:"22px",height:"22px",borderRadius:"50%",border:`2px solid ${isSel?T.accent:T.border}`,background:isSel?T.accent:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  {isSel && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 // -- ChatView --------------------------------------------------
-function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
+function ChatView({ user, profile, other, kind = "dm", conversation = null, onBack, onUserTap, onProductTap }) {
   const productCache = useProductCache();
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
@@ -14788,13 +15365,43 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
   const [photoUploading, setPhotoUploading] = useState(false);
   const [otherTyping, setOtherTyping] = useState(false);
   const [longPressMsg, setLongPressMsg] = useState(null); // {id, isMe}
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [groupConv, setGroupConv] = useState(conversation);   // live group doc, kept fresh
+  const [memberDocs, setMemberDocs] = useState({});           // uid -> {displayName, photoURL}
   const bottomRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
   const typingTimerRef = React.useRef(null);
-  const cid = convId(user.uid, other.uid);
+
+  const isGroup = kind === "group";
+  const cid = isGroup ? (conversation?.id || groupConv?.id) : convId(user.uid, other?.uid || "");
+  const participants = isGroup ? (groupConv?.participants || conversation?.participants || []) : [user.uid, other?.uid].filter(Boolean);
+
+  // For groups, subscribe live to the conversation doc so member changes
+  // (added/removed) propagate without a refresh.
+  useEffect(() => {
+    if (!isGroup || !cid) return;
+    const unsub = onSnapshot(doc(db, "conversations", cid), snap => {
+      if (snap.exists()) setGroupConv({ id: snap.id, ...snap.data() });
+    });
+    return unsub;
+  }, [isGroup, cid]);
+
+  // Resolve member display names + photos so message bubbles can show "From X".
+  useEffect(() => {
+    if (!isGroup) return;
+    const unknown = participants.filter(uid => !memberDocs[uid]);
+    if (!unknown.length) return;
+    Promise.all(unknown.map(uid => getDoc(doc(db, "users", uid)).catch(() => null)))
+      .then(snaps => {
+        const next = {};
+        snaps.forEach(s => { if (s && s.exists()) next[s.id] = { uid: s.id, ...s.data() }; });
+        if (Object.keys(next).length) setMemberDocs(d => ({ ...d, ...next }));
+      });
+  }, [isGroup, participants.join(",")]);
 
   // Listen to messages + mark read
   useEffect(() => {
+    if (!cid) return;
     const q = query(collection(db, "conversations", cid, "messages"), orderBy("createdAt", "asc"), limit(100));
     const unsub = onSnapshot(q, snap => {
       setMessages(snap.docs.map(d => ({ ...d.data(), id: d.id })));
@@ -14807,12 +15414,19 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
 
   // Listen for other user typing
   useEffect(() => {
+    if (!cid) return;
     const unsub = onSnapshot(doc(db, "conversations", cid), snap => {
       const data = snap.data() || {};
-      setOtherTyping(!!(data[`typing_${other.uid}`]));
+      if (isGroup) {
+        // Any participant (other than current user) currently typing.
+        const someoneTyping = participants.some(uid => uid !== user.uid && data[`typing_${uid}`]);
+        setOtherTyping(someoneTyping);
+      } else {
+        setOtherTyping(!!(data[`typing_${other?.uid}`]));
+      }
     }, () => {});
     return unsub;
-  }, [cid, other.uid]);
+  }, [cid, isGroup, participants.join(","), other?.uid]);
 
   // Broadcast typing indicator
   function onTextChange(val) {
@@ -14840,21 +15454,32 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
   }
 
   async function send() {
-    if (!text.trim()) return;
+    if (!text.trim() || !cid) return;
     setSending(true);
-    await sendMessage(user.uid, other.uid, { type: "text", text: text.trim() });
+    await sendToConversation(cid, user.uid, {
+      type: "text",
+      text: text.trim(),
+      // Embed sender identity for group rendering — 1:1 chats ignore these.
+      senderName: profile?.displayName || user.displayName || "",
+      senderPhoto: profile?.photoURL || user.photoURL || "",
+    });
     setText("");
     setSending(false);
   }
 
   async function sendPhoto(file) {
-    if (!file) return;
+    if (!file || !cid) return;
     setPhotoUploading(true);
     try {
       const reader = new FileReader();
       reader.onload = async (e) => {
         const base64 = e.target.result;
-        await sendMessage(user.uid, other.uid, { type: "photo", photoData: base64 });
+        await sendToConversation(cid, user.uid, {
+          type: "photo",
+          photoData: base64,
+          senderName: profile?.displayName || user.displayName || "",
+          senderPhoto: profile?.photoURL || user.photoURL || "",
+        });
         setPhotoUploading(false);
       };
       reader.readAsDataURL(file);
@@ -14863,11 +15488,12 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
 
   async function sendProduct(product) {
     setShowProductPicker(false);
+    if (!cid) return;
     const ing = product.ingredients || "";
     const liveScore = ing.trim().length > 10
       ? (() => { try { const r = analyzeIngredients(ing); return r.avgScore!=null ? Math.round(r.avgScore) : null; } catch { return null; } })()
       : null;
-    await sendMessage(user.uid, other.uid, {
+    await sendToConversation(cid, user.uid, {
       type: "product",
       productName: product.productName || product.name || "",
       brand: product.brand || "",
@@ -14876,6 +15502,8 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
       hasScore: true,
       ingredients: ing,
       buyUrl: product.buyUrl || "",
+      senderName: profile?.displayName || user.displayName || "",
+      senderPhoto: profile?.photoURL || user.photoURL || "",
     });
   }
 
@@ -14886,18 +15514,78 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
         <button onClick={onBack} style={{ background:"none", border:"none", cursor:"pointer", padding:"0.2rem", color:T.textLight, display:"flex" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-        <button onClick={() => onUserTap(other.uid)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", display:"flex", alignItems:"center", gap:"0.6rem" }}>
-          <Avatar photoURL={other.photoURL} name={other.displayName} size={36}/>
-          <span style={{ fontSize:"0.9rem", fontWeight:"700", color:T.text, fontFamily:"'Inter',sans-serif" }}>{other.displayName}</span>
-        </button>
+        {isGroup ? (
+          <button onClick={() => setShowGroupInfo(true)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", display:"flex", alignItems:"center", gap:"0.6rem", flex:1, minWidth:0 }}>
+            {/* Stacked avatars */}
+            <div style={{ position:"relative", flexShrink:0, width:"40px", height:"32px" }}>
+              {participants.filter(uid => uid !== user.uid).slice(0, 3).map((uid, i) => {
+                const m = memberDocs[uid];
+                return (
+                  <div key={uid} style={{ position:"absolute", top: i===0?0:i===1?8:0, left: i===0?0:i===1?12:18, zIndex: 3-i }}>
+                    <Avatar photoURL={m?.photoURL} name={m?.displayName||"?"} size={i===0?24:20}/>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ minWidth:0, flex:1, textAlign:"left" }}>
+              <div style={{ fontSize:"0.88rem", fontWeight:"700", color:T.text, fontFamily:"'Inter',sans-serif", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                {(groupConv?.name || "").trim() || (() => {
+                  const others = participants.filter(uid => uid !== user.uid).map(uid => memberDocs[uid]?.displayName?.split(" ")[0] || "Someone");
+                  if (others.length <= 2) return others.join(" & ");
+                  return `${others[0]}, ${others[1]} & ${others.length - 2} more`;
+                })()}
+              </div>
+              <div style={{ fontSize:"0.62rem", color:T.textLight, marginTop:"1px" }}>{participants.length} people · tap to manage</div>
+            </div>
+          </button>
+        ) : (
+          <button onClick={() => onUserTap(other.uid)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", display:"flex", alignItems:"center", gap:"0.6rem" }}>
+            <Avatar photoURL={other.photoURL} name={other.displayName} size={36}/>
+            <span style={{ fontSize:"0.9rem", fontWeight:"700", color:T.text, fontFamily:"'Inter',sans-serif" }}>{other.displayName}</span>
+          </button>
+        )}
       </div>
+      {showGroupInfo && isGroup && (
+        <GroupInfoSheet
+          user={user}
+          conversation={groupConv}
+          memberDocs={memberDocs}
+          profile={profile}
+          onClose={() => setShowGroupInfo(false)}
+          onLeave={() => { setShowGroupInfo(false); onBack(); }}
+        />
+      )}
 
       {/* Messages */}
       <div style={{ flex:1, overflowY:"auto", padding:"1rem", paddingBottom:"1.5rem", display:"flex", flexDirection:"column", gap:"0.6rem" }}>
-        {messages.map(m => {
+        {messages.map((m, idx) => {
           const isMe = m.fromUid === user.uid;
+          // Show sender attribution in groups when the message is not yours,
+          // but only on the first message in a "run" from that sender (so a
+          // burst of messages doesn't repeat their name N times).
+          const prev = idx > 0 ? messages[idx-1] : null;
+          const showSender = isGroup && !isMe && (!prev || prev.fromUid !== m.fromUid);
+          const senderName = m.senderName || memberDocs[m.fromUid]?.displayName || "";
+          const senderPhoto = m.senderPhoto || memberDocs[m.fromUid]?.photoURL || "";
+          // System messages (group changes, etc.) render centered with no bubble.
+          if (m.type === "system") {
+            return (
+              <div key={m.id} style={{ display:"flex", justifyContent:"center", padding:"0.25rem 0" }}>
+                <span style={{ fontSize:"0.65rem", color:T.textLight, fontFamily:"'Inter',sans-serif", fontStyle:"italic" }}>
+                  {m.text}
+                </span>
+              </div>
+            );
+          }
           return (
-            <div key={m.id} style={{ display:"flex", justifyContent: isMe ? "flex-end" : "flex-start" }}>
+            <div key={m.id} style={{ display:"flex", flexDirection:"column", alignItems: isMe ? "flex-end" : "flex-start" }}>
+              {showSender && (
+                <div style={{ display:"flex", alignItems:"center", gap:"0.4rem", marginLeft:"0.3rem", marginBottom:"0.15rem" }}>
+                  <Avatar photoURL={senderPhoto} name={senderName} size={18}/>
+                  <span style={{ fontSize:"0.65rem", color:T.textLight, fontWeight:"600", fontFamily:"'Inter',sans-serif" }}>{senderName?.split(" ")[0] || "Someone"}</span>
+                </div>
+              )}
+              <div style={{ display:"flex", justifyContent: isMe ? "flex-end" : "flex-start", width:"100%" }}>
               {m.type === "text" && (
                 <div
                   onContextMenu={e => { e.preventDefault(); setLongPressMsg({id:m.id, isMe}); }}
@@ -14939,6 +15627,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
                 </button>
                 );
               })()}
+              </div>
             </div>
           );
         })}
@@ -14949,7 +15638,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
         )}
         {otherTyping && (
           <div style={{ display:"flex", justifyContent:"flex-start", alignItems:"center", gap:"0.4rem" }}>
-            <Avatar photoURL={other.photoURL} name={other.displayName} size={22}/>
+            {!isGroup && <Avatar photoURL={other?.photoURL} name={other?.displayName} size={22}/>}
             <div style={{ padding:"0.5rem 0.8rem", borderRadius:"1.1rem 1.1rem 1.1rem 0.2rem", background:T.surfaceAlt, display:"flex", gap:"4px", alignItems:"center" }}>
               {[0,1,2].map(i => (
                 <div key={i} style={{ width:"6px", height:"6px", borderRadius:"50%", background:T.textLight, animation:`typingDot 1.2s ${i*0.2}s infinite ease-in-out` }}/>
