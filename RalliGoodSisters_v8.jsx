@@ -9675,6 +9675,7 @@ function AdminProductHub({ user } = {}) {
   const [loading, setLoading]     = React.useState(true);
   const [mode, setMode]           = React.useState("list"); // list | swipe | add
   const [filter, setFilter]       = React.useState("all");
+  const [reviewerFilter, setReviewerFilter] = React.useState("all"); // "all" | "none" (not reviewed) | <tag>
   const [sort, setSort]           = React.useState("scans");
   const [search, setSearch]       = React.useState("");
   const [editing, setEditing]     = React.useState(null);
@@ -10271,6 +10272,12 @@ function AdminProductHub({ user } = {}) {
       if (filter==="ready")         return isComplete(p);
       return true;
     })
+    .filter(p => {
+      // Reviewer filter — independent of the main "filter" state.
+      if (reviewerFilter === "all") return true;
+      if (reviewerFilter === "none") return !p.lastEnrichedBy;
+      return p.lastEnrichedBy === reviewerFilter;
+    })
     .filter(p => { if(!search.trim()) return true; const q=search.toLowerCase(); return (p.productName||"").toLowerCase().includes(q)||(p.brand||"").toLowerCase().includes(q); })
     .sort((a,b) => {
       if (dupeView) {
@@ -10306,14 +10313,9 @@ function AdminProductHub({ user } = {}) {
   const swipeQueue = products
     .filter(p => {
       if (p.hidden) return false;
-      if (swipeFilter==="needswork") return !isComplete(p);
-      if (swipeFilter==="both") return !hasImg(p) && !hasIng(p);
-      if (swipeFilter==="noimage") return !hasImg(p);
-      if (swipeFilter==="noingredients") return !hasIng(p);
-      if (swipeFilter==="noskin") return !hasSkin(p);
-      if (swipeFilter==="nocategory") return !hasCategory(p);
-      if (swipeFilter==="nobuy") return !hasBuyUrl(p);
-      return true;
+      // Swipe queue is always "everything that needs work" — anything missing image,
+      // ingredients, skin type, category, or buy URL.
+      return !isComplete(p);
     })
     .sort((a,b) => {
       // Pending-review products (newly added via OBF scan/search) go first
@@ -10342,6 +10344,20 @@ function AdminProductHub({ user } = {}) {
     ready: products.filter(p=>!p.hidden && isComplete(p)).length,
     hidden: products.filter(p=>p.hidden).length,
   };
+
+  // Build the list of reviewers actually present in the catalog, with counts.
+  // Sorted by count desc so most-active reviewer is at the top of the dropdown.
+  const reviewerOptions = (() => {
+    const tally = {};
+    products.forEach(p => {
+      if (!p.hidden && p.lastEnrichedBy) {
+        tally[p.lastEnrichedBy] = (tally[p.lastEnrichedBy] || 0) + 1;
+      }
+    });
+    const entries = Object.entries(tally).sort((a,b) => b[1] - a[1]);
+    return entries; // [[tag, count], ...]
+  })();
+  const notReviewedCount = products.filter(p => !p.hidden && !p.lastEnrichedBy).length;
 
   async function openEdit(p) {
     const base = { ...p, skinTypes: Array.isArray(p.skinTypes)?p.skinTypes:(p.skinTypes||"").split(",").map(s=>s.trim()).filter(Boolean) };
@@ -10926,29 +10942,10 @@ function AdminProductHub({ user } = {}) {
         {showAdvanced ? "▾ Hide advanced tools" : "▸ Advanced tools"}
       </button>
 
-      {/* Swipe queue filter — only shown in advanced; Today's Queue card auto-picks the right queue otherwise. */}
-      {showAdvanced && (
-      <div style={{display:"flex",gap:"0.3rem",alignItems:"center",flexWrap:"wrap"}}>
-        <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Swipe queue:</div>
-        {[["needswork","Needs work"],["noimage","No image"],["noingredients","No ingredients"],["noskin","No skin type"],["nocategory","No category"],["nobuy","No buy link"]].map(([id,label])=>(
-          <button key={id} onClick={()=>setSwipeFilter(id)}
-            style={{padding:"0.25rem 0.6rem",background:swipeFilter===id?T.accent:T.surfaceAlt,color:swipeFilter===id?"#fff":T.textMid,border:`1px solid ${swipeFilter===id?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.6rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-            {label}
-          </button>
-        ))}
-      </div>
-      )}
-
       {/* Search + actions */}
       <div style={{display:"flex",gap:"0.5rem",alignItems:"center"}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search products…"
           style={{flex:1,padding:"0.55rem 0.75rem",border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.75rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface}}/>
-        {/* Quick sort cycle: Most scanned ↔ A–Z. Tap to cycle. */}
-        <button onClick={()=>setSort(s => s==="scans" ? "name" : "scans")}
-          title={`Sort: ${sort==="scans"?"Most scanned":"A–Z"} — tap to change`}
-          style={{padding:"0.55rem 0.7rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.65rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"}}>
-          {sort==="scans" ? "📊 Scans" : "A–Z"}
-        </button>
         {/* Dupe finder + bulk select — only shown in Advanced */}
         {showAdvanced && (
         <button onClick={dupeView ? exitDupeView : findDuplicates}
@@ -10988,18 +10985,27 @@ function AdminProductHub({ user } = {}) {
         </div>
       )}
 
-      {/* Sort — hidden by default; defaults to Most Scanned */}
-      {showAdvanced && (
-      <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
+      {/* Sort — always visible. Defaults to Most Scanned. */}
+      <div style={{display:"flex",gap:"0.3rem",alignItems:"center",flexWrap:"wrap"}}>
         <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginRight:"0.2rem"}}>Sort:</div>
-        {[["scans","Most scanned"],["name","A–Z"]].map(([id,label])=>(
+        {[["scans","Most scanned"],["checked","🕒 Date checked"],["name","A–Z"]].map(([id,label])=>(
           <button key={id} onClick={()=>setSort(id)}
             style={{padding:"0.25rem 0.6rem",background:sort===id?T.accent:T.surfaceAlt,color:sort===id?"#fff":T.textMid,border:`1px solid ${sort===id?T.accent:T.border}`,borderRadius:"999px",fontSize:"0.62rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:sort===id?"600":"400"}}>
             {label}
           </button>
         ))}
+
+        {/* Reviewer dropdown — populated from actual reviewers in the catalog */}
+        <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginLeft:"0.5rem",marginRight:"0.2rem"}}>Reviewed by:</div>
+        <select value={reviewerFilter} onChange={e=>setReviewerFilter(e.target.value)}
+          style={{padding:"0.28rem 0.55rem",background:reviewerFilter==="all"?T.surfaceAlt:T.accent+"15",color:reviewerFilter==="all"?T.textMid:T.accent,border:`1px solid ${reviewerFilter==="all"?T.border:T.accent}`,borderRadius:"999px",fontSize:"0.62rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:reviewerFilter==="all"?"400":"600",appearance:"none",WebkitAppearance:"none",paddingRight:"1.4rem",backgroundImage:`url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3e%3cpath d='M3 4.5l3 3 3-3' stroke='%23${reviewerFilter==="all"?"4A5568":"111827"}' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3e%3c/svg%3e")`,backgroundRepeat:"no-repeat",backgroundPosition:"right 0.45rem center"}}>
+          <option value="all">Anyone ({counts.all})</option>
+          {notReviewedCount > 0 && <option value="none">🤖 Not reviewed ({notReviewedCount})</option>}
+          {reviewerOptions.map(([tag, n]) => (
+            <option key={tag} value={tag}>{reviewerInitials(tag)} · {tag} ({n})</option>
+          ))}
+        </select>
       </div>
-      )}
 
       {/* Filter pills — default set: All / Needs work / No image / No ingredients / No skin / No buy / Complete / Mine. Advanced exposes everything. */}
       <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap"}}>
@@ -11172,7 +11178,7 @@ function AdminProductHub({ user } = {}) {
         })}
       </div>
 
-      {filtered.length>0&&<div style={{textAlign:"center",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",paddingBottom:selectMode&&selectedIds.size>0?"6rem":"2rem"}}>{filtered.length} of {products.length} products · {dupeView?"in duplicate groups":(selectMode?"tap to select":"tap to edit")}</div>}
+      {filtered.length>0&&<div style={{textAlign:"center",fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif",paddingBottom:selectMode&&selectedIds.size>0?"6rem":"2rem"}}>{filtered.length} of {products.length} products · {dupeView?"in duplicate groups":(selectMode?"tap to select":"tap to edit")}{reviewerFilter !== "all" && <> · reviewed by <strong style={{color:T.textMid}}>{reviewerFilter==="none"?"no one":reviewerFilter}</strong></>}</div>}
 
       {/* Sticky bulk action bar — visible when in select mode with selections */}
       {selectMode && selectedIds.size > 0 && (
