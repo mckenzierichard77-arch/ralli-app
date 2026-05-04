@@ -720,6 +720,44 @@ function getProductImage(p) {
   return "";
 }
 
+// Returns the product name stripped of its brand prefix, for display.
+// Many products were saved historically with the brand baked into the name
+// ("CeraVe CeraVe Moisturizing Cream"). We strip on display so the brand
+// pill above the name doesn't read redundantly with the name itself.
+// The underlying `productName` in Firestore is unchanged — only the rendered
+// label is cleaned. New saves run the strip at write-time too (see
+// stripBrandFromName usage in admin save paths).
+function getProductDisplayName(p) {
+  if (!p) return "";
+  const name  = p.productName || p.name || "";
+  const brand = p.brand || "";
+  if (!brand || !name) return name;
+  // Inline implementation matches stripBrandFromName below — duplicated here
+  // because that helper is defined later in the file and we can't forward-ref
+  // module-level functions before they're hoisted in some bundling setups.
+  const norm = s => (s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9\s]/g," ").replace(/\s+/g," ").trim();
+  const brandN = norm(brand);
+  if (!brandN) return name;
+  let working = name.trim();
+  for (let pass = 0; pass < 3; pass++) {
+    const workingN = norm(working);
+    if (workingN === brandN) return name; // would empty — keep original
+    if (!workingN.startsWith(brandN + " ")) break;
+    const targetTokens = brandN.split(" ").length;
+    let consumedTokens = 0, inToken = false, cutAt = -1;
+    for (let i = 0; i < working.length; i++) {
+      const ch = working[i];
+      const isWord = /[a-zA-Z0-9]/.test(ch);
+      if (isWord) {
+        if (!inToken) { consumedTokens++; inToken = true; if (consumedTokens > targetTokens) { cutAt = i; break; } }
+      } else { inToken = false; }
+    }
+    if (cutAt < 0) break;
+    working = working.slice(cutAt).trim();
+  }
+  return working || name;
+}
+
 // -- ProductImg — image with graceful branded fallback ---------
 function ProductImg({ src, alt, style = {}, brand = "" }) {
   const [errored, setErrored] = React.useState(false);
@@ -2164,7 +2202,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
             {/* Name + brand */}
             <div style={{flex:1,minWidth:0}}>
               {liveBrand&&<div style={{fontSize:"0.58rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.1rem",fontFamily:"'Inter',sans-serif"}}>{liveBrand}</div>}
-              <div style={{fontWeight:"600",color:T.text,fontSize:"0.85rem",fontFamily:"'Inter',sans-serif",lineHeight:1.25,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{canonicalProduct?.productName||post.productName}</div>
+              <div style={{fontWeight:"600",color:T.text,fontSize:"0.85rem",fontFamily:"'Inter',sans-serif",lineHeight:1.25,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{getProductDisplayName({productName: canonicalProduct?.productName||post.productName, brand: liveBrand})}</div>
               {post.communityRating&&<div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"2px",fontFamily:"'Inter',sans-serif"}}>★ {(post.communityRating/2).toFixed(1)} community</div>}
             </div>
             {/* Dot + score — A1 style */}
@@ -2661,7 +2699,7 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
         {/* -- 2. Brand pill + Name -- */}
         <div style={{marginBottom:"1rem"}}>
           {product.brand&&<div style={{display:"inline-block",fontSize:"0.6rem",color:T.navy,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:"0.35rem",fontFamily:"'Inter',sans-serif",background:T.iceBlue+"55",padding:"0.2rem 0.6rem",borderRadius:"999px",border:`1px solid ${T.iceBlue}`}}>{product.brand}</div>}
-          <div style={{fontSize:"1.45rem",fontWeight:"800",color:T.navy,fontFamily:"'Inter',sans-serif",lineHeight:1.15,letterSpacing:"-0.03em"}}>{product.productName}</div>
+          <div style={{fontSize:"1.45rem",fontWeight:"800",color:T.navy,fontFamily:"'Inter',sans-serif",lineHeight:1.15,letterSpacing:"-0.03em"}}>{getProductDisplayName(product)}</div>
         </div>
 
         {/* -- 3. Score row: dial + label + community -- */}
@@ -3735,7 +3773,7 @@ function SearchResultCard({p, onSelect}) {
         {!fromCatalog&&!hasIng&&<div style={{position:"absolute",bottom:"5px",left:"5px",fontSize:"0.45rem",fontWeight:"600",background:"rgba(0,0,0,0.5)",color:"#fff",borderRadius:"999px",padding:"0.1rem 0.35rem"}}>No ingredients</div>}
       </div>
       <div style={{padding:"0.5rem 0.6rem"}}>
-        <div style={{fontSize:"0.75rem",color:T.text,fontWeight:"600",lineHeight:"1.3",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{p.name}</div>
+        <div style={{fontSize:"0.75rem",color:T.text,fontWeight:"600",lineHeight:"1.3",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{getProductDisplayName({productName: p.name, brand: liveBr})}</div>
         {liveBr&&<div style={{fontSize:"0.65rem",color:T.textMid,fontWeight:"400",marginTop:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{liveBr}</div>}
         {(p.communityRating||p.scanCount>0)&&(
           <div style={{display:"flex",alignItems:"center",gap:"0.35rem",marginTop:"0.3rem",flexWrap:"wrap"}}>
@@ -4482,7 +4520,7 @@ function NetworkGroupCard({productName, brand, productImage, poreScore, users, o
         </div>
         <div style={{flex:1,minWidth:0}}>
           {liveBrand&&<div style={{fontSize:"0.6rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.09em",marginBottom:"0.1rem",fontFamily:"'Inter',sans-serif"}}>{liveBrand}</div>}
-          <div style={{fontWeight:"600",color:T.text,fontSize:"0.9rem",fontFamily:"'Inter',sans-serif",lineHeight:1.25,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{productName}</div>
+          <div style={{fontWeight:"600",color:T.text,fontSize:"0.9rem",fontFamily:"'Inter',sans-serif",lineHeight:1.25,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{getProductDisplayName({productName, brand: liveBrand})}</div>
         </div>
         <PoreScoreBadge score={liveScore} size="md"/>
       </div>
@@ -4572,7 +4610,7 @@ return (
       {/* Info */}
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:"0.58rem",color:T.textLight,marginBottom:"0.15rem",textTransform:"uppercase",letterSpacing:"0.06em"}}>{topBrand}</div>
-        <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,marginBottom:"0.4rem",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{topProduct.productName}</div>
+        <div style={{fontSize:"0.9rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,marginBottom:"0.4rem",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{getProductDisplayName({productName: topProduct.productName, brand: topBrand})}</div>
         {/* Score row */}
         <div style={{display:"flex",alignItems:"center",gap:"0.6rem",marginBottom:"0.35rem"}}>
           {(()=>{const ps=poreStyle(topScore);return(
@@ -4623,7 +4661,7 @@ return (
               </div>
               <div style={{padding:"0.4rem 0.45rem 0.5rem",flex:1,display:"flex",flexDirection:"column",gap:"0.12rem"}}>
                 <div style={{fontSize:"0.56rem",color:T.textLight,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{liveBr}</div>
-                <div style={{fontSize:"0.66rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",lineHeight:1.3}}>{p.productName}</div>
+                <div style={{fontSize:"0.66rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",lineHeight:1.3}}>{getProductDisplayName({productName: p.productName, brand: liveBr})}</div>
                 <div style={{display:"flex",alignItems:"center",gap:"0.2rem",marginTop:"auto",paddingTop:"0.15rem"}}>
                   {p.lovedCount>0&&<span style={{fontSize:"0.52rem",color:T.sage}}>💚{p.lovedCount}</span>}
                   {p.brokeoutCount>0&&<span style={{fontSize:"0.52rem",color:T.rose}}>⚠{p.brokeoutCount}</span>}
@@ -5458,7 +5496,7 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
                 {/* Info */}
                 <div style={{padding:"0.5rem 0.55rem",flex:1,display:"flex",flexDirection:"column",gap:"0.2rem"}}>
                   {prod?.brand&&<div style={{fontSize:"0.52rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.07em",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prod.brand}</div>}
-                  <div style={{fontSize:"0.7rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{item}</div>
+                  <div style={{fontSize:"0.7rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{getProductDisplayName({productName: item, brand: prod?.brand||""})}</div>
                   {ps&&(
                     <div style={{marginTop:"auto",display:"inline-flex",alignItems:"center",gap:"2px",background:ps.color+"15",borderRadius:"999px",padding:"0.12rem 0.4rem",alignSelf:"flex-start"}}>
                       <span style={{fontSize:"0.6rem",fontWeight:"800",color:ps.color}}>{prod.poreScore}/5</span>
@@ -7115,7 +7153,7 @@ function TrendingPage({user, profile, onProductTap}) {
                 </div>
                 {/* Info */}
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
+                  <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{getProductDisplayName({productName: p.productName, brand: liveBr})}</div>
                   {liveBr&&<div style={{fontSize:"0.72rem",fontWeight:"400",color:T.textMid,marginTop:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{liveBr}</div>}
                   <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>{p.scanCount} check{p.scanCount!==1?"s":""}{p.avgCommunity?` · ${p.avgCommunity}/10 Rallier score`:""}</div>
                 </div>
@@ -7744,7 +7782,7 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
               </div>
               <div style={{padding:"0.45rem 0.55rem 0.5rem"}}>
                 {(live.brand||rec.brand)&&<div style={{fontSize:"0.5rem",color:T.accent,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{live.brand||rec.brand}</div>}
-                <div style={{fontSize:"0.7rem",fontWeight:"600",color:T.text,lineHeight:1.2,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{rec.productName}</div>
+                <div style={{fontSize:"0.7rem",fontWeight:"600",color:T.text,lineHeight:1.2,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{getProductDisplayName({productName: rec.productName, brand: live.brand||rec.brand})}</div>
               </div>
             </button>
           );
@@ -14820,7 +14858,7 @@ function ChatView({ user, profile, other, onBack, onUserTap, onProductTap }) {
                     )}
                     <div style={{ flex:1, minWidth:0 }}>
                       {liveBr && <div style={{ fontSize:"0.58rem", fontWeight:"600", color:T.textLight, textTransform:"uppercase", letterSpacing:"0.09em" }}>{liveBr}</div>}
-                      <div style={{ fontSize:"0.82rem", fontWeight:"600", color:T.text, fontFamily:"'Inter',sans-serif", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.productName}</div>
+                      <div style={{ fontSize:"0.82rem", fontWeight:"600", color:T.text, fontFamily:"'Inter',sans-serif", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{getProductDisplayName({productName: m.productName, brand: liveBr})}</div>
                       {m.hasScore && liveSc !== null && liveSc !== undefined
                         ? <div style={{ fontSize:"0.68rem", fontWeight:"700", color:poreStyle(liveSc).color, marginTop:"2px" }}>{liveSc}/5 · {poreStyle(liveSc).label}</div>
                         : <div style={{ fontSize:"0.68rem", color:T.textLight, marginTop:"2px" }}>Tap to view details</div>
