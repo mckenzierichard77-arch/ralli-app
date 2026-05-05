@@ -1854,11 +1854,7 @@ function ProductImage({src, name, brand, barcode, size="full"}) {
 
   const dim = size==="full" ? {width:"100%",height:"100%"} : {width:size,height:size};
   if (!imgSrc || failed) return <div style={{...dim,borderRadius:"inherit",overflow:"hidden",flexShrink:0}}><PlaceholderCard name={name} brand={brand}/></div>;
-  // brightness/contrast bumped up so near-white backgrounds (#FAFAFA, #F8F8F8,
-  // JPG-compression off-whites from Sephora/Amazon) snap to pure white before
-  // multiply-blends with the white container behind them. Without this, off-
-  // white image backgrounds were leaving a faint visible rectangle on phones.
-  return <img src={imgSrc} alt={name||""} style={{...dim,objectFit:"contain",padding:"8px",background:"#ffffff",mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)"}} onError={handleError}/>;
+  return <img src={imgSrc} alt={name||""} style={{...dim,objectFit:"contain",padding:"8px",background:"#ffffff",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={handleError}/>;
 }
 
 // -- Avatar ----------------------------------------------------
@@ -2305,7 +2301,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
             {/* Thumbnail */}
             <div style={{width:"42px",height:"42px",flexShrink:0,borderRadius:"0.55rem",overflow:"hidden",background:T.surfaceAlt,display:"flex",alignItems:"center",justifyContent:"center"}}>
               {liveImage
-                ? <img src={liveImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)"}} onError={e=>e.target.style.opacity="0"}/>
+                ? <img src={liveImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
                 : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.border} strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
               }
             </div>
@@ -4734,7 +4730,7 @@ function NetworkGroupCard({productName, brand, productImage, poreScore, users, o
       <div onClick={onProductTap} style={{display:"flex",gap:"0.75rem",alignItems:"center",background:T.surfaceAlt,borderRadius:"0.85rem",padding:"0.7rem 0.75rem",cursor:onProductTap?"pointer":"default"}}>
         <div style={{width:"52px",height:"52px",flexShrink:0,borderRadius:"0.5rem",overflow:"hidden",background:T.surface}}>
           {liveImage
-            ? <img src={liveImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)"}} onError={e=>e.target.style.opacity="0"}/>
+            ? <img src={liveImage} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
             : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",color:T.border}}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
           }
         </div>
@@ -5581,7 +5577,7 @@ function ListItemImage({name, color}) {
   return (
     <div style={{width:"100%",height:"100%",position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
       {!img&&<PlaceholderCard name={name} brand=""  />}
-      {img&&<img src={img} alt={name} style={{position:"absolute",top:0,left:0,right:0,bottom:0,width:"100%",height:"100%",objectFit:"contain",padding:"6px",mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)"}} onError={()=>setImg(null)}/>}
+      {img&&<img src={img} alt={name} style={{position:"absolute",top:0,left:0,right:0,bottom:0,width:"100%",height:"100%",objectFit:"contain",padding:"6px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={()=>setImg(null)}/>}
     </div>
   );
 }
@@ -5718,7 +5714,7 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
                 {/* Image area */}
                 <div style={{width:"100%",height:"90px",background:hasImg?"#fff":color+"10",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",borderBottom:`1px solid ${T.border}`}}>
                   {hasImg
-                    ? <img src={imgSrc} style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)"}} onError={e=>{e.target.style.display="none";}}/>
+                    ? <img src={imgSrc} style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>{e.target.style.display="none";}}/>
                     : <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"4px",padding:"0.5rem"}}>
                         <div style={{width:"28px",height:"28px",borderRadius:"50%",background:color+"25",display:"flex",alignItems:"center",justifyContent:"center"}}>
                           <div style={{width:"10px",height:"10px",borderRadius:"50%",background:color}}/>
@@ -6873,7 +6869,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
                       onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
                       {(p.productImage||(p.adminImage||p.image))&&(
                         <div style={{width:"40px",height:"40px",flexShrink:0,borderRadius:"0.5rem",overflow:"hidden",background:"#ffffff",border:`1px solid ${T.border}`}}>
-                          <img src={p.productImage||p.adminImage||p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"3px",mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)"}} onError={e=>e.target.style.opacity="0"}/>
+                          <img src={p.productImage||p.adminImage||p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"3px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
                         </div>
                       )}
                       <div style={{flex:1,minWidth:0}}>
@@ -8047,7 +8043,7 @@ function ExploreRecsCarousel({products, profile, friendScans={}, onTap, productI
               onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.transform="translateY(-2px)";}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.transform="";}}>
               <div style={{width:"100%",height:"100px",background:"#ffffff",overflow:"hidden",position:"relative",borderBottom:`1px solid ${T.border}`}}>
-                {img ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)"}} onError={e=>e.target.style.opacity="0"}/> : <PlaceholderCard name={rec.productName} brand={rec.brand||""}/>}
+                {img ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/> : <PlaceholderCard name={rec.productName} brand={rec.brand||""}/>}
                 <div style={{position:"absolute",top:"5px",right:"5px",background:ps.color,borderRadius:"0.35rem",padding:"2px 5px"}}>
                   {liveRecScore != null
                     ? <span style={{fontSize:"0.6rem",fontWeight:"800",color:"#fff"}}>{liveRecScore}/5</span>
@@ -8279,7 +8275,7 @@ function FounderPicksSection({onTap, friendScans={}}) {
 
                     <div style={{width:"100%",aspectRatio:"4/3",background:"#ffffff",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
                       {img
-                        ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)"}} onError={e=>e.target.style.display="none"}/>
+                        ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.display="none"}/>
                         : <PlaceholderCard name={pick.productName} brand={pick.brand||""}/>
                       }
                       {pick.ingredients && pick.ingredients.trim().length >= 10 && pick.poreScore != null && pick.poreScore > 0 && (
@@ -8561,7 +8557,7 @@ function FounderPicksRow({onTap, friendScans={}}) {
               onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.boxShadow="none";e.currentTarget.style.transform="none";}}>
               <div style={{width:"100%",aspectRatio:"4/3",background:"#ffffff",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
                 {img
-                  ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)"}} onError={e=>e.target.style.display="none"}/>
+                  ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.display="none"}/>
                   : <PlaceholderCard name={pick.productName} brand={pick.brand||""}/>
                 }
                 {pick.ingredients && pick.ingredients.trim().length >= 10 && pick.poreScore != null && pick.poreScore > 0 && (
@@ -9023,7 +9019,7 @@ function ShopPage({user, profile, onUpdateProfile}) {
                   {/* Big image area */}
                   <div style={{width:"100%",aspectRatio:cat.isExpanded?"1/1":undefined,height:cat.isExpanded?undefined:"148px",background:"#ffffff",position:"relative",overflow:"hidden"}}>
                     {img
-                      ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)"}} onError={e=>e.target.style.opacity="0"}/>
+                      ? <img src={img} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"12px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
                       : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}>
                           <div style={{width:"44px",height:"44px",borderRadius:"50%",background:T.accent+"18",display:"flex",alignItems:"center",justifyContent:"center"}}>
                             <span style={{fontSize:"1rem",fontWeight:"800",color:T.accent}}>{(p.brand||"?")[0].toUpperCase()}</span>
@@ -9143,7 +9139,7 @@ function ShopImageCell({p}) {
     <div style={{width:"100%",height:"100%",position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
       {showImg&&(
         <img src={imgSrc} alt={p.productName}
-          style={{width:"82%",height:"82%",objectFit:"contain",display:status==="loaded"?"block":"none",position:"relative",zIndex:2,mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)"}}
+          style={{width:"82%",height:"82%",objectFit:"contain",display:status==="loaded"?"block":"none",position:"relative",zIndex:2,mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}}
           onLoad={()=>setStatus("loaded")}
           onError={handleError}/>
       )}
@@ -15959,7 +15955,7 @@ function ChatView({ user, profile, other, kind = "dm", conversation = null, onBa
                   <div style={{ display:"flex", gap:"0.6rem", alignItems:"center", padding:"0.65rem 0.75rem" }}>
                     {liveImg && (
                       <div style={{ width:"44px", height:"44px", flexShrink:0, borderRadius:"0.5rem", overflow:"hidden", background:T.surface }}>
-                        <img src={liveImg} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"3px", mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)" }}/>
+                        <img src={liveImg} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"3px", mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)" }}/>
                       </div>
                     )}
                     <div style={{ flex:1, minWidth:0 }}>
@@ -16099,7 +16095,7 @@ function ProductPickerModal({ user, onSelect, onClose }) {
               <button key={p.id} onClick={() => onSelect({...p, image: p.adminImage||p.image||""})}
                 style={{ width:"100%", display:"flex", alignItems:"center", gap:"0.65rem", padding:"0.7rem 0", background:"none", border:"none", borderTop: i > 0 ? `1px solid ${T.border}40` : "none", cursor:"pointer", textAlign:"left" }}>
                 <div style={{ width:"44px", height:"44px", flexShrink:0, borderRadius:"0.6rem", overflow:"hidden", background:T.surfaceAlt }}>
-                  {p.image ? <img src={p.image} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"4px", mixBlendMode:"multiply",filter:"brightness(1.08) contrast(1.18)" }}/> : null}
+                  {p.image ? <img src={p.image} alt="" style={{ width:"100%", height:"100%", objectFit:"contain", padding:"4px", mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)" }}/> : null}
                 </div>
                 <div style={{ flex:1, minWidth:0 }}>
                   {p.brand && <div style={{ fontSize:"0.6rem", color:T.textLight, textTransform:"uppercase", letterSpacing:"0.09em" }}>{p.brand}</div>}
