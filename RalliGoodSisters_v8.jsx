@@ -3684,34 +3684,34 @@ function WelcomeBackScreen({ user, profile, onDismiss }) {
         {/* Centered editorial block */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", maxWidth: "30ch" }}>
           <div className="wb-display-line" style={{
-            fontFamily: "'Cormorant Garamond', 'Cormorant', serif",
-            fontSize: "2.6rem",
-            fontWeight: 500,
+            fontFamily: "'Inter', sans-serif",
+            fontSize: "2.2rem",
+            fontWeight: 300,
             color: T.text,
-            lineHeight: 1.05,
-            letterSpacing: "-0.01em"
+            lineHeight: 1.1,
+            letterSpacing: "-0.03em"
           }}>
             {greeting},
           </div>
           <div className="wb-italic-line" style={{
-            fontFamily: "'Cormorant Garamond', 'Cormorant', serif",
-            fontStyle: "italic",
-            fontSize: "2.6rem",
-            fontWeight: 500,
+            fontFamily: "'Inter', sans-serif",
+            fontSize: "2.2rem",
+            fontWeight: 600,
             color: T.text,
-            lineHeight: 1.05,
-            letterSpacing: "-0.01em",
+            lineHeight: 1.1,
+            letterSpacing: "-0.03em",
             marginTop: "0.1rem"
           }}>
             {firstName}.
           </div>
           <div className="wb-stats-line" style={{
-            fontSize: "1rem",
+            fontFamily: "'Inter', sans-serif",
+            fontSize: "0.95rem",
             fontWeight: 400,
             color: T.textMid,
-            lineHeight: 1.5,
+            lineHeight: 1.55,
             marginTop: "1.5rem",
-            maxWidth: "26ch"
+            maxWidth: "28ch"
           }}>
             {copyLine}
           </div>
