@@ -3628,10 +3628,25 @@ function WelcomeBackScreen({ user, profile, onDismiss }) {
 
   // Build the editorial copy line from real stats with graceful fallbacks
   const copyLine = React.useMemo(() => {
-    if (!stats) return "Loading your week…";
+    if (!stats) return "Welcome back.";
     const { activeFriendCount, serumDays } = stats;
+
+    // Rotating positive lines for users with no recent friend activity.
+    // Picks one based on the day of year so it stays consistent within a day
+    // but varies across sessions.
+    const POSITIVE_LINES = [
+      "A fresh week for your skin.",
+      "New ingredients are waiting.",
+      "Today's a good day to learn something new.",
+      "Your routine, your rhythm.",
+      "Curated for you, by women like you.",
+      "Take a moment for your skin today."
+    ];
+    const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+    const positiveLine = POSITIVE_LINES[dayOfYear % POSITIVE_LINES.length];
+
     const friendPart =
-      activeFriendCount === 0 ? "Your community is quiet this week." :
+      activeFriendCount === 0 ? positiveLine :
       activeFriendCount === 1 ? "One friend added new products this week." :
       `${numberToWord(activeFriendCount)} friends added new products this week.`;
     const serumPart = serumDays != null ? ` Your serum is at ${serumDays} day${serumDays === 1 ? "" : "s"}.` : "";
@@ -3726,7 +3741,7 @@ function WelcomeBackScreen({ user, profile, onDismiss }) {
           }}>
             Tap to continue
           </div>
-          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "flex-start" }}>
             <div>
               <div style={{
                 fontFamily: "'Poppins', sans-serif",
@@ -3748,12 +3763,6 @@ function WelcomeBackScreen({ user, profile, onDismiss }) {
               }}>
                 by Goodsisters
               </div>
-            </div>
-            {/* Pagination dots — purely decorative, mirrors screenshot */}
-            <div style={{ display: "flex", gap: "0.35rem", paddingBottom: "0.25rem" }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.text }}/>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.border }}/>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.border }}/>
             </div>
           </div>
         </div>
