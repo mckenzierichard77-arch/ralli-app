@@ -3122,7 +3122,6 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
 
         {/* -- 10. Report wrong ingredients (subtle, at the bottom) -- */}
         {user&&product.ingredients&&(()=>{
-          const lowConfidence=(product.ingredients||"").split(",").length<8;
           async function submitReport(){
             if(!reportText.trim())return;
             setReportState("sending");
@@ -3138,7 +3137,6 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
                 :reportState==="editing"
                 ?<div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}><div style={{fontSize:"0.68rem",color:T.textLight,lineHeight:1.4}}>Paste the correct ingredient list from the packaging or brand website:</div><textarea value={reportText} onChange={e=>setReportText(e.target.value)} placeholder="Aqua, Glycerin, Niacinamide…" rows={4} style={{width:"100%",padding:"0.6rem 0.75rem",borderRadius:"0.6rem",border:`1.5px solid ${T.accent}`,fontSize:"0.78rem",fontFamily:"'Inter',sans-serif",color:T.text,background:T.surface,outline:"none",resize:"vertical",boxSizing:"border-box",lineHeight:1.5}}/><div style={{display:"flex",gap:"0.5rem"}}><button onClick={submitReport} disabled={!reportText.trim()||reportState==="sending"} style={{flex:1,padding:"0.6rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.78rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>{reportState==="sending"?"Sending…":"Submit correction"}</button><button onClick={()=>setReportState("idle")} style={{padding:"0.6rem 0.85rem",background:T.surfaceAlt,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.78rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Cancel</button></div></div>
                 :<button onClick={()=>setReportState("editing")} style={{display:"flex",alignItems:"center",gap:"0.4rem",background:"none",border:"none",cursor:"pointer",padding:"0.2rem 0",fontFamily:"'Inter',sans-serif"}}>
-                  {lowConfidence&&<span style={{fontSize:"0.6rem",color:T.amber,background:T.amber+"15",padding:"0.1rem 0.4rem",borderRadius:"999px",border:`1px solid ${T.amber}30`,fontWeight:"700",marginRight:"0.15rem"}}>⚠ Low confidence</span>}
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                   <span style={{fontSize:"0.7rem",color:T.textLight}}>Ingredients look wrong? Report a correction</span>
                 </button>
@@ -16978,11 +16976,13 @@ function AppInner() {
         setUser(u); setProfile(p);
         if (p.isNew) setShowOnboarding(true);
         else {
-          // Returning user — show editorial WelcomeBack screen once per session
+          // Returning user — show editorial WelcomeBack screen once per day
           try {
-            const seenKey = `ralli_welcome_seen_${u.uid}`;
-            if (!sessionStorage.getItem(seenKey)) {
-              sessionStorage.setItem(seenKey, "1");
+            const seenKey = `ralli_welcome_lastSeen_${u.uid}`;
+            const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD in local-ish
+            const lastSeen = localStorage.getItem(seenKey);
+            if (lastSeen !== today) {
+              localStorage.setItem(seenKey, today);
               setShowWelcomeBack(true);
             }
           } catch {}
