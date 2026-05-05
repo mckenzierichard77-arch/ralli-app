@@ -1600,17 +1600,54 @@ async function toggleLike(postId, uid) {
 }
 
 async function followUser(myUid, theirUid) {
+  // We try to update both sides for fast UI feedback. The "their" side write
+  // can be denied by security rules (most rule schemas disallow user A
+  // writing to user B's user doc). If that happens, the canonical follower
+  // count is still recoverable via the queryFollowersOf helper below — that
+  // queries every user whose `following` array contains theirUid.
   try {
     await updateDoc(doc(db,"users",myUid),{following:arrayUnion(theirUid)});
+  } catch(e) {
+    console.error("followUser: failed to update my following list:", e);
+    throw e;
+  }
+  try {
     await updateDoc(doc(db,"users",theirUid),{followers:arrayUnion(myUid)});
-  } catch {}
+  } catch(e) {
+    console.warn("followUser: couldn't update target user's followers list (security rules?):", e?.message || e);
+    // Don't throw — the my-side write succeeded, which is the source of truth.
+  }
 }
 
 async function unfollowUser(myUid, theirUid) {
   try {
     await updateDoc(doc(db,"users",myUid),{following:arrayRemove(theirUid)});
+  } catch(e) {
+    console.error("unfollowUser: failed to update my following list:", e);
+    throw e;
+  }
+  try {
     await updateDoc(doc(db,"users",theirUid),{followers:arrayRemove(myUid)});
-  } catch {}
+  } catch(e) {
+    console.warn("unfollowUser: couldn't update target user's followers list:", e?.message || e);
+  }
+}
+
+// Source-of-truth follower count: query for every user whose `following`
+// array contains the target uid. This works even when the target's own
+// `followers` array is stale (e.g. when security rules block follower writes).
+async function queryFollowersOf(targetUid) {
+  try {
+    const snap = await getDocs(query(
+      collection(db, "users"),
+      where("following", "array-contains", targetUid),
+      limit(500)
+    ));
+    return snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+  } catch(e) {
+    console.warn("queryFollowersOf failed:", e);
+    return [];
+  }
 }
 
 async function searchUsers(q) {
@@ -3429,7 +3466,7 @@ function OnboardingFlow({user, profile, onComplete}) {
             value={displayName}
             onChange={e=>setDisplayName(e.target.value)}
             placeholder="Your name"
-            style={{width:"100%",padding:"0.85rem 1rem",borderRadius:"0.85rem",border:`1.5px solid ${T.border}`,fontSize:"1rem",color:"#fff",background:"rgba(255,255,255,0.08)",outline:"none",fontFamily:"'Inter',sans-serif"}}
+            style={{width:"100%",padding:"0.85rem 1rem",borderRadius:"0.85rem",border:`1.5px solid ${T.border}`,fontSize:"1rem",color:T.text,background:T.surface,outline:"none",fontFamily:"'Inter',sans-serif"}}
             onFocus={e=>{e.target.style.borderColor=T.sage;}}
             onBlur={e=>{e.target.style.borderColor=T.border;}}
           />
@@ -3744,26 +3781,110 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
       <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9000,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}}>
         <div onClick={()=>setShowFollowList(null)} style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.4)",backdropFilter:"blur(4px)"}}/>
         <div style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1.25rem 0",height:"70vh",display:"flex",flexDirection:"column",zIndex:1}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexShrink:0}}>
-            <div style={{fontSize:"1rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>
-              {showFollowList === "followers" ? "Followers" : "Following"}
-              <span style={{fontSize:"0.72rem",fontWeight:"400",color:T.textLight,marginLeft:"0.5rem"}}>
-                {(showFollowList === "followers" ? (profile.followers||[]) : (profile.following||[])).length}
-              </span>
-            </div>
-            <button onClick={()=>setShowFollowList(null)} style={{background:T.surfaceAlt,border:"none",cursor:"pointer",color:T.textMid,width:"28px",height:"28px",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1rem"}}>✕</button>
-          </div>
-          <div style={{overflowY:"auto",flex:1,paddingBottom:"calc(1.5rem + env(safe-area-inset-bottom))"}}>
-            {(showFollowList === "followers" ? (profile.followers||[]) : (profile.following||[])).map(uid => (
-              <FollowListItem key={uid} uid={uid} onTap={uid=>{setShowFollowList(null); onUserTap?.(uid);}}/>
-            ))}
-            {(showFollowList === "followers" ? (profile.followers||[]) : (profile.following||[])).length === 0 && (
-              <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.82rem"}}>No {showFollowList} yet</div>
-            )}
-          </div>
+          <FollowListSheetContent
+            mode={showFollowList}
+            profileUid={profile.uid || profile.id}
+            followingUids={profile.following || []}
+            followerUids={profile.followers || []}
+            onClose={() => setShowFollowList(null)}
+            onUserTap={uid => { setShowFollowList(null); onUserTap?.(uid); }}
+          />
         </div>
       </div>
     , document.body)}
+    </>
+  );
+}
+
+// -- FollowListSheetContent — resolves UIDs to user docs, filters ghost accts,
+//    and falls back to a Firestore query for `followers` so a stale
+//    profile.followers array doesn't hide real followers.
+function FollowListSheetContent({ mode, profileUid, followingUids, followerUids, onClose, onUserTap }) {
+  const [users, setUsers] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      const GENERIC = ["skincare lover","anonymous","user","undefined","null",""];
+      let collected = [];
+
+      if (mode === "following") {
+        // Resolve every UID in the following array. Per-doc gets — `where __name__ in`
+        // with string IDs returns nothing silently in Firestore.
+        const snaps = await Promise.all((followingUids || []).map(uid =>
+          getDoc(doc(db, "users", uid)).catch(() => null)
+        ));
+        collected = snaps
+          .filter(s => s && s.exists())
+          .map(s => ({ uid: s.id, ...s.data() }))
+          .filter(u => !GENERIC.includes((u.displayName || "").toLowerCase().trim()));
+      } else {
+        // Followers: query Firestore for everyone who has profileUid in their
+        // following array. This is the source of truth — independent of the
+        // possibly-stale profile.followers array (which can be stale because
+        // security rules may block writes to other users' docs).
+        if (profileUid) {
+          const realFollowers = await queryFollowersOf(profileUid);
+          collected = realFollowers.filter(u =>
+            !GENERIC.includes((u.displayName || "").toLowerCase().trim())
+          );
+        }
+        // Fall back to the array if the query came up empty AND we have UIDs
+        // listed (in case the user didn't have permission to query).
+        if (!collected.length && (followerUids || []).length) {
+          const snaps = await Promise.all(followerUids.map(uid =>
+            getDoc(doc(db, "users", uid)).catch(() => null)
+          ));
+          collected = snaps
+            .filter(s => s && s.exists())
+            .map(s => ({ uid: s.id, ...s.data() }))
+            .filter(u => !GENERIC.includes((u.displayName || "").toLowerCase().trim()));
+        }
+      }
+
+      if (!cancelled) {
+        setUsers(collected);
+        setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [mode, profileUid, (followingUids || []).join(","), (followerUids || []).join(",")]);
+
+  return (
+    <>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexShrink:0}}>
+        <div style={{fontSize:"1rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>
+          {mode === "followers" ? "Followers" : "Following"}
+          <span style={{fontSize:"0.72rem",fontWeight:"400",color:T.textLight,marginLeft:"0.5rem"}}>
+            {loading ? "…" : users.length}
+          </span>
+        </div>
+        <button onClick={onClose} style={{background:T.surfaceAlt,border:"none",cursor:"pointer",color:T.textMid,width:"28px",height:"28px",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1rem"}}>✕</button>
+      </div>
+      <div style={{overflowY:"auto",flex:1,paddingBottom:"calc(1.5rem + env(safe-area-inset-bottom))"}}>
+        {loading && (
+          <>
+            {[1,2,3].map(i => <div key={i} style={{height:"52px",borderRadius:"0.75rem",marginBottom:"0.5rem"}} className="skeleton"/>)}
+          </>
+        )}
+        {!loading && users.length === 0 && (
+          <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.82rem"}}>No {mode} yet</div>
+        )}
+        {!loading && users.map(u => (
+          <button key={u.uid} onClick={() => onUserTap(u.uid)}
+            style={{width:"100%",display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.6rem 0.5rem",background:"none",border:"none",cursor:"pointer",borderBottom:`1px solid ${T.border}`,textAlign:"left"}}>
+            <Avatar photoURL={u.photoURL} name={u.displayName} size={38}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName||"Ralli User"}</div>
+              <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>{(u.followers||[]).length} followers</div>
+            </div>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        ))}
+      </div>
     </>
   );
 }
@@ -6322,6 +6443,34 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
   const [userListLoading, setUserListLoading] = useState(false);
   const [photoUploading, setPhotoUploading]   = useState(false);
   const [phoneEdit, setPhoneEdit]             = useState(profile?.phone||"");
+  const [realFollowerCount, setRealFollowerCount] = useState(null);
+  const [realFollowingCount, setRealFollowingCount] = useState(null);
+
+  // Source-of-truth follower count: query for everyone whose `following` array
+  // contains my uid. The local profile.followers array can be stale because
+  // security rules may block writes to other users' docs.
+  // Following count: resolve UIDs and filter ghost accounts.
+  React.useEffect(() => {
+    if (!user?.uid) return;
+    let cancelled = false;
+    const GENERIC = ["skincare lover","anonymous","user","undefined","null",""];
+    (async () => {
+      const followers = await queryFollowersOf(user.uid);
+      const realFollowers = followers.filter(u => !GENERIC.includes((u.displayName||"").toLowerCase().trim()));
+      if (!cancelled) setRealFollowerCount(realFollowers.length);
+    })();
+    (async () => {
+      const ids = profile?.following || [];
+      if (!ids.length) { if (!cancelled) setRealFollowingCount(0); return; }
+      const snaps = await Promise.all(ids.map(uid => getDoc(doc(db,"users",uid)).catch(()=>null)));
+      const realFollowing = snaps
+        .filter(s => s && s.exists())
+        .map(s => ({uid: s.id, ...s.data()}))
+        .filter(u => !GENERIC.includes((u.displayName||"").toLowerCase().trim()));
+      if (!cancelled) setRealFollowingCount(realFollowing.length);
+    })();
+    return () => { cancelled = true; };
+  }, [user?.uid, (profile?.following || []).join(",")]);
 
   // Guard must come AFTER all hooks
   if (!profile) return <div style={{minHeight:"60vh",display:"flex",alignItems:"center",justifyContent:"center",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Loading…</div>;
@@ -6335,14 +6484,29 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
   async function openUserList(type) {
     setUserListModal(type);
     setUserListLoading(true);
-    const ids = type === "followers" ? (profile.followers||[]) : (profile.following||[]);
+    const GENERIC = ["skincare lover","anonymous","user","undefined","null",""];
     try {
-      const users = await Promise.all(ids.map(async uid => {
-        const snap = await getDoc(doc(db,"users",uid));
-        return snap.exists() ? {uid, ...snap.data()} : null;
-      }));
-      setUserListData(users.filter(Boolean));
-    } catch {}
+      let users = [];
+      if (type === "followers") {
+        // Source of truth: query for everyone whose `following` array contains
+        // me. The local profile.followers array can be stale because security
+        // rules may block writes to other users' docs.
+        users = await queryFollowersOf(user.uid);
+        // If the query returned nothing but we have UIDs in the array, fall
+        // back to per-doc fetch.
+        if (!users.length && (profile.followers || []).length) {
+          const snaps = await Promise.all((profile.followers || []).map(uid => getDoc(doc(db,"users",uid)).catch(()=>null)));
+          users = snaps.filter(s => s && s.exists()).map(s => ({ uid: s.id, ...s.data() }));
+        }
+      } else {
+        const ids = profile.following || [];
+        const snaps = await Promise.all(ids.map(uid => getDoc(doc(db,"users",uid)).catch(()=>null)));
+        users = snaps.filter(s => s && s.exists()).map(s => ({ uid: s.id, ...s.data() }));
+      }
+      // Strip ghost / never-onboarded accounts.
+      users = users.filter(u => !GENERIC.includes((u.displayName || "").toLowerCase().trim()));
+      setUserListData(users);
+    } catch(e) { console.warn("openUserList failed:", e); }
     setUserListLoading(false);
   }
 
@@ -6577,8 +6741,8 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
           <div style={{flex:1,display:"flex",justifyContent:"space-around"}}>
             {[
               {label:"Scans",     value:posts.filter(p=>!p._fromRatings).length,                   onClick:null},
-              {label:"Followers", value:(profile.followers||[]).length,  onClick:()=>openUserList("followers")},
-              {label:"Following", value:(profile.following||[]).length,  onClick:()=>openUserList("following")},
+              {label:"Followers", value: realFollowerCount ?? (profile.followers||[]).length,  onClick:()=>openUserList("followers")},
+              {label:"Following", value: realFollowingCount ?? (profile.following||[]).length,  onClick:()=>openUserList("following")},
             ].map(({label,value,onClick})=>(
               <button key={label} onClick={onClick||undefined} disabled={!onClick}
                 style={{textAlign:"center",background:"none",border:"none",cursor:onClick?"pointer":"default",padding:"0.15rem 0.5rem",lineHeight:1}}>
@@ -14622,7 +14786,6 @@ async function sendToConversation(cid, fromUid, msg) {
   const msgCol = collection(db, "conversations", cid, "messages");
   const ts = serverTimestamp();
   const cleanMsg = Object.fromEntries(Object.entries({ ...msg, fromUid, createdAt: ts }).filter(([,v]) => v !== undefined));
-  await addDoc(msgCol, cleanMsg);
 
   // Resolve participants. For groups we need to read the doc; for 1:1 we
   // can derive from the sorted-uid cid.
@@ -14641,9 +14804,11 @@ async function sendToConversation(cid, fromUid, msg) {
     participants = cid.split("_");
   }
 
-  // Bump unread for everyone except the sender, reset for the sender.
-  // Also clear `hiddenFor` for every participant — a new message should
-  // resurface a chat someone previously hid/deleted on their side.
+  // STEP 1: Create/merge the parent conversation doc FIRST. Writing a message
+  // to a subcollection of a non-existent parent can be denied by security
+  // rules, and even when allowed it causes the message to be invisible to
+  // queries that filter on parent fields. Always ensure the parent exists.
+  // Also: clearing `hiddenFor` here resurfaces a chat someone had hidden.
   const meta = {
     participants,
     isGroup,
@@ -14655,9 +14820,12 @@ async function sendToConversation(cid, fromUid, msg) {
   participants.filter(uid => uid !== fromUid).forEach(uid => {
     meta[`unread_${uid}`] = increment(1);
   });
-  setDoc(convRef, meta, { merge: true }).catch(e => console.warn("[sendToConversation] meta failed:", e.message));
+  await setDoc(convRef, meta, { merge: true });
 
-  // In-app notifications for every participant except sender.
+  // STEP 2: Now write the message. Parent exists, rules can validate cleanly.
+  await addDoc(msgCol, cleanMsg);
+
+  // In-app notifications for every participant except sender. Best-effort.
   const notifText = msg.type === "text" ? msg.text : msg.type === "product" ? `Shared a product: ${msg.productName}` : "Sent you a photo";
   participants.filter(uid => uid !== fromUid).forEach(uid => {
     addDoc(collection(db, "notifications"), {
@@ -15596,14 +15764,21 @@ function ChatView({ user, profile, other, kind = "dm", conversation = null, onBa
   async function send() {
     if (!text.trim() || !cid) return;
     setSending(true);
-    await sendToConversation(cid, user.uid, {
-      type: "text",
-      text: text.trim(),
-      // Embed sender identity for group rendering — 1:1 chats ignore these.
-      senderName: profile?.displayName || user.displayName || "",
-      senderPhoto: profile?.photoURL || user.photoURL || "",
-    });
-    setText("");
+    const draft = text.trim();
+    try {
+      await sendToConversation(cid, user.uid, {
+        type: "text",
+        text: draft,
+        // Embed sender identity for group rendering — 1:1 chats ignore these.
+        senderName: profile?.displayName || user.displayName || "",
+        senderPhoto: profile?.photoURL || user.photoURL || "",
+      });
+      setText("");
+    } catch(e) {
+      console.error("send failed:", e);
+      alert("Couldn't send: " + (e?.message || "unknown error") + ". Your message wasn't sent — try again.");
+      // Leave `text` populated so the user doesn't lose their draft.
+    }
     setSending(false);
   }
 
@@ -15614,12 +15789,17 @@ function ChatView({ user, profile, other, kind = "dm", conversation = null, onBa
       const reader = new FileReader();
       reader.onload = async (e) => {
         const base64 = e.target.result;
-        await sendToConversation(cid, user.uid, {
-          type: "photo",
-          photoData: base64,
-          senderName: profile?.displayName || user.displayName || "",
-          senderPhoto: profile?.photoURL || user.photoURL || "",
-        });
+        try {
+          await sendToConversation(cid, user.uid, {
+            type: "photo",
+            photoData: base64,
+            senderName: profile?.displayName || user.displayName || "",
+            senderPhoto: profile?.photoURL || user.photoURL || "",
+          });
+        } catch(err) {
+          console.error("sendPhoto failed:", err);
+          alert("Couldn't send photo: " + (err?.message || "unknown error"));
+        }
         setPhotoUploading(false);
       };
       reader.readAsDataURL(file);
@@ -15633,18 +15813,23 @@ function ChatView({ user, profile, other, kind = "dm", conversation = null, onBa
     const liveScore = ing.trim().length > 10
       ? (() => { try { const r = analyzeIngredients(ing); return r.avgScore!=null ? Math.round(r.avgScore) : null; } catch { return null; } })()
       : null;
-    await sendToConversation(cid, user.uid, {
-      type: "product",
-      productName: product.productName || product.name || "",
-      brand: product.brand || "",
-      productImage: product.adminImage || product.productImage || product.image || "",
-      poreScore: liveScore ?? product.poreScore ?? null,
-      hasScore: true,
-      ingredients: ing,
-      buyUrl: product.buyUrl || "",
-      senderName: profile?.displayName || user.displayName || "",
-      senderPhoto: profile?.photoURL || user.photoURL || "",
-    });
+    try {
+      await sendToConversation(cid, user.uid, {
+        type: "product",
+        productName: product.productName || product.name || "",
+        brand: product.brand || "",
+        productImage: product.adminImage || product.productImage || product.image || "",
+        poreScore: liveScore ?? product.poreScore ?? null,
+        hasScore: true,
+        ingredients: ing,
+        buyUrl: product.buyUrl || "",
+        senderName: profile?.displayName || user.displayName || "",
+        senderPhoto: profile?.photoURL || user.photoURL || "",
+      });
+    } catch(e) {
+      console.error("sendProduct failed:", e);
+      alert("Couldn't share product: " + (e?.message || "unknown error"));
+    }
   }
 
   return (
