@@ -4797,73 +4797,88 @@ const topImage = getProductImage(topLive) || topProduct.productImage || topProdu
 const topBrand = topLive?.brand || topProduct?.brand || "";
 const topScore = topLive?.poreScore ?? topProduct?.poreScore ?? 0;
 return (
-  <div style={{marginBottom:"1.25rem"}}>
-    {/* Editorial kicker — quiet section heading in the brand serif */}
+  <div style={{marginBottom:"1.75rem"}}>
+    {/* Header — same pattern as "What We're Loving" / Founder Picks */}
     <div style={{padding:"0 1rem",marginBottom:"0.85rem"}}>
-      <div style={{fontSize:"0.6rem",color:T.textLight,fontFamily:"'Inter',sans-serif",letterSpacing:"0.18em",textTransform:"uppercase",marginBottom:"0.2rem"}}>This week on Ralli</div>
-      <div style={{fontSize:"1.5rem",color:T.navy,fontFamily:"'Cormorant Garamond', serif",fontStyle:"italic",fontWeight:"500",letterSpacing:"-0.01em",lineHeight:1.1}}>What people are checking</div>
+      <div style={{display:"flex",alignItems:"center",gap:"0.4rem",marginBottom:"2px"}}>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill={T.navy}><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+        <span style={{fontSize:"0.62rem",letterSpacing:"0.1em",textTransform:"uppercase",color:T.navy,fontWeight:"700",fontFamily:"'Inter',sans-serif"}}>Trending</span>
+      </div>
+      <div style={{fontSize:"0.72rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>What people are checking this week</div>
     </div>
 
-    {/* Hero — top product as an editorial feature card */}
+    {/* Hero card — top product */}
     <button onClick={()=>openProductFromPost(topProduct)}
-      style={{width:"calc(100% - 2rem)",margin:"0 1rem 0.75rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"1rem",cursor:"pointer",textAlign:"left",overflow:"hidden",display:"flex",gap:"1rem",alignItems:"flex-start",transition:"transform 0.15s,border-color 0.15s"}}
-      onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.borderColor=T.navy+"33";}}
-      onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.borderColor=T.border;}}>
-      {/* Product image — square, restrained */}
-      <div style={{width:78,height:78,flexShrink:0,background:T.surfaceAlt,borderRadius:"0.6rem",overflow:"hidden"}}>
+      style={{width:"calc(100% - 2rem)",margin:"0 1rem 0.75rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"0.85rem",cursor:"pointer",textAlign:"left",overflow:"hidden",display:"flex",gap:"0.85rem",alignItems:"center",transition:"all 0.18s"}}
+      onMouseEnter={e=>{e.currentTarget.style.borderColor=T.navy+"55";e.currentTarget.style.boxShadow=`0 6px 20px ${T.navy}15`;e.currentTarget.style.transform="translateY(-1px)";}}
+      onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.boxShadow="none";e.currentTarget.style.transform="none";}}>
+      {/* Product image */}
+      <div style={{width:78,height:78,flexShrink:0,background:T.surfaceAlt,borderRadius:"0.65rem",overflow:"hidden",position:"relative"}}>
         <ProductImage src={topImage||null} name={topProduct.productName} brand={topBrand} barcode={topProduct.barcode||""} size="full"/>
+        {/* Pore score badge — same style as Founder Picks cards */}
+        {topProduct.ingredients && topProduct.ingredients.trim().length >= 10 && topScore > 0 && (() => {
+          const ps = poreStyle(topScore);
+          return (
+            <div style={{position:"absolute",top:"6px",left:"6px",background:ps.color,borderRadius:"0.4rem",padding:"2px 7px",display:"flex",alignItems:"center",gap:"3px"}}>
+              <span style={{fontSize:"0.6rem",fontWeight:"700",color:"#fff"}}>{topScore}/5</span>
+            </div>
+          );
+        })()}
       </div>
       {/* Info */}
-      <div style={{flex:1,minWidth:0,paddingTop:"0.1rem"}}>
-        <div style={{fontSize:"0.58rem",color:T.textLight,marginBottom:"0.2rem",textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"'Inter',sans-serif"}}>{topBrand}</div>
-        <div style={{fontSize:"0.95rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif",lineHeight:1.25,letterSpacing:"-0.01em",marginBottom:"0.5rem",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{getProductDisplayName({productName: topProduct.productName, brand: topBrand})}</div>
-        {/* Single editorial signal — pore score badge with a small inline community line */}
-        {(()=>{const ps=poreStyle(topScore);return(
-          <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
-            <div style={{display:"inline-flex",alignItems:"center",gap:"0.3rem",padding:"0.18rem 0.5rem",borderRadius:"999px",background:ps.bg,border:`0.5px solid ${ps.color}33`}}>
-              <div style={{width:6,height:6,borderRadius:"50%",background:ps.color}}/>
-              <span style={{fontSize:"0.65rem",fontWeight:"700",color:ps.color,fontFamily:"'Inter',sans-serif"}}>{ps.label}</span>
-            </div>
-            {topProduct.avgCommunity && (
-              <span style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>
-                Community {(topProduct.avgCommunity/2).toFixed(1)}
-              </span>
-            )}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.2rem",fontFamily:"'Inter',sans-serif"}}>{topBrand}</div>
+        <div style={{fontSize:"0.92rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif",lineHeight:1.25,letterSpacing:"-0.01em",marginBottom:"0.4rem",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{getProductDisplayName({productName: topProduct.productName, brand: topBrand})}</div>
+        {/* Community signal — single line */}
+        {(topProduct.lovedCount > 0 || topProduct.avgCommunity || topProduct.scanCount > 1) && (
+          <div style={{fontSize:"0.66rem",color:T.textMid,fontFamily:"'Inter',sans-serif",fontWeight:"500"}}>
+            {topProduct.lovedCount > 0
+              ? `Loved by ${topProduct.lovedCount}`
+              : topProduct.avgCommunity
+                ? `Community ${(topProduct.avgCommunity/2).toFixed(1)}`
+                : `${topProduct.scanCount} checks this week`}
           </div>
-        );})()}
+        )}
       </div>
     </button>
 
-    {/* Other notable products — minimal grid row, no rank badges, no fire emoji */}
+    {/* Horizontal scroll of others — small uniform cards */}
     {rest.length>0&&(
-      <div style={{display:"flex",gap:"0.65rem",overflowX:"auto",paddingLeft:"1rem",paddingRight:"1rem",paddingBottom:"0.5rem",scrollbarWidth:"none",WebkitOverflowScrolling:"touch"}}>
+      <div style={{display:"flex",gap:"0.6rem",overflowX:"auto",paddingLeft:"1rem",paddingRight:"1rem",paddingBottom:"0.5rem",scrollbarWidth:"none",WebkitOverflowScrolling:"touch"}}>
         {rest.map((p,i)=>{
           // Canonical lookup so the rest cards match the modal/admin.
           const liveP = productCache.get(p.id) || productCache.get(p.productName) || p;
           const liveImg = getProductImage(liveP) || p.productImage || p.image || null;
           const liveBr = liveP.brand || p.brand || "";
           const liveSc = liveP.poreScore ?? p.poreScore ?? 0;
-          const liveBadge = poreStyle(liveSc);
+          const hasIng = (liveP.ingredients || p.ingredients || "").trim().length >= 10;
           return (
             <button key={p.productName+i} onClick={()=>openProductFromPost(p)}
-              style={{flexShrink:0,width:"118px",background:T.surface,borderRadius:"0.75rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",display:"flex",flexDirection:"column",transition:"transform 0.15s,border-color 0.15s"}}
-              onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.borderColor=T.navy+"33";}}
-              onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.borderColor=T.border;}}>
+              style={{flexShrink:0,width:"110px",background:T.surface,borderRadius:"0.85rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",display:"flex",flexDirection:"column",transition:"all 0.18s"}}
+              onMouseEnter={e=>{e.currentTarget.style.borderColor=T.navy+"55";e.currentTarget.style.boxShadow=`0 4px 14px ${T.navy}12`;e.currentTarget.style.transform="translateY(-2px)";}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.boxShadow="none";e.currentTarget.style.transform="none";}}>
               <div style={{width:"100%",aspectRatio:"1/1",background:T.surfaceAlt,position:"relative",overflow:"hidden"}}>
                 <ProductImage src={liveImg} name={p.productName} brand={liveBr} barcode={p.barcode||""} size="full"/>
-                {/* Tiny score dot in corner — no rank circle, no fire */}
-                <div style={{position:"absolute",top:"6px",right:"6px",width:"14px",height:"14px",borderRadius:"50%",background:liveBadge.color,border:"1.5px solid #fff",boxShadow:"0 1px 3px rgba(0,0,0,0.15)"}}/>
+                {/* Pore score badge — same style as hero, top-left */}
+                {hasIng && liveSc > 0 && (() => {
+                  const ps = poreStyle(liveSc);
+                  return (
+                    <div style={{position:"absolute",top:"6px",left:"6px",background:ps.color,borderRadius:"0.35rem",padding:"1px 5px"}}>
+                      <span style={{fontSize:"0.55rem",fontWeight:"700",color:"#fff"}}>{liveSc}/5</span>
+                    </div>
+                  );
+                })()}
               </div>
-              <div style={{padding:"0.5rem 0.55rem 0.6rem",flex:1,display:"flex",flexDirection:"column",gap:"0.18rem"}}>
-                <div style={{fontSize:"0.54rem",color:T.textLight,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textTransform:"uppercase",letterSpacing:"0.08em"}}>{liveBr}</div>
-                <div style={{fontSize:"0.7rem",fontWeight:"600",color:T.navy,fontFamily:"'Inter',sans-serif",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",lineHeight:1.25,letterSpacing:"-0.005em"}}>{getProductDisplayName({productName: p.productName, brand: liveBr})}</div>
+              <div style={{padding:"0.45rem 0.55rem 0.6rem",flex:1,display:"flex",flexDirection:"column",gap:"0.15rem"}}>
+                <div style={{fontSize:"0.54rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontFamily:"'Inter',sans-serif"}}>{liveBr}</div>
+                <div style={{fontSize:"0.7rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",lineHeight:1.25,letterSpacing:"-0.005em"}}>{getProductDisplayName({productName: p.productName, brand: liveBr})}</div>
               </div>
             </button>
           );
         })}
       </div>
     )}
-    <div style={{margin:"1rem 1rem 0",height:"1px",background:T.border}}/>
+    <div style={{margin:"0.75rem 1rem 0",height:"1px",background:T.border}}/>
   </div>
 );
 }
