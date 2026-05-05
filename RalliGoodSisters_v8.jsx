@@ -4813,7 +4813,7 @@ return (
       onMouseEnter={e=>{e.currentTarget.style.borderColor=T.navy+"55";e.currentTarget.style.boxShadow=`0 6px 20px ${T.navy}15`;e.currentTarget.style.transform="translateY(-1px)";}}
       onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.boxShadow="none";e.currentTarget.style.transform="none";}}>
       {/* Product image */}
-      <div style={{width:78,height:78,flexShrink:0,background:T.surfaceAlt,borderRadius:"0.65rem",overflow:"hidden",position:"relative"}}>
+      <div style={{width:78,height:78,flexShrink:0,background:"#ffffff",borderRadius:"0.65rem",overflow:"hidden",position:"relative"}}>
         <ProductImage src={topImage||null} name={topProduct.productName} brand={topBrand} barcode={topProduct.barcode||""} size="full"/>
         {/* Pore score badge — same style as Founder Picks cards */}
         {topProduct.ingredients && topProduct.ingredients.trim().length >= 10 && topScore > 0 && (() => {
@@ -4857,7 +4857,7 @@ return (
               style={{flexShrink:0,width:"110px",background:T.surface,borderRadius:"0.85rem",border:`1px solid ${T.border}`,padding:0,cursor:"pointer",textAlign:"left",overflow:"hidden",display:"flex",flexDirection:"column",transition:"all 0.18s"}}
               onMouseEnter={e=>{e.currentTarget.style.borderColor=T.navy+"55";e.currentTarget.style.boxShadow=`0 4px 14px ${T.navy}12`;e.currentTarget.style.transform="translateY(-2px)";}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.boxShadow="none";e.currentTarget.style.transform="none";}}>
-              <div style={{width:"100%",aspectRatio:"1/1",background:T.surfaceAlt,position:"relative",overflow:"hidden"}}>
+              <div style={{width:"100%",aspectRatio:"1/1",background:"#ffffff",position:"relative",overflow:"hidden"}}>
                 <ProductImage src={liveImg} name={p.productName} brand={liveBr} barcode={p.barcode||""} size="full"/>
                 {/* Pore score badge — same style as hero, top-left */}
                 {hasIng && liveSc > 0 && (() => {
