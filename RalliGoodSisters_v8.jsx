@@ -3619,15 +3619,7 @@ function WelcomeBackScreen({ user, profile, onDismiss }) {
     return () => { cancelled = true; };
   }, [user?.uid, profile?.following]);
 
-  // Auto-dismiss after 3.5s, but only after stats have loaded (so the user actually sees them)
-  useEffect(() => {
-    if (!stats) return;
-    const t = setTimeout(() => {
-      setVisible(false);
-      setTimeout(onDismiss, 400); // wait for fade-out
-    }, 3500);
-    return () => clearTimeout(t);
-  }, [stats, onDismiss]);
+  // No auto-dismiss — user must tap to enter the app
 
   const handleTap = () => {
     setVisible(false);
@@ -3651,10 +3643,12 @@ function WelcomeBackScreen({ user, profile, onDismiss }) {
       <style>{`
         @keyframes wbFadeIn  { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes wbFadeOut { from { opacity: 1; } to { opacity: 0; } }
+        @keyframes wbPulse   { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.8; } }
         .wb-screen { animation: ${visible ? "wbFadeIn 0.6s ease-out both" : "wbFadeOut 0.4s ease-in both"}; }
         .wb-display-line { animation: wbFadeIn 0.7s ease-out 0.15s both; }
         .wb-italic-line  { animation: wbFadeIn 0.7s ease-out 0.35s both; }
         .wb-stats-line   { animation: wbFadeIn 0.7s ease-out 0.6s both; }
+        .wb-tap-cue      { animation: wbFadeIn 0.7s ease-out 0.9s both, wbPulse 2.4s ease-in-out 1.6s infinite; }
       `}</style>
       <div
         className="wb-screen"
@@ -3719,6 +3713,19 @@ function WelcomeBackScreen({ user, profile, onDismiss }) {
 
         {/* Bottom anchor: hairline + wordmark + dots */}
         <div style={{ paddingTop: "1.5rem", borderTop: `1px solid ${T.border}` }}>
+          {/* Subtle tap-to-continue cue */}
+          <div className="wb-tap-cue" style={{
+            fontSize: "0.62rem",
+            letterSpacing: "0.22em",
+            fontWeight: 500,
+            color: T.textLight,
+            textTransform: "uppercase",
+            textAlign: "center",
+            marginBottom: "1.25rem",
+            opacity: 0.7
+          }}>
+            Tap to continue
+          </div>
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
             <div>
               <div style={{
