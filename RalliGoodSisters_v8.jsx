@@ -3094,20 +3094,32 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
             <div style={{fontSize:"0.58rem",color:T.textLight,marginBottom:"0.5rem",fontFamily:"'Inter',sans-serif"}}>Tap any ingredient to learn more</div>
 
             <div style={{display:"flex",flexWrap:"wrap",gap:"0.22rem",marginBottom:"0.4rem"}}>
-              {product.ingredients.split(",").map((ingRaw,i)=>{
-                const trimmed=ingRaw.trim();
-                if(!trimmed)return null;
-                const key=trimmed.toLowerCase().replace(/\s*\(.*?\)/g,"").trim();
-                const dbEntry=INGDB[key]||(()=>{const found=Object.entries(INGDB).find(([k,v])=>{const allNames=[k,...(v.aliases||[])];return allNames.some(n=>n&&n.toLowerCase()===key);});return found?found[1]:null;})();
-                const isFlagged=dbEntry&&(dbEntry.score>=1||dbEntry.irritant);
-                const isSelected=selectedIngredient?.name===trimmed;
-                return(
-                  <button key={i} onClick={()=>setSelectedIngredient(isSelected?null:{name:trimmed,irritant:dbEntry?.irritant,score:dbEntry?.score??0})}
-                    style={{fontSize:"0.6rem",padding:"0.18rem 0.55rem",borderRadius:20,cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.12s",border:isSelected?`1.5px solid ${T.navy}`:"none",background:isSelected?(isFlagged?"#FAECE7":T.accentSoft):isFlagged?"#FAECE7":T.surfaceAlt,color:isFlagged?"#712B13":isSelected?T.navy:T.textMid,fontWeight:isFlagged?"600":"400",outline:"none"}}>
-                    {trimmed}{isFlagged?" ⚠":""}
-                  </button>
-                );
-              })}
+              {(() => {
+                // Build the same longest-first lookup that analyzeIngredients uses,
+                // so the pills agree with the header "X flagged" count.
+                const lookup = [];
+                for (const [n, d] of Object.entries(INGDB)) {
+                  const all = [n, ...(d.aliases || [])];
+                  for (const v of all) if (v) lookup.push({ pattern: v.toLowerCase(), data: d });
+                }
+                lookup.sort((a, b) => b.pattern.length - a.pattern.length);
+                return product.ingredients.split(",").map((ingRaw,i)=>{
+                  const trimmed=ingRaw.trim();
+                  if(!trimmed)return null;
+                  const lowered = trimmed.toLowerCase();
+                  // Substring match — same logic as analyzeIngredients
+                  const hit = lookup.find(entry => lowered.includes(entry.pattern));
+                  const dbEntry = hit ? hit.data : null;
+                  const isFlagged=dbEntry&&(dbEntry.score>=1||dbEntry.irritant);
+                  const isSelected=selectedIngredient?.name===trimmed;
+                  return(
+                    <button key={i} onClick={()=>setSelectedIngredient(isSelected?null:{name:trimmed,irritant:dbEntry?.irritant,score:dbEntry?.score??0})}
+                      style={{fontSize:"0.6rem",padding:"0.18rem 0.55rem",borderRadius:20,cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.12s",border:isSelected?`1.5px solid ${T.navy}`:"none",background:isSelected?(isFlagged?"#FAECE7":T.accentSoft):isFlagged?"#FAECE7":T.surfaceAlt,color:isFlagged?"#712B13":isSelected?T.navy:T.textMid,fontWeight:isFlagged?"600":"400",outline:"none"}}>
+                      {trimmed}{isFlagged?" ⚠":""}
+                    </button>
+                  );
+                });
+              })()}
             </div>
             <div style={{fontSize:"0.56rem",color:T.textLight,fontStyle:"italic",fontFamily:"'Inter',sans-serif"}}>⚠ flagged ingredients may clog pores or irritate</div>
 
