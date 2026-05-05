@@ -9572,7 +9572,7 @@ const ADMIN_EMAILS = ["mckenzierichard77@gmail.com", "morganrichard777@gmail.com
 // them into "VA Mode" (focused queue, power tools tucked away).
 // Add the VA's email here once you've hired her.
 const VA_EMAILS = [
-  // "your-va@example.com",
+  "banilaroselyn0628@gmail.com",
 ];
 function isAdmin(user) {
   return ADMIN_UIDS.includes(user?.uid) || ADMIN_EMAILS.includes(user?.email) || VA_EMAILS.includes(user?.email);
