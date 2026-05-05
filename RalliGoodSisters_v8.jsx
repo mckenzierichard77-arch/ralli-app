@@ -3531,6 +3531,236 @@ function OnboardingFlow({user, profile, onComplete}) {
   );
 }
 
+/* ============================================================================
+   WelcomeBackScreen — editorial returning-user welcome
+   Shown once per session for returning users (not first-time / onboarding flow).
+   Pulls real first name + computes friend activity + days-since-last-scan stats.
+   ============================================================================ */
+function WelcomeBackScreen({ user, profile, onDismiss }) {
+  const [stats, setStats] = useState(null);
+  const [visible, setVisible] = useState(true);
+
+  // Greeting based on local time
+  const greeting = React.useMemo(() => {
+    const h = new Date().getHours();
+    if (h < 5)  return "Up late";
+    if (h < 12) return "Good morning";
+    if (h < 17) return "Good afternoon";
+    if (h < 21) return "Good evening";
+    return "Good night";
+  }, []);
+
+  const firstName = React.useMemo(() => {
+    const dn = profile?.displayName || user?.displayName || user?.email?.split("@")[0] || "";
+    return (dn.split(" ")[0] || "you").trim();
+  }, [profile, user]);
+
+  // Compute live stats from Firestore
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const following = Array.isArray(profile?.following) ? profile.following.slice(0, 30) : [];
+        const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+        // 1) Count friends who posted in the last 7 days
+        let activeFriendCount = 0;
+        if (following.length > 0) {
+          // Firestore "in" supports up to 10; chunk if needed
+          const chunks = [];
+          for (let i = 0; i < following.length; i += 10) chunks.push(following.slice(i, i + 10));
+          const seen = new Set();
+          for (const chunk of chunks) {
+            try {
+              const snap = await getDocs(query(
+                collection(db, "posts"),
+                where("uid", "in", chunk),
+                orderBy("createdAt", "desc"),
+                limit(50)
+              ));
+              snap.forEach(d => {
+                const data = d.data();
+                const ts = data.createdAt?.seconds ? data.createdAt.seconds * 1000 : data.createdAt;
+                if (ts && ts > sevenDaysAgo && data.uid) seen.add(data.uid);
+              });
+            } catch {}
+          }
+          activeFriendCount = seen.size;
+        }
+
+        // 2) Find user's most recent serum-category scan
+        let serumDays = null;
+        try {
+          const snap = await getDocs(query(
+            collection(db, "posts"),
+            where("uid", "==", user.uid),
+            orderBy("createdAt", "desc"),
+            limit(40)
+          ));
+          for (const d of snap.docs) {
+            const data = d.data();
+            const cat = (data.category || "").toLowerCase();
+            const name = (data.productName || "").toLowerCase();
+            if (cat.includes("serum") || name.includes("serum")) {
+              const ts = data.createdAt?.seconds ? data.createdAt.seconds * 1000 : data.createdAt;
+              if (ts) {
+                serumDays = Math.max(1, Math.floor((Date.now() - ts) / (24 * 60 * 60 * 1000)));
+                break;
+              }
+            }
+          }
+        } catch {}
+
+        if (!cancelled) setStats({ activeFriendCount, serumDays });
+      } catch {
+        if (!cancelled) setStats({ activeFriendCount: 0, serumDays: null });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.uid, profile?.following]);
+
+  // Auto-dismiss after 3.5s, but only after stats have loaded (so the user actually sees them)
+  useEffect(() => {
+    if (!stats) return;
+    const t = setTimeout(() => {
+      setVisible(false);
+      setTimeout(onDismiss, 400); // wait for fade-out
+    }, 3500);
+    return () => clearTimeout(t);
+  }, [stats, onDismiss]);
+
+  const handleTap = () => {
+    setVisible(false);
+    setTimeout(onDismiss, 250);
+  };
+
+  // Build the editorial copy line from real stats with graceful fallbacks
+  const copyLine = React.useMemo(() => {
+    if (!stats) return "Loading your week…";
+    const { activeFriendCount, serumDays } = stats;
+    const friendPart =
+      activeFriendCount === 0 ? "Your community is quiet this week." :
+      activeFriendCount === 1 ? "One friend added new products this week." :
+      `${numberToWord(activeFriendCount)} friends added new products this week.`;
+    const serumPart = serumDays != null ? ` Your serum is at ${serumDays} day${serumDays === 1 ? "" : "s"}.` : "";
+    return friendPart + serumPart;
+  }, [stats]);
+
+  return (
+    <>
+      <style>{`
+        @keyframes wbFadeIn  { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes wbFadeOut { from { opacity: 1; } to { opacity: 0; } }
+        .wb-screen { animation: ${visible ? "wbFadeIn 0.6s ease-out both" : "wbFadeOut 0.4s ease-in both"}; }
+        .wb-display-line { animation: wbFadeIn 0.7s ease-out 0.15s both; }
+        .wb-italic-line  { animation: wbFadeIn 0.7s ease-out 0.35s both; }
+        .wb-stats-line   { animation: wbFadeIn 0.7s ease-out 0.6s both; }
+      `}</style>
+      <div
+        className="wb-screen"
+        onClick={handleTap}
+        style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: T.bg,
+          zIndex: 9500,
+          display: "flex", flexDirection: "column",
+          padding: "3.5rem 1.75rem 2rem",
+          cursor: "pointer",
+          fontFamily: "'Inter', sans-serif"
+        }}
+      >
+        {/* Eyebrow */}
+        <div style={{
+          fontSize: "0.7rem",
+          letterSpacing: "0.22em",
+          fontWeight: 600,
+          color: T.textLight,
+          textTransform: "uppercase",
+          marginTop: "0.5rem"
+        }}>
+          Welcome back
+        </div>
+
+        {/* Centered editorial block */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", maxWidth: "30ch" }}>
+          <div className="wb-display-line" style={{
+            fontFamily: "'Cormorant Garamond', 'Cormorant', serif",
+            fontSize: "2.6rem",
+            fontWeight: 500,
+            color: T.text,
+            lineHeight: 1.05,
+            letterSpacing: "-0.01em"
+          }}>
+            {greeting},
+          </div>
+          <div className="wb-italic-line" style={{
+            fontFamily: "'Cormorant Garamond', 'Cormorant', serif",
+            fontStyle: "italic",
+            fontSize: "2.6rem",
+            fontWeight: 500,
+            color: T.text,
+            lineHeight: 1.05,
+            letterSpacing: "-0.01em",
+            marginTop: "0.1rem"
+          }}>
+            {firstName}.
+          </div>
+          <div className="wb-stats-line" style={{
+            fontSize: "1rem",
+            fontWeight: 400,
+            color: T.textMid,
+            lineHeight: 1.5,
+            marginTop: "1.5rem",
+            maxWidth: "26ch"
+          }}>
+            {copyLine}
+          </div>
+        </div>
+
+        {/* Bottom anchor: hairline + wordmark + dots */}
+        <div style={{ paddingTop: "1.5rem", borderTop: `1px solid ${T.border}` }}>
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
+            <div>
+              <div style={{
+                fontFamily: "'Poppins', sans-serif",
+                fontWeight: 900,
+                fontSize: "1.75rem",
+                color: T.text,
+                lineHeight: 1,
+                letterSpacing: "-0.01em"
+              }}>
+                Ralli
+              </div>
+              <div style={{
+                fontSize: "0.65rem",
+                letterSpacing: "0.22em",
+                fontWeight: 600,
+                color: T.textLight,
+                textTransform: "uppercase",
+                marginTop: "0.4rem"
+              }}>
+                by Goodsisters
+              </div>
+            </div>
+            {/* Pagination dots — purely decorative, mirrors screenshot */}
+            <div style={{ display: "flex", gap: "0.35rem", paddingBottom: "0.25rem" }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.text }}/>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.border }}/>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.border }}/>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// Small helper: 2 -> "Two", 3 -> "Three" up to 10, then numeric.
+function numberToWord(n) {
+  const words = ["Zero","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten"];
+  return n >= 0 && n <= 10 ? words[n] : String(n);
+}
+
 function AuthPage() {
   const [mode, setMode]         = useState("login");
   const [name, setName]         = useState("");
@@ -16671,6 +16901,7 @@ function AppInner() {
   const chatCloseRef = React.useRef(null); // MessagesPage registers its close fn here
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showOurStory, setShowOurStory] = useState(false);
+  const [showWelcomeBack, setShowWelcomeBack] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [msgBanner, setMsgBanner] = useState(null); // {senderName, senderPhoto, text, uid}
@@ -16730,6 +16961,16 @@ function AppInner() {
         const p=await getOrCreateProfile(u);
         setUser(u); setProfile(p);
         if (p.isNew) setShowOnboarding(true);
+        else {
+          // Returning user — show editorial WelcomeBack screen once per session
+          try {
+            const seenKey = `ralli_welcome_seen_${u.uid}`;
+            if (!sessionStorage.getItem(seenKey)) {
+              sessionStorage.setItem(seenKey, "1");
+              setShowWelcomeBack(true);
+            }
+          } catch {}
+        }
         // Show Our Story popup for first 5 logins
         const key = `goodsistersStoryCount_${u.uid}`;
         const count = parseInt(localStorage.getItem(key)||"0");
@@ -16781,6 +17022,15 @@ function AppInner() {
       }}
     /></>
   );
+
+  // Editorial welcome-back overlay for returning users (renders above main app)
+  const welcomeBackOverlay = showWelcomeBack ? (
+    <WelcomeBackScreen
+      user={user}
+      profile={profile}
+      onDismiss={()=>setShowWelcomeBack(false)}
+    />
+  ) : null;
 
   return (
     <><style>{GS}</style>
@@ -16886,6 +17136,8 @@ function AppInner() {
         </div>
       )}
       <DebugPanel user={user} hidden={chatOpen}/>
-    </div></>
+    </div>
+    {welcomeBackOverlay}
+    </>
   );
 }
