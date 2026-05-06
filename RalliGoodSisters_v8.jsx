@@ -550,7 +550,7 @@ const INGDB = {
   "cocoa butter":                {score:4, note:"Thick occlusive butter — high pore-clogging risk",                           aliases:["theobroma cacao seed butter","cacao butter"]},
   "mango butter":                {score:2, note:"Rich butter — moderate pore-clogging risk",                                  aliases:["mangifera indica seed butter"]},
   "lanolin":                     {score:3, note:"Sheep wool wax — derivatives vary from 0 to 4; default to moderate risk",                          aliases:["wool wax","wool grease","lanolin alcohol","wool fat"]},
-  "triethanolamine":             {score:2, note:"pH adjuster — moderate clogging risk, also a potential irritant",            aliases:["TEA","trolamine"]},
+  "triethanolamine":             {score:2, note:"pH adjuster — moderate clogging risk, also a potential irritant",            aliases:["trolamine"]},
 
   // ── Added April 2026 — common formula ingredients previously missing from DB ──
   // These were getting silently ignored, which inflated scores by shrinking the
@@ -1033,6 +1033,36 @@ function shareProduct(productName, brand) {
   }
 }
 
+// Shared ingredient-pattern matcher. Used by analyzeIngredients (the score
+// computation pipeline) AND by the product-modal pill renderer, so both
+// systems agree on what's flagged.
+//
+// Matching rules:
+//   - Long patterns (>=5 chars): plain substring match. Distinctive enough
+//     that false positives are unlikely. Example: "camellia sinensis leaf
+//     extract" matches inside any token that contains those words contiguously.
+//   - Short patterns (<=4 chars, typically INCI abbreviations like TEA, PG,
+//     BHA, MAP): match only when the token IS the pattern, OR the pattern
+//     appears as a hyphen-bounded chemical-notation prefix/suffix
+//     (TEA-stearate, sodium-PG, cocoyl-TEA-glutamate, etc.).
+//
+// The short-pattern rule prevents bugs like "green tea" being flagged because
+// "tea" is an alias for triethanolamine, or "propylene glycol" being flagged
+// because "pg" is its own abbreviation alias.
+function matchIngredientPattern(token, pattern) {
+  if (!token || !pattern) return false;
+  const t = token.toLowerCase();
+  const p = pattern.toLowerCase();
+  if (p.length >= 5) {
+    return t.includes(p);
+  }
+  if (t === p) return true;
+  // Escape regex special chars in the pattern, then match as a hyphen-bounded segment.
+  const escaped = p.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const re = new RegExp("(^" + escaped + "-)|(-" + escaped + "$)|(-" + escaped + "-)", "i");
+  return re.test(t);
+}
+
 function analyzeIngredients(text) {
   const lower = (text || "").toLowerCase();
   // Split the INCI list into ordered tokens so we can use position as a concentration proxy.
@@ -1058,7 +1088,7 @@ function analyzeIngredients(text) {
   tokens.forEach((token, idx) => {
     for (const entry of lookup) {
       if (seenCanonical.has(entry.canonical)) continue;
-      if (token.includes(entry.pattern)) {
+      if (matchIngredientPattern(token, entry.pattern)) {
         seenCanonical.add(entry.canonical);
         const display = token === entry.pattern ? entry.canonical : `${entry.canonical} (${token})`;
         found.push({ name: display, position: idx + 1, ...entry.data });
@@ -3096,7 +3126,8 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
             <div style={{display:"flex",flexWrap:"wrap",gap:"0.22rem",marginBottom:"0.4rem"}}>
               {(() => {
                 // Build the same longest-first lookup that analyzeIngredients uses,
-                // so the pills agree with the header "X flagged" count.
+                // and use the SHARED matchIngredientPattern helper so the pills
+                // agree with the header "X flagged" count.
                 const lookup = [];
                 for (const [n, d] of Object.entries(INGDB)) {
                   const all = [n, ...(d.aliases || [])];
@@ -3107,8 +3138,8 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
                   const trimmed=ingRaw.trim();
                   if(!trimmed)return null;
                   const lowered = trimmed.toLowerCase();
-                  // Substring match — same logic as analyzeIngredients
-                  const hit = lookup.find(entry => lowered.includes(entry.pattern));
+                  // Use the shared matcher (same logic as analyzeIngredients).
+                  const hit = lookup.find(entry => matchIngredientPattern(lowered, entry.pattern));
                   const dbEntry = hit ? hit.data : null;
                   const isFlagged=dbEntry&&(dbEntry.score>=1||dbEntry.irritant);
                   const isSelected=selectedIngredient?.name===trimmed;
