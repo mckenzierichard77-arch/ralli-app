@@ -146,7 +146,7 @@ const INGDB = {
   // irritant covers: fragrance allergens, drying alcohols, harsh surfactants, essential oils, sensitizers
 
   // -- Highly pore-clogging (4-5) ------------------------------
-  "coconut oil":                 {score:4, note:"Heavy oil that clogs pores easily",                aliases:["cocos nucifera oil","cocos nucifera (coconut) oil","cocos nucifera","cocos nucifera (coconut)","coconut"]},
+  "coconut oil":                 {score:4, note:"Heavy oil that clogs pores easily",                aliases:["cocos nucifera oil","cocos nucifera (coconut) oil","cocos nucifera seed oil"]},
   "wheat germ oil":              {score:5, note:"Very likely to cause breakouts",                   aliases:["triticum vulgare germ oil"]},
   "palm oil":                    {score:4, note:"Clogs pores and triggers breakouts",               aliases:["elaeis guineensis oil","palm kernel oil"]},
   "isopropyl myristate":         {score:5, note:"One of the most pore-clogging ingredients known",  aliases:["IPM"]},
@@ -209,7 +209,7 @@ const INGDB = {
   "denatured alcohol":           {score:0, irritant:true, note:"Drying alcohol that strips the skin barrier and can cause irritation",               aliases:["alcohol denat","alcohol denat.","sd alcohol","sd alcohol 40","sd alcohol 40-b"]},
   "alcohol denat":               {score:0, irritant:true, note:"Drying alcohol — disrupts skin barrier and causes dryness",                          aliases:["denatured alcohol","alcohol denat."]},
   "isopropyl alcohol":           {score:0, irritant:true, note:"Harsh drying alcohol — can cause irritation and barrier damage",                     aliases:["isopropanol","rubbing alcohol"]},
-  "ethanol":                     {score:0, irritant:true, note:"Drying alcohol — in high amounts can irritate and dry out skin",                     aliases:["alcohol","grain alcohol"]},
+  "ethanol":                     {score:0, irritant:true, note:"Drying alcohol — in high amounts can irritate and dry out skin",                     aliases:["grain alcohol"]},
   "linalool":                    {score:0, irritant:true, note:"Floral fragrance component — EU-listed allergen, can cause reactions",               aliases:[]},
   "limonene":                    {score:0, irritant:true, note:"Citrus fragrance component — EU-listed allergen",                                    aliases:["d-limonene"]},
   "geraniol":                    {score:0, irritant:true, note:"Rose fragrance component — EU-listed allergen",                                      aliases:[]},
@@ -456,8 +456,7 @@ const INGDB = {
   "mink oil":                    {score:3, note:"Animal-derived oil — moderate pore-clogging risk",                aliases:[]},
   "emu oil":                     {score:2, note:"Animal-derived oil — moderate pore-clogging risk",                aliases:[]},
   "shark liver oil":             {score:2, note:"High squalene content — moderate clogging risk",                  aliases:[]},
-  "lard":                        {score:3, note:"Pork fat — moderate pore-clogging risk",                          aliases:["suet","tallow"]},
-  "tallow":                      {score:3, note:"Animal fat — moderate pore-clogging",                             aliases:[]},
+  "lard":                        {score:3, note:"Pork fat — moderate pore-clogging risk",                          aliases:["suet","beef tallow"]},
   "hydrogenated coconut oil":    {score:4, note:"Solidified coconut oil — clogs pores",                            aliases:[]},
   "hydrogenated vegetable oil":  {score:3, note:"Processed plant oil — moderate clogging risk",                    aliases:[]},
   "hydrogenated palm oil":       {score:4, note:"Hydrogenated palm — high pore-clogging risk",                     aliases:[]},
@@ -9846,9 +9845,9 @@ const ADMIN_UIDS = []; // add your UID here once you see it in Profile
 const ADMIN_EMAILS = ["mckenzierichard77@gmail.com", "morganrichard777@gmail.com"];
 // VA / contractor emails — get full admin access but the dashboard defaults
 // them into "VA Mode" (focused queue, power tools tucked away).
-// Add a VA's email here when onboarding a new contractor.
+// Add the VA's email here once you've hired her.
 const VA_EMAILS = [
-  // No active VAs.
+  "banilaroselyn0628@gmail.com",
 ];
 function isAdmin(user) {
   return ADMIN_UIDS.includes(user?.uid) || ADMIN_EMAILS.includes(user?.email) || VA_EMAILS.includes(user?.email);
@@ -12245,7 +12244,460 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
 function AdminManageProducts(props) { return <AdminProductHub/>; }
 
 
+/* ============================================================================
+   ENRICHMENT BOT — batch-mode product data finder with human review queue.
+   Runs in browser, processes products sequentially, queues results for review.
+   Bot NEVER overwrites data. Admin picks the right image/ingredients to save.
+   ============================================================================ */
 
+function validateImageCandidate(url, timeoutMs = 6000) {
+  return new Promise(resolve => {
+    if (!url || typeof url !== "string") { resolve(null); return; }
+    const img = new Image();
+    const timer = setTimeout(() => { img.src = ""; resolve(null); }, timeoutMs);
+    img.onload = () => {
+      clearTimeout(timer);
+      if (img.naturalWidth < 200 || img.naturalHeight < 200) { resolve(null); return; }
+      resolve({ ok: true, width: img.naturalWidth, height: img.naturalHeight, url });
+    };
+    img.onerror = () => { clearTimeout(timer); resolve(null); };
+    img.src = url;
+  });
+}
+
+async function botSearchOBF({ barcode, productName, brand }) {
+  const candidates = [];
+  if (barcode) {
+    try {
+      const r = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${barcode}.json`, { signal: AbortSignal.timeout(6000) });
+      if (r.ok) {
+        const d = await r.json();
+        if (d?.product) {
+          const p = d.product;
+          const img = p.image_front_url || p.image_url;
+          const ingredients = p.ingredients_text_en || p.ingredients_text;
+          if (img || ingredients) candidates.push({ source: "OBF (barcode)", imageUrl: img || null, ingredients: ingredients || null });
+        }
+      }
+    } catch {}
+  }
+  try {
+    const q = `${brand || ""} ${productName || ""}`.trim();
+    if (q) {
+      const r = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=5&fields=product_name,brands,code,ingredients_text,ingredients_text_en,image_front_url`, { signal: AbortSignal.timeout(7000) });
+      if (r.ok) {
+        const d = await r.json();
+        for (const p of (d.products || []).slice(0, 3)) {
+          const img = p.image_front_url;
+          const ingredients = p.ingredients_text_en || p.ingredients_text;
+          if (img || ingredients) candidates.push({ source: "OBF (search)", imageUrl: img || null, ingredients: ingredients || null });
+        }
+      }
+    }
+  } catch {}
+  return candidates;
+}
+
+async function botSearchSephora({ productName, brand }) {
+  const candidates = [];
+  try {
+    const q = `${brand || ""} ${productName || ""}`.trim();
+    if (!q) return candidates;
+    const url = `https://www.sephora.com/api/catalog/search?q=${encodeURIComponent(q)}&pageSize=6`;
+    const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+    const r = await fetch(proxied, { signal: AbortSignal.timeout(8000) });
+    if (r.ok) {
+      const d = await r.json();
+      for (const p of (d.products || []).slice(0, 4)) {
+        if (p.heroImage) candidates.push({ source: "Sephora", imageUrl: p.heroImage.startsWith("http") ? p.heroImage : `https://www.sephora.com${p.heroImage}`, ingredients: null });
+      }
+    }
+  } catch {}
+  return candidates;
+}
+
+async function botSearchUlta({ productName, brand }) {
+  const candidates = [];
+  try {
+    const q = `${brand || ""} ${productName || ""}`.trim();
+    if (!q) return candidates;
+    const url = `https://www.ulta.com/api/search?query=${encodeURIComponent(q)}&pageSize=6`;
+    const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+    const r = await fetch(proxied, { signal: AbortSignal.timeout(8000) });
+    if (r.ok) {
+      const d = await r.json();
+      const products = d?.results?.products || d?.products || [];
+      for (const p of products.slice(0, 4)) {
+        if (p.image || p.imageUrl) candidates.push({ source: "ULTA", imageUrl: p.image || p.imageUrl, ingredients: null });
+      }
+    }
+  } catch {}
+  return candidates;
+}
+
+async function botSearchClaude({ productName, brand }) {
+  try {
+    const prompt = `Find the official product page for "${brand || ""} ${productName || ""}".
+Return ONLY a JSON object with these fields, nothing else:
+{
+  "imageUrl": "direct URL to a clean product photo on a white background",
+  "ingredients": "the full INCI ingredient list as a comma-separated string",
+  "officialPageUrl": "the brand's product detail page URL"
+}
+If you cannot find a value, use null. Do not invent ingredients.`;
+    const r = await fetch("/api/anthropic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1500,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+        messages: [{ role: "user", content: prompt }],
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!r.ok) return [];
+    const d = await r.json();
+    const textBlocks = (d.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+    const jsonMatch = textBlocks.match(/\{[\s\S]*?\}/);
+    if (!jsonMatch) return [];
+    let parsed;
+    try { parsed = JSON.parse(jsonMatch[0]); } catch { return []; }
+    if (!parsed.imageUrl && !parsed.ingredients) return [];
+    return [{ source: "Claude (web search)", imageUrl: parsed.imageUrl || null, ingredients: parsed.ingredients || null }];
+  } catch { return []; }
+}
+
+async function botEnrichProduct(product) {
+  const baseQuery = { barcode: product.barcode, productName: product.productName, brand: product.brand };
+  const [obf, sephora, ulta] = await Promise.all([
+    botSearchOBF(baseQuery), botSearchSephora(baseQuery), botSearchUlta(baseQuery),
+  ]);
+  let allCandidates = [...obf, ...sephora, ...ulta];
+  const imageCount = allCandidates.filter(c => c.imageUrl).length;
+  const ingredientCount = allCandidates.filter(c => c.ingredients).length;
+  if (imageCount < 3 || ingredientCount < 1) {
+    const claude = await botSearchClaude(baseQuery);
+    allCandidates = [...allCandidates, ...claude];
+  }
+  const imageValidations = await Promise.all(
+    allCandidates.filter(c => c.imageUrl).map(async c => {
+      const v = await validateImageCandidate(c.imageUrl);
+      if (!v) return null;
+      return { source: c.source, url: c.imageUrl, w: v.width, h: v.height };
+    })
+  );
+  const imageCandidates = imageValidations.filter(Boolean).slice(0, 6);
+  const ingredientCandidates = allCandidates
+    .filter(c => c.ingredients && c.ingredients.length > 40 && c.ingredients.includes(","))
+    .map(c => ({ source: c.source, text: c.ingredients.trim() }))
+    .slice(0, 4);
+  return { imageCandidates, ingredientCandidates };
+}
+
+async function saveEnrichmentJob(productId, payload) {
+  await setDoc(doc(db, "enrichmentJobs", productId), {
+    productId, status: "pending_review", createdAt: serverTimestamp(), ...payload,
+  });
+}
+
+function EnrichmentBot({ onBack }) {
+  const [view, setView] = useState("setup");
+  const [eligibleProducts, setEligibleProducts] = useState([]);
+  const [filterMode, setFilterMode] = useState("missing-image");
+  const [batchSize, setBatchSize] = useState(10);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState({ done: 0, total: 0, current: "" });
+  const [queueCount, setQueueCount] = useState(0);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(query(collection(db, "products"), where("approved", "==", true), limit(500)));
+        const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const filtered = all.filter(p => {
+          const noImage = !p.adminImage && !p.image;
+          const noIng = !p.ingredients || p.ingredients.length < 30;
+          if (filterMode === "missing-image") return noImage;
+          if (filterMode === "missing-ingredients") return noIng;
+          if (filterMode === "missing-either") return noImage || noIng;
+          return true;
+        });
+        filtered.sort((a, b) => (b.scanCount || 0) - (a.scanCount || 0));
+        setEligibleProducts(filtered);
+      } catch (e) { console.error("loading eligible products failed", e); }
+    })();
+  }, [filterMode]);
+
+  useEffect(() => {
+    const q = query(collection(db, "enrichmentJobs"), where("status", "==", "pending_review"));
+    const unsub = onSnapshot(q, snap => setQueueCount(snap.size), () => {});
+    return unsub;
+  }, []);
+
+  async function startBatch() {
+    if (running) return;
+    setRunning(true);
+    const batch = eligibleProducts.slice(0, batchSize);
+    setProgress({ done: 0, total: batch.length, current: "" });
+    for (let i = 0; i < batch.length; i++) {
+      const p = batch[i];
+      setProgress({ done: i, total: batch.length, current: `${p.brand} - ${p.productName}` });
+      try {
+        const result = await botEnrichProduct(p);
+        const status = (result.imageCandidates.length > 0 || result.ingredientCandidates.length > 0) ? "pending_review" : "no_results";
+        await saveEnrichmentJob(p.id, {
+          productName: p.productName, brand: p.brand, scanCount: p.scanCount || 0,
+          currentIngredients: p.ingredients || "", currentImage: p.adminImage || p.image || "",
+          imageCandidates: result.imageCandidates, ingredientCandidates: result.ingredientCandidates,
+          status,
+        });
+      } catch (e) { console.error(`enrichment failed for ${p.id}:`, e); }
+    }
+    setProgress({ done: batch.length, total: batch.length, current: "" });
+    setRunning(false);
+    setEligibleProducts(prev => prev.slice(batchSize));
+  }
+
+  return (
+    <div style={{ maxWidth: "480px", margin: "0 auto", padding: "1rem", fontFamily: "'Inter', sans-serif", paddingBottom: "5rem" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: T.textMid, cursor: "pointer", fontSize: "0.75rem", marginBottom: "0.75rem", padding: 0 }}>&larr; Back</button>
+      <div style={{ marginBottom: "1rem" }}>
+        <div style={{ fontSize: "1.15rem", fontWeight: 700, color: T.text, letterSpacing: "-0.01em" }}>🤖 Enrichment Bot</div>
+        <div style={{ fontSize: "0.7rem", color: T.textLight, marginTop: "0.2rem" }}>Finds product images and ingredients. You approve.</div>
+      </div>
+      <div style={{ display: "flex", gap: "0.3rem", marginBottom: "1rem", background: T.surfaceAlt, padding: "0.25rem", borderRadius: "0.6rem" }}>
+        <button onClick={() => setView("setup")} style={{ flex: 1, padding: "0.5rem", background: view === "setup" ? T.surface : "transparent", border: "none", borderRadius: "0.4rem", fontSize: "0.7rem", fontWeight: view === "setup" ? 600 : 400, color: view === "setup" ? T.text : T.textMid, cursor: "pointer", fontFamily: "'Inter', sans-serif" }}>🔍 Run Bot</button>
+        <button onClick={() => setView("queue")} style={{ flex: 1, padding: "0.5rem", background: view === "queue" ? T.surface : "transparent", border: "none", borderRadius: "0.4rem", fontSize: "0.7rem", fontWeight: view === "queue" ? 600 : 400, color: view === "queue" ? T.text : T.textMid, cursor: "pointer", fontFamily: "'Inter', sans-serif", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem" }}>
+          📋 Review Queue
+          {queueCount > 0 && (<span style={{ background: T.rose, color: "#fff", borderRadius: "999px", padding: "0.1rem 0.4rem", fontSize: "0.6rem", fontWeight: 700 }}>{queueCount}</span>)}
+        </button>
+      </div>
+      {view === "setup" && (
+        <div>
+          <div style={{ marginBottom: "1rem" }}>
+            <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.4rem" }}>What to enrich</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+              {[
+                ["missing-image", "Products missing images"],
+                ["missing-ingredients", "Products missing ingredients"],
+                ["missing-either", "Missing either images OR ingredients"],
+                ["all", "All approved products (re-verify)"],
+              ].map(([id, lbl]) => (
+                <button key={id} onClick={() => setFilterMode(id)} style={{ padding: "0.55rem 0.8rem", background: filterMode === id ? T.iceBlue : T.surface, border: `1px solid ${filterMode === id ? T.navy : T.border}`, borderRadius: "0.5rem", fontSize: "0.78rem", fontWeight: filterMode === id ? 600 : 400, color: T.text, cursor: "pointer", fontFamily: "'Inter', sans-serif", textAlign: "left" }}>{lbl}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginBottom: "1rem" }}>
+            <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.4rem" }}>Batch size</div>
+            <div style={{ display: "flex", gap: "0.3rem" }}>
+              {[5, 10, 20].map(n => (
+                <button key={n} onClick={() => setBatchSize(n)} style={{ flex: 1, padding: "0.5rem", background: batchSize === n ? T.navy : T.surface, color: batchSize === n ? "#fff" : T.text, border: `1px solid ${batchSize === n ? T.navy : T.border}`, borderRadius: "0.5rem", fontSize: "0.8rem", fontWeight: 600, cursor: "pointer", fontFamily: "'Inter', sans-serif" }}>{n}</button>
+              ))}
+            </div>
+            <div style={{ fontSize: "0.65rem", color: T.textLight, marginTop: "0.4rem" }}>{eligibleProducts.length} eligible products. Bot will work through {Math.min(batchSize, eligibleProducts.length)} now.</div>
+          </div>
+          <button onClick={startBatch} disabled={running || eligibleProducts.length === 0} style={{ width: "100%", padding: "0.8rem", background: running || eligibleProducts.length === 0 ? T.textLight : T.navy, color: "#fff", border: "none", borderRadius: "0.6rem", fontSize: "0.85rem", fontWeight: 700, cursor: running || eligibleProducts.length === 0 ? "default" : "pointer", fontFamily: "'Inter', sans-serif" }}>
+            {running ? `Running… ${progress.done}/${progress.total}` : eligibleProducts.length === 0 ? "No eligible products" : `Start enriching ${Math.min(batchSize, eligibleProducts.length)} products`}
+          </button>
+          {running && (
+            <div style={{ marginTop: "1rem", padding: "0.8rem", background: T.surfaceAlt, borderRadius: "0.5rem" }}>
+              <div style={{ fontSize: "0.7rem", color: T.textMid, marginBottom: "0.3rem" }}>Currently processing:</div>
+              <div style={{ fontSize: "0.78rem", color: T.text, fontWeight: 600 }}>{progress.current || "…"}</div>
+              <div style={{ marginTop: "0.5rem", height: "4px", background: T.border, borderRadius: "999px", overflow: "hidden" }}>
+                <div style={{ height: "100%", background: T.sage, width: `${(progress.done / Math.max(1, progress.total)) * 100}%`, transition: "width 0.3s" }} />
+              </div>
+            </div>
+          )}
+          {!running && eligibleProducts.length > 0 && (
+            <div style={{ marginTop: "1.25rem" }}>
+              <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.4rem" }}>Next up (sorted by scan count)</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                {eligibleProducts.slice(0, batchSize).map((p, i) => (
+                  <div key={p.id} style={{ padding: "0.5rem 0.7rem", background: T.surface, border: `1px solid ${T.border}`, borderRadius: "0.4rem", display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.72rem" }}>
+                    <span style={{ color: T.textLight, fontWeight: 600, minWidth: "1.5rem" }}>{i + 1}.</span>
+                    <span style={{ color: T.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.brand} - {p.productName}</span>
+                    <span style={{ color: T.textLight, fontSize: "0.65rem" }}>{p.scanCount || 0} scans</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {view === "queue" && <EnrichmentBotQueue />}
+    </div>
+  );
+}
+
+function EnrichmentBotQueue() {
+  const [jobs, setJobs] = useState([]);
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [selectedIngredients, setSelectedIngredients] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const q = query(collection(db, "enrichmentJobs"), where("status", "==", "pending_review"));
+    const unsub = onSnapshot(q, snap => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      list.sort((a, b) => (b.scanCount || 0) - (a.scanCount || 0));
+      setJobs(list);
+    }, e => console.error("queue subscribe error", e));
+    return unsub;
+  }, []);
+
+  useEffect(() => { setSelectedImage(null); setSelectedIngredients(null); }, [currentIdx, jobs.length]);
+
+  const job = jobs[currentIdx];
+
+  if (jobs.length === 0) {
+    return (
+      <div style={{ padding: "2.5rem 1rem", textAlign: "center", color: T.textLight }}>
+        <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>📭</div>
+        <div style={{ fontSize: "0.85rem", color: T.text, fontWeight: 600 }}>Queue is empty</div>
+        <div style={{ fontSize: "0.7rem", marginTop: "0.3rem" }}>Run the bot to enrich products.</div>
+      </div>
+    );
+  }
+  if (!job) { return <div style={{ padding: "2rem", textAlign: "center", color: T.textLight }}>Loading…</div>; }
+
+  async function approve() {
+    if (saving) return;
+    if (!selectedImage && !selectedIngredients) { alert("Select an image or ingredient list first."); return; }
+    setSaving(true);
+    try {
+      const updates = { lastVerified: serverTimestamp() };
+      if (selectedImage) {
+        try {
+          const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(selectedImage.url)}`;
+          const r = await fetch(proxied, { signal: AbortSignal.timeout(15000) });
+          if (r.ok) {
+            const blob = await r.blob();
+            if (blob.size > 2000) {
+              const ext = (blob.type || "image/jpeg").split("/")[1] || "jpg";
+              const ref = storageRef(storage, `products/${job.productId}/image.${ext}`);
+              await uploadBytes(ref, blob, { contentType: blob.type });
+              const url = await getDownloadURL(ref);
+              updates.adminImage = url;
+              updates.image = url;
+            }
+          }
+        } catch (e) {
+          console.error("image save failed:", e);
+          alert("Image upload failed but ingredients (if selected) will still save. Check console.");
+        }
+      }
+      if (selectedIngredients) {
+        updates.ingredients = selectedIngredients.text;
+        try {
+          const analysis = analyzeIngredients(selectedIngredients.text);
+          if (analysis.avgScore != null) updates.poreScore = Math.round(analysis.avgScore);
+          else if (analysis.poreCloggers?.length) updates.poreScore = 1;
+          else updates.poreScore = 0;
+        } catch (e) { console.error("score recompute failed", e); }
+      }
+      await updateDoc(doc(db, "products", job.productId), updates);
+      await updateDoc(doc(db, "enrichmentJobs", job.productId), { status: "approved", approvedAt: serverTimestamp() });
+      if (currentIdx >= jobs.length - 1) setCurrentIdx(Math.max(0, jobs.length - 2));
+    } catch (e) {
+      console.error("approve failed:", e);
+      alert("Save failed: " + (e?.message || "unknown"));
+    }
+    setSaving(false);
+  }
+
+  async function skip() {
+    try { await updateDoc(doc(db, "enrichmentJobs", job.productId), { status: "skipped", skippedAt: serverTimestamp() }); } catch {}
+  }
+  async function reject() {
+    try { await updateDoc(doc(db, "enrichmentJobs", job.productId), { status: "rejected", rejectedAt: serverTimestamp() }); } catch {}
+  }
+
+  return (
+    <div>
+      <div style={{ marginBottom: "0.85rem", padding: "0.75rem 0.85rem", background: T.surface, borderRadius: "0.55rem", border: `1px solid ${T.border}` }}>
+        <div style={{ fontSize: "0.6rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.08em" }}>Reviewing {currentIdx + 1} of {jobs.length}</div>
+        <div style={{ fontSize: "0.95rem", fontWeight: 700, color: T.text, marginTop: "0.2rem" }}>{job.productName}</div>
+        <div style={{ fontSize: "0.7rem", color: T.textMid }}>{job.brand}</div>
+      </div>
+      {(!job.imageCandidates || job.imageCandidates.length === 0) && (!job.ingredientCandidates || job.ingredientCandidates.length === 0) && (
+        <div style={{ padding: "1.25rem", background: T.amber + "15", border: `1px solid ${T.amber}40`, borderRadius: "0.55rem", marginBottom: "1rem" }}>
+          <div style={{ fontSize: "0.78rem", fontWeight: 600, color: T.amber, marginBottom: "0.3rem" }}>⚠ Bot couldn't find anything</div>
+          <div style={{ fontSize: "0.7rem", color: T.textMid }}>This product doesn't appear in OBF, Sephora, ULTA, or via Claude search. Try editing it manually in Manage Products.</div>
+        </div>
+      )}
+      {job.imageCandidates && job.imageCandidates.length > 0 && (
+        <div style={{ marginBottom: "1.25rem" }}>
+          <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.5rem" }}>Choose an image</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+            {job.imageCandidates.map((img, i) => {
+              const isSelected = selectedImage && selectedImage.url === img.url;
+              return (
+                <button key={i} onClick={() => setSelectedImage(img)} style={{ background: T.surface, border: `2px solid ${isSelected ? T.sage : T.border}`, borderRadius: "0.5rem", padding: "0.4rem", cursor: "pointer", display: "flex", flexDirection: "column", gap: "0.3rem", fontFamily: "'Inter', sans-serif" }}>
+                  <div style={{ width: "100%", aspectRatio: "1", background: "#fff", borderRadius: "0.3rem", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <img src={img.url} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} alt="" />
+                  </div>
+                  <div style={{ fontSize: "0.6rem", color: T.textMid, textAlign: "left" }}>
+                    <div style={{ fontWeight: 600, color: isSelected ? T.sage : T.text }}>{img.source}</div>
+                    <div>{img.w}x{img.h}</div>
+                  </div>
+                </button>
+              );
+            })}
+            {job.currentImage && (
+              <button onClick={() => setSelectedImage(null)} style={{ background: T.surfaceAlt, border: `2px solid ${selectedImage === null ? T.textMid : T.border}`, borderRadius: "0.5rem", padding: "0.4rem", cursor: "pointer", display: "flex", flexDirection: "column", gap: "0.3rem", fontFamily: "'Inter', sans-serif" }}>
+                <div style={{ width: "100%", aspectRatio: "1", background: "#fff", borderRadius: "0.3rem", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <img src={job.currentImage} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} alt="" />
+                </div>
+                <div style={{ fontSize: "0.6rem", color: T.textMid, textAlign: "left" }}>
+                  <div style={{ fontWeight: 600 }}>Keep current</div>
+                </div>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {job.ingredientCandidates && job.ingredientCandidates.length > 0 && (
+        <div style={{ marginBottom: "1.25rem" }}>
+          <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.5rem" }}>Choose an ingredient list</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            {job.ingredientCandidates.map((ing, i) => {
+              const isSelected = selectedIngredients && selectedIngredients.text === ing.text;
+              const tokenCount = ing.text.split(",").length;
+              return (
+                <button key={i} onClick={() => setSelectedIngredients(ing)} style={{ background: T.surface, border: `2px solid ${isSelected ? T.sage : T.border}`, borderRadius: "0.5rem", padding: "0.6rem 0.7rem", cursor: "pointer", textAlign: "left", fontFamily: "'Inter', sans-serif" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
+                    <div style={{ fontSize: "0.7rem", fontWeight: 600, color: isSelected ? T.sage : T.text }}>{ing.source}</div>
+                    <div style={{ fontSize: "0.6rem", color: T.textLight }}>{tokenCount} ingredients</div>
+                  </div>
+                  <div style={{ fontSize: "0.62rem", color: T.textMid, lineHeight: 1.45, maxHeight: "5rem", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical" }}>{ing.text}</div>
+                </button>
+              );
+            })}
+            {job.currentIngredients && (
+              <button onClick={() => setSelectedIngredients(null)} style={{ background: T.surfaceAlt, border: `2px solid ${selectedIngredients === null ? T.textMid : T.border}`, borderRadius: "0.5rem", padding: "0.6rem 0.7rem", cursor: "pointer", textAlign: "left", fontFamily: "'Inter', sans-serif" }}>
+                <div style={{ fontSize: "0.7rem", fontWeight: 600, color: T.textMid, marginBottom: "0.3rem" }}>Keep current</div>
+                <div style={{ fontSize: "0.62rem", color: T.textMid, lineHeight: 1.45, maxHeight: "3.5rem", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}>{job.currentIngredients.slice(0, 200)}</div>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.6rem" }}>
+        <button onClick={() => setCurrentIdx(Math.max(0, currentIdx - 1))} disabled={currentIdx === 0} style={{ flex: "0 0 auto", padding: "0.7rem 0.9rem", background: T.surface, border: `1px solid ${T.border}`, borderRadius: "0.5rem", color: currentIdx === 0 ? T.textLight : T.text, cursor: currentIdx === 0 ? "default" : "pointer", fontSize: "0.78rem", fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>&larr; Prev</button>
+        <button onClick={approve} disabled={saving} style={{ flex: 1, padding: "0.7rem", background: T.sage, color: "#fff", border: "none", borderRadius: "0.5rem", cursor: saving ? "default" : "pointer", fontSize: "0.78rem", fontWeight: 700, fontFamily: "'Inter', sans-serif" }}>
+          {saving ? "Saving…" : "✓ Approve & Save"}
+        </button>
+        <button onClick={() => setCurrentIdx(Math.min(jobs.length - 1, currentIdx + 1))} disabled={currentIdx >= jobs.length - 1} style={{ flex: "0 0 auto", padding: "0.7rem 0.9rem", background: T.surface, border: `1px solid ${T.border}`, borderRadius: "0.5rem", color: currentIdx >= jobs.length - 1 ? T.textLight : T.text, cursor: currentIdx >= jobs.length - 1 ? "default" : "pointer", fontSize: "0.78rem", fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>Next &rarr;</button>
+      </div>
+      <div style={{ display: "flex", gap: "0.4rem" }}>
+        <button onClick={skip} style={{ flex: 1, padding: "0.5rem", background: "transparent", border: `1px solid ${T.border}`, borderRadius: "0.4rem", color: T.textMid, cursor: "pointer", fontSize: "0.7rem", fontFamily: "'Inter', sans-serif" }}>Skip for now</button>
+        <button onClick={reject} style={{ flex: 1, padding: "0.5rem", background: "transparent", border: `1px solid ${T.border}`, borderRadius: "0.4rem", color: T.rose, cursor: "pointer", fontSize: "0.7rem", fontFamily: "'Inter', sans-serif" }}>Reject all</button>
+      </div>
+    </div>
+  );
+}
 
 
 // ── Bulk Upload ─────────────────────────────────────────────────────────────
@@ -12879,6 +13331,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
   if (section === "imagepicker") return <AdminImagePicker products={products} setProducts={setProducts} onBack={()=>setSection(null)}/>;
   if (section === "bulk") return <AdminBulkImageUpload onBack={()=>setSection(null)}/>;
   if (section === "enrich") return <AdminEnrichPipeline onBack={()=>setSection(null)}/>;
+  if (section === "bot") return <EnrichmentBot onBack={()=>setSection(null)}/>;
   if (section === "nuclear") return <AdminNuclearClean onBack={()=>setSection(null)}/>;
 
 
@@ -12916,6 +13369,17 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
           </div>
         ))}
       </div>
+
+      {/* -- Enrichment Bot — batch search + review queue -- */}
+      <button onClick={()=>setSection("bot")}
+        style={{padding:"0.85rem 1rem",background:`linear-gradient(135deg, ${T.iceBlue}, ${T.iceBlue}cc)`,border:`1.5px solid ${T.navy}`,borderRadius:"0.75rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",display:"flex",alignItems:"center",gap:"0.75rem"}}>
+        <div style={{fontSize:"1.5rem",flexShrink:0}}>🤖</div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:"0.82rem",fontWeight:"700",color:T.text}}>Enrichment Bot</div>
+          <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"1px"}}>Batch search images + ingredients. You approve.</div>
+        </div>
+        <div style={{fontSize:"0.7rem",color:T.navy,fontWeight:"700"}}>Open →</div>
+      </button>
 
       {/* -- Manual image triage button -- */}
       {noImg > 0 && (
