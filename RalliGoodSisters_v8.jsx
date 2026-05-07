@@ -12592,27 +12592,45 @@ function EnrichmentBotQueue() {
     if (!imgChosen && !ingChosen) { alert("Select an image or ingredient list first (or tap 'Keep current' for both)."); return; }
     setSaving(true);
     try {
+      // GUARD 1 — Verify the product actually exists before we try to write anything.
+      // This protects against orphaned enrichment jobs where the product was deleted.
+      const productRef = doc(db, "products", job.productId);
+      const productSnap = await getDoc(productRef);
+      if (!productSnap.exists()) {
+        // Mark the job as orphaned and move on — don't try to write to a missing product.
+        await updateDoc(doc(db, "enrichmentJobs", job.productId), {
+          status: "orphaned",
+          orphanedAt: serverTimestamp(),
+          orphanReason: `No product exists at products/${job.productId}`,
+        }).catch(e => console.error("orphan mark failed:", e));
+        alert(`This product no longer exists in the database (id: ${job.productId}).\n\nThe job has been marked as orphaned and removed from the queue. The next product will load.`);
+        setSaving(false);
+        if (currentIdx >= jobs.length - 1) setCurrentIdx(Math.max(0, jobs.length - 2));
+        return;
+      }
+
       const updates = { lastVerified: serverTimestamp() };
+      let imageUploadFailed = false;
+
       if (imgIsNew) {
         try {
           const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(selectedImage.url)}`;
           const r = await fetch(proxied, { signal: AbortSignal.timeout(15000) });
-          if (r.ok) {
-            const blob = await r.blob();
-            if (blob.size > 2000) {
-              const ext = (blob.type || "image/jpeg").split("/")[1] || "jpg";
-              const ref = storageRef(storage, `products/${job.productId}/image.${ext}`);
-              await uploadBytes(ref, blob, { contentType: blob.type });
-              const url = await getDownloadURL(ref);
-              updates.adminImage = url;
-              updates.image = url;
-            }
-          }
+          if (!r.ok) throw new Error(`proxy returned ${r.status}`);
+          const blob = await r.blob();
+          if (blob.size <= 2000) throw new Error(`image too small (${blob.size} bytes)`);
+          const ext = (blob.type || "image/jpeg").split("/")[1] || "jpg";
+          const ref = storageRef(storage, `products/${job.productId}/image.${ext}`);
+          await uploadBytes(ref, blob, { contentType: blob.type });
+          const url = await getDownloadURL(ref);
+          updates.adminImage = url;
+          updates.image = url;
         } catch (e) {
           console.error("image save failed:", e);
-          alert("Image upload failed but ingredients (if selected) will still save. Check console.");
+          imageUploadFailed = true;
         }
       }
+
       if (ingIsNew) {
         updates.ingredients = selectedIngredients.text;
         try {
@@ -12622,12 +12640,24 @@ function EnrichmentBotQueue() {
           else updates.poreScore = 0;
         } catch (e) { console.error("score recompute failed", e); }
       }
-      await updateDoc(doc(db, "products", job.productId), updates);
+
+      // GUARD 2 — Use setDoc with merge:true instead of updateDoc.
+      // setDoc + merge silently no-ops on missing docs in some scenarios and
+      // is generally safer than updateDoc which throws on any missing field path.
+      // We've already verified the product exists, but this is belt-and-suspenders.
+      await setDoc(productRef, updates, { merge: true });
       await updateDoc(doc(db, "enrichmentJobs", job.productId), { status: "approved", approvedAt: serverTimestamp() });
+
+      // Surface any non-fatal warning AFTER the successful save
+      if (imageUploadFailed && imgIsNew) {
+        alert("Saved! (Image upload failed — only the ingredients were saved. The current image was kept.)");
+      }
+
       if (currentIdx >= jobs.length - 1) setCurrentIdx(Math.max(0, jobs.length - 2));
     } catch (e) {
       console.error("approve failed:", e);
-      alert("Save failed: " + (e?.message || "unknown"));
+      // More descriptive error — include the product ID so we can debug
+      alert(`Save failed for product ${job.productId}:\n\n${e?.message || "unknown error"}\n\nNothing was changed. The job stays in the queue.\nCheck the browser console for full details.`);
     }
     setSaving(false);
   }
@@ -12638,6 +12668,17 @@ function EnrichmentBotQueue() {
   async function reject() {
     try { await updateDoc(doc(db, "enrichmentJobs", job.productId), { status: "rejected", rejectedAt: serverTimestamp() }); } catch {}
   }
+  // Manually mark a job as orphaned (admin can use this if the product clearly doesn't exist)
+  async function markOrphaned() {
+    if (!confirm(`Mark this job as orphaned and remove from queue?\n\nProduct ID: ${job.productId}`)) return;
+    try {
+      await updateDoc(doc(db, "enrichmentJobs", job.productId), {
+        status: "orphaned",
+        orphanedAt: serverTimestamp(),
+        orphanReason: "Manually marked by admin",
+      });
+    } catch (e) { console.error("orphan failed", e); }
+  }
 
   return (
     <div>
@@ -12645,6 +12686,7 @@ function EnrichmentBotQueue() {
         <div style={{ fontSize: "0.6rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.08em" }}>Reviewing {currentIdx + 1} of {jobs.length}</div>
         <div style={{ fontSize: "0.95rem", fontWeight: 700, color: T.text, marginTop: "0.2rem" }}>{job.productName}</div>
         <div style={{ fontSize: "0.7rem", color: T.textMid }}>{job.brand}</div>
+        <div style={{ fontSize: "0.55rem", color: T.textLight, marginTop: "0.3rem", fontFamily: "monospace" }}>id: {job.productId}</div>
       </div>
       {(!job.imageCandidates || job.imageCandidates.length === 0) && (!job.ingredientCandidates || job.ingredientCandidates.length === 0) && (
         <div style={{ padding: "1.25rem", background: T.amber + "15", border: `1px solid ${T.amber}40`, borderRadius: "0.55rem", marginBottom: "1rem" }}>
@@ -12719,6 +12761,7 @@ function EnrichmentBotQueue() {
       <div style={{ display: "flex", gap: "0.4rem" }}>
         <button onClick={skip} style={{ flex: 1, padding: "0.5rem", background: "transparent", border: `1px solid ${T.border}`, borderRadius: "0.4rem", color: T.textMid, cursor: "pointer", fontSize: "0.7rem", fontFamily: "'Inter', sans-serif" }}>Skip for now</button>
         <button onClick={reject} style={{ flex: 1, padding: "0.5rem", background: "transparent", border: `1px solid ${T.border}`, borderRadius: "0.4rem", color: T.rose, cursor: "pointer", fontSize: "0.7rem", fontFamily: "'Inter', sans-serif" }}>Reject all</button>
+        <button onClick={markOrphaned} style={{ flex: 1, padding: "0.5rem", background: "transparent", border: `1px solid ${T.border}`, borderRadius: "0.4rem", color: T.amber, cursor: "pointer", fontSize: "0.7rem", fontFamily: "'Inter', sans-serif" }}>Orphan</button>
       </div>
     </div>
   );
