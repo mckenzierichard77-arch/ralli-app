@@ -12857,23 +12857,49 @@ function EnrichmentBotQueue() {
 
       const updates = { lastVerified: serverTimestamp() };
       let imageUploadFailed = false;
+      let imageFailReason = "";
 
       if (imgIsNew) {
+        // Try the image fetch in two stages — same as validation strategy.
+        // Some CDNs allow direct fetch; others need the proxy. Try both.
+        async function tryFetchImage(url) {
+          // Stage 1: direct fetch
+          try {
+            const r = await fetch(url, { signal: AbortSignal.timeout(12000), mode: "cors" });
+            if (r.ok) {
+              const blob = await r.blob();
+              if (blob.size > 2000 && blob.type.startsWith("image/")) {
+                return { blob, source: "direct" };
+              }
+            }
+          } catch (e) { /* fall through to proxy */ }
+          // Stage 2: proxy fetch
+          try {
+            const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+            const r = await fetch(proxied, { signal: AbortSignal.timeout(15000) });
+            if (!r.ok) throw new Error(`proxy returned HTTP ${r.status}`);
+            const blob = await r.blob();
+            if (blob.size <= 2000) throw new Error(`image too small (${blob.size} bytes — proxy may have returned an error page)`);
+            if (!blob.type.startsWith("image/")) throw new Error(`got ${blob.type} instead of image (proxy may have returned an error page)`);
+            return { blob, source: "proxy" };
+          } catch (e) {
+            throw e;
+          }
+        }
+
         try {
-          const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(selectedImage.url)}`;
-          const r = await fetch(proxied, { signal: AbortSignal.timeout(15000) });
-          if (!r.ok) throw new Error(`proxy returned ${r.status}`);
-          const blob = await r.blob();
-          if (blob.size <= 2000) throw new Error(`image too small (${blob.size} bytes)`);
+          const { blob, source } = await tryFetchImage(selectedImage.url);
           const ext = (blob.type || "image/jpeg").split("/")[1] || "jpg";
           const ref = storageRef(storage, `products/${job.productId}/image.${ext}`);
           await uploadBytes(ref, blob, { contentType: blob.type });
           const url = await getDownloadURL(ref);
           updates.adminImage = url;
           updates.image = url;
+          console.log(`[bot] image saved via ${source} for ${job.productId}`);
         } catch (e) {
-          console.error("image save failed:", e);
+          console.error("[bot] image save failed:", e, "URL was:", selectedImage.url);
           imageUploadFailed = true;
+          imageFailReason = e?.message || String(e);
         }
       }
 
@@ -12896,7 +12922,7 @@ function EnrichmentBotQueue() {
 
       // Surface any non-fatal warning AFTER the successful save
       if (imageUploadFailed && imgIsNew) {
-        alert("Saved! (Image upload failed — only the ingredients were saved. The current image was kept.)");
+        alert(`Saved ingredients! Image upload failed.\n\nReason: ${imageFailReason}\n\nThe current image was kept. Try a different image candidate, or skip the image for now.`);
       }
 
       if (currentIdx >= jobs.length - 1) setCurrentIdx(Math.max(0, jobs.length - 2));
@@ -12990,7 +13016,10 @@ function EnrichmentBotQueue() {
             })}
             {job.currentIngredients && (
               <button onClick={() => setSelectedIngredients("keep")} style={{ background: T.surfaceAlt, border: `2px solid ${selectedIngredients === "keep" ? T.sage : T.border}`, borderRadius: "0.5rem", padding: "0.6rem 0.7rem", cursor: "pointer", textAlign: "left", fontFamily: "'Inter', sans-serif" }}>
-                <div style={{ fontSize: "0.7rem", fontWeight: 600, color: selectedIngredients === "keep" ? T.sage : T.textMid, marginBottom: "0.3rem" }}>Keep current</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
+                  <div style={{ fontSize: "0.7rem", fontWeight: 600, color: selectedIngredients === "keep" ? T.sage : T.textMid }}>Keep current</div>
+                  <div style={{ fontSize: "0.6rem", color: T.textLight }}>{job.currentIngredients.split(",").filter(s => s.trim()).length} ingredients</div>
+                </div>
                 <div style={{ fontSize: "0.62rem", color: T.textMid, lineHeight: 1.45, maxHeight: "3.5rem", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}>{job.currentIngredients.slice(0, 200)}</div>
               </button>
             )}
