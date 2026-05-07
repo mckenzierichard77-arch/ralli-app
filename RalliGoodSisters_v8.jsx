@@ -12267,18 +12267,64 @@ function AdminManageProducts(props) { return <AdminProductHub/>; }
    Bot NEVER overwrites data. Admin picks the right image/ingredients to save.
    ============================================================================ */
 
+// Validate an image URL.
+// Strategy: try direct load first (fastest, no proxy traffic). If that fails
+// (often due to CORS on brand CDN images returned by Claude search), fall
+// back to fetching through the allorigins.win proxy as a blob, then loading
+// the blob as a data URL to measure dimensions.
 function validateImageCandidate(url, timeoutMs = 6000) {
-  return new Promise(resolve => {
+  return new Promise(async resolve => {
     if (!url || typeof url !== "string") { resolve(null); return; }
-    const img = new Image();
-    const timer = setTimeout(() => { img.src = ""; resolve(null); }, timeoutMs);
-    img.onload = () => {
-      clearTimeout(timer);
-      if (img.naturalWidth < 200 || img.naturalHeight < 200) { resolve(null); return; }
-      resolve({ ok: true, width: img.naturalWidth, height: img.naturalHeight, url });
-    };
-    img.onerror = () => { clearTimeout(timer); resolve(null); };
-    img.src = url;
+
+    // Stage 1 — try direct image load
+    const directResult = await new Promise(res => {
+      const img = new Image();
+      const timer = setTimeout(() => { img.src = ""; res(null); }, timeoutMs);
+      img.onload = () => {
+        clearTimeout(timer);
+        if (img.naturalWidth < 200 || img.naturalHeight < 200) { res(null); return; }
+        res({ ok: true, width: img.naturalWidth, height: img.naturalHeight, url });
+      };
+      img.onerror = () => { clearTimeout(timer); res(null); };
+      img.src = url;
+    });
+
+    if (directResult) { resolve(directResult); return; }
+
+    // Stage 2 — try via proxy (rescues CORS-blocked images from brand CDNs)
+    try {
+      const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+      const r = await fetch(proxied, { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) { resolve(null); return; }
+      const blob = await r.blob();
+      if (blob.size < 2000 || !blob.type.startsWith("image/")) { resolve(null); return; }
+
+      // Load the blob as a data URL to measure dimensions
+      const dataUrl = await new Promise(res => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result);
+        reader.onerror = () => res(null);
+        reader.readAsDataURL(blob);
+      });
+      if (!dataUrl) { resolve(null); return; }
+
+      const proxyResult = await new Promise(res => {
+        const img = new Image();
+        const timer = setTimeout(() => { img.src = ""; res(null); }, 4000);
+        img.onload = () => {
+          clearTimeout(timer);
+          if (img.naturalWidth < 200 || img.naturalHeight < 200) { res(null); return; }
+          // IMPORTANT: return the ORIGINAL url (not data URL) so we can re-fetch
+          // it later via proxy when admin approves.
+          res({ ok: true, width: img.naturalWidth, height: img.naturalHeight, url, viaProxy: true });
+        };
+        img.onerror = () => { clearTimeout(timer); res(null); };
+        img.src = dataUrl;
+      });
+      resolve(proxyResult);
+    } catch {
+      resolve(null);
+    }
   });
 }
 
@@ -12354,39 +12400,59 @@ async function botSearchUlta({ productName, brand }) {
 
 async function botSearchClaude({ productName, brand }) {
   try {
-    // Stronger prompt: tell Claude exactly what to do, where to look, and
-    // prevent hallucination by requiring source URL verification.
-    const prompt = `You are searching for skincare product data. The product is:
+    // Two-step explicit prompt. The previous version conflated finding the
+    // product with extracting an image URL — Claude would find the right page
+    // but fail to consistently pull the image. This version walks Claude
+    // through the steps and tells it exactly where to look (og:image, JSON-LD,
+    // schema.org Product structured data) which are reliable structured fields
+    // present on virtually every modern brand site.
+    const prompt = `You are extracting skincare product data. Work through these steps in order.
 
+PRODUCT TO FIND:
 Brand: ${brand || "unknown"}
 Product: ${productName || "unknown"}
 
-Use web search to find this product on either:
-1. The brand's own official website (preferred)
-2. A major retailer page (Sephora, Ulta, Amazon, brand DTC site)
+STEP 1 — Find the product's official page.
+Use web_search. Prefer (in order):
+  a) The brand's own DTC site (e.g., biossance.com, clearstem.com, alpynbeauty.com)
+  b) Sephora, Ulta, or Amazon product pages
+  c) Other reputable retailer pages
 
-Then return a JSON object with these fields, nothing else:
+STEP 2 — Extract the canonical image URL.
+On the product page, the canonical product image is almost always available in one of these places (in priority order):
+  1. The og:image meta tag (used for Facebook/Twitter share previews) — this is the most reliable source and is a direct image URL
+  2. The schema.org Product JSON-LD "image" property (structured data in <script type="application/ld+json">)
+  3. Twitter card meta tag (twitter:image)
+  4. The first <img> tag inside the main product gallery
+
+Look for these specifically. Do NOT guess at image URLs — if you cannot find a structured image source, return null for imageUrl.
+
+STEP 3 — Extract the COMPLETE INCI ingredient list.
+Find it on the product page itself, in the official "ingredients" section. Do NOT use ingredient lists from third-party reviews, blog posts, or your training data. If the page only shows a partial or "key ingredients" list (e.g., "Featured Ingredients: Squalane, Niacinamide..."), return null — partial lists are worse than no list.
+
+STEP 4 — Return the JSON.
+Return ONLY this JSON object, no commentary:
 {
-  "imageUrl": "direct URL to a clean product photo (white background preferred). Must be a real image URL ending in .jpg, .jpeg, .png, or .webp",
-  "ingredients": "the COMPLETE INCI ingredient list as a comma-separated string, in the exact order shown on the official source. Do NOT abbreviate, summarize, or invent.",
-  "sourceUrl": "the exact URL where you found this data"
+  "imageUrl": "...the direct image URL from step 2, or null...",
+  "ingredients": "...the full INCI list from step 3 as a comma-separated string, or null...",
+  "sourceUrl": "...the exact URL of the page you used..."
 }
 
 Critical rules:
-- If you cannot find the product, return null for that field — do NOT guess or invent.
-- The ingredient list must come from the actual product page, not your training data.
-- If the page only shows partial ingredients (like "key ingredients"), set ingredients to null — do NOT return a partial list.
-- Return ONLY the JSON object, no commentary.`;
+- imageUrl must be a direct URL ending in .jpg, .jpeg, .png, .webp, or a known image CDN path. Not a page URL, not a placeholder.
+- Either field can be null independently — return what you found.
+- Never invent or fabricate ingredients.
+- Return ONLY the JSON.`;
     const r = await fetch("/api/anthropic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 2000,
+        max_tokens: 2500,
         tools: [{ type: "web_search_20250305", name: "web_search" }],
         messages: [{ role: "user", content: prompt }],
       }),
-      signal: AbortSignal.timeout(45000),
+      signal: AbortSignal.timeout(50000),
     });
     if (!r.ok) {
       console.warn(`[botSearchClaude] HTTP ${r.status}`);
@@ -12394,7 +12460,6 @@ Critical rules:
     }
     const d = await r.json();
     const textBlocks = (d.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
-    // More forgiving JSON extraction — allows code fences and surrounding text
     const jsonMatch = textBlocks.match(/\{[\s\S]*?"sourceUrl"[\s\S]*?\}/) || textBlocks.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.warn(`[botSearchClaude] no JSON found for ${brand} ${productName}`);
@@ -12406,9 +12471,25 @@ Critical rules:
       return [];
     }
     if (!parsed.imageUrl && !parsed.ingredients) return [];
+
+    // Validate that imageUrl actually looks like an image URL, not a page URL.
+    // Reject common false positives where Claude returns the page URL instead.
+    let cleanImageUrl = parsed.imageUrl;
+    if (cleanImageUrl) {
+      const lower = cleanImageUrl.toLowerCase();
+      const looksLikeImage = /\.(jpg|jpeg|png|webp|gif)(\?|$)/.test(lower)
+        || /\/cdn\.shopify\.com\//.test(lower)
+        || /\/cdn\//.test(lower)
+        || /images?\./.test(lower);
+      if (!looksLikeImage) {
+        console.warn(`[botSearchClaude] rejected non-image URL: ${cleanImageUrl}`);
+        cleanImageUrl = null;
+      }
+    }
+
     return [{
-      source: parsed.sourceUrl ? `Claude (${new URL(parsed.sourceUrl).hostname.replace(/^www\./, "")})` : "Claude (web search)",
-      imageUrl: parsed.imageUrl || null,
+      source: parsed.sourceUrl ? `Claude (${(()=>{ try { return new URL(parsed.sourceUrl).hostname.replace(/^www\./, ""); } catch { return "web"; } })()})` : "Claude (web search)",
+      imageUrl: cleanImageUrl,
       ingredients: parsed.ingredients || null,
     }];
   } catch (e) {
@@ -12641,6 +12722,21 @@ function EnrichmentBot({ onBack }) {
                   </div>
                 )}
                 {/* Per-product entries */}
+                {/* Sub-breakdown: of the queued ones, how many got images vs ingredients vs both */}
+                {queued > 0 && (() => {
+                  const queuedEntries = runLog.filter(e => e.status === "queued");
+                  const withImages = queuedEntries.filter(e => e.imgCount > 0).length;
+                  const withIngredients = queuedEntries.filter(e => e.ingCount > 0).length;
+                  const withBoth = queuedEntries.filter(e => e.imgCount > 0 && e.ingCount > 0).length;
+                  return (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginBottom: "0.6rem", paddingLeft: "0.2rem" }}>
+                      <span style={{ fontSize: "0.6rem", color: T.textMid }}>Of {queued} queued:</span>
+                      <span style={{ fontSize: "0.6rem", color: T.textMid }}>{withImages} with images,</span>
+                      <span style={{ fontSize: "0.6rem", color: T.textMid }}>{withIngredients} with ingredients,</span>
+                      <span style={{ fontSize: "0.6rem", color: T.textMid, fontWeight: 600 }}>{withBoth} with both</span>
+                    </div>
+                  );
+                })()}
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", maxHeight: "300px", overflowY: "auto" }}>
                   {runLog.map((entry, i) => {
                     const color = entry.status === "queued" ? T.sage
@@ -12655,6 +12751,17 @@ function EnrichmentBot({ onBack }) {
                         <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                           <span style={{ color, fontWeight: 700, minWidth: "0.9rem" }}>{icon}</span>
                           <span style={{ color: T.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.brand} — {entry.productName}</span>
+                          {/* Per-row count badges */}
+                          {entry.status === "queued" && (
+                            <div style={{ display: "flex", gap: "0.25rem", flexShrink: 0 }}>
+                              <span style={{ background: entry.imgCount > 0 ? T.sage + "22" : T.textLight + "22", color: entry.imgCount > 0 ? T.sage : T.textLight, padding: "0.1rem 0.35rem", borderRadius: "0.25rem", fontSize: "0.55rem", fontWeight: 700 }}>
+                                {entry.imgCount > 0 ? `📷 ${entry.imgCount}` : "📷 0"}
+                              </span>
+                              <span style={{ background: entry.ingCount > 0 ? T.sage + "22" : T.textLight + "22", color: entry.ingCount > 0 ? T.sage : T.textLight, padding: "0.1rem 0.35rem", borderRadius: "0.25rem", fontSize: "0.55rem", fontWeight: 700 }}>
+                                {entry.ingCount > 0 ? `🧪 ${entry.ingCount}` : "🧪 0"}
+                              </span>
+                            </div>
+                          )}
                         </div>
                         <div style={{ paddingLeft: "1.3rem", color: T.textLight, fontSize: "0.6rem" }}>{entry.detail}</div>
                       </div>
