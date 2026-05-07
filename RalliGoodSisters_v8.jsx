@@ -12550,6 +12550,7 @@ function EnrichmentBot({ onBack }) {
 function EnrichmentBotQueue() {
   const [jobs, setJobs] = useState([]);
   const [currentIdx, setCurrentIdx] = useState(0);
+  // Tri-state: null = unselected, "keep" = deliberately keep current, object = chose a candidate
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedIngredients, setSelectedIngredients] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -12579,13 +12580,20 @@ function EnrichmentBotQueue() {
   }
   if (!job) { return <div style={{ padding: "2rem", textAlign: "center", color: T.textLight }}>Loading…</div>; }
 
+  // Helpers — does the user have something chosen for this slot? "keep" counts.
+  const imgChosen = selectedImage !== null;
+  const ingChosen = selectedIngredients !== null;
+  // Is this slot a "real new candidate" vs "keep current"?
+  const imgIsNew = imgChosen && selectedImage !== "keep";
+  const ingIsNew = ingChosen && selectedIngredients !== "keep";
+
   async function approve() {
     if (saving) return;
-    if (!selectedImage && !selectedIngredients) { alert("Select an image or ingredient list first."); return; }
+    if (!imgChosen && !ingChosen) { alert("Select an image or ingredient list first (or tap 'Keep current' for both)."); return; }
     setSaving(true);
     try {
       const updates = { lastVerified: serverTimestamp() };
-      if (selectedImage) {
+      if (imgIsNew) {
         try {
           const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(selectedImage.url)}`;
           const r = await fetch(proxied, { signal: AbortSignal.timeout(15000) });
@@ -12605,7 +12613,7 @@ function EnrichmentBotQueue() {
           alert("Image upload failed but ingredients (if selected) will still save. Check console.");
         }
       }
-      if (selectedIngredients) {
+      if (ingIsNew) {
         updates.ingredients = selectedIngredients.text;
         try {
           const analysis = analyzeIngredients(selectedIngredients.text);
@@ -12646,10 +12654,10 @@ function EnrichmentBotQueue() {
       )}
       {job.imageCandidates && job.imageCandidates.length > 0 && (
         <div style={{ marginBottom: "1.25rem" }}>
-          <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.5rem" }}>Choose an image</div>
+          <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.5rem" }}>Choose an image {imgChosen && <span style={{color:T.sage,fontWeight:700}}>✓</span>}</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
             {job.imageCandidates.map((img, i) => {
-              const isSelected = selectedImage && selectedImage.url === img.url;
+              const isSelected = selectedImage && selectedImage !== "keep" && selectedImage.url === img.url;
               return (
                 <button key={i} onClick={() => setSelectedImage(img)} style={{ background: T.surface, border: `2px solid ${isSelected ? T.sage : T.border}`, borderRadius: "0.5rem", padding: "0.4rem", cursor: "pointer", display: "flex", flexDirection: "column", gap: "0.3rem", fontFamily: "'Inter', sans-serif" }}>
                   <div style={{ width: "100%", aspectRatio: "1", background: "#fff", borderRadius: "0.3rem", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -12663,12 +12671,12 @@ function EnrichmentBotQueue() {
               );
             })}
             {job.currentImage && (
-              <button onClick={() => setSelectedImage(null)} style={{ background: T.surfaceAlt, border: `2px solid ${selectedImage === null ? T.textMid : T.border}`, borderRadius: "0.5rem", padding: "0.4rem", cursor: "pointer", display: "flex", flexDirection: "column", gap: "0.3rem", fontFamily: "'Inter', sans-serif" }}>
+              <button onClick={() => setSelectedImage("keep")} style={{ background: T.surfaceAlt, border: `2px solid ${selectedImage === "keep" ? T.sage : T.border}`, borderRadius: "0.5rem", padding: "0.4rem", cursor: "pointer", display: "flex", flexDirection: "column", gap: "0.3rem", fontFamily: "'Inter', sans-serif" }}>
                 <div style={{ width: "100%", aspectRatio: "1", background: "#fff", borderRadius: "0.3rem", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <img src={job.currentImage} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} alt="" />
                 </div>
                 <div style={{ fontSize: "0.6rem", color: T.textMid, textAlign: "left" }}>
-                  <div style={{ fontWeight: 600 }}>Keep current</div>
+                  <div style={{ fontWeight: 600, color: selectedImage === "keep" ? T.sage : T.text }}>Keep current</div>
                 </div>
               </button>
             )}
@@ -12677,10 +12685,10 @@ function EnrichmentBotQueue() {
       )}
       {job.ingredientCandidates && job.ingredientCandidates.length > 0 && (
         <div style={{ marginBottom: "1.25rem" }}>
-          <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.5rem" }}>Choose an ingredient list</div>
+          <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.5rem" }}>Choose an ingredient list {ingChosen && <span style={{color:T.sage,fontWeight:700}}>✓</span>}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
             {job.ingredientCandidates.map((ing, i) => {
-              const isSelected = selectedIngredients && selectedIngredients.text === ing.text;
+              const isSelected = selectedIngredients && selectedIngredients !== "keep" && selectedIngredients.text === ing.text;
               const tokenCount = ing.text.split(",").length;
               return (
                 <button key={i} onClick={() => setSelectedIngredients(ing)} style={{ background: T.surface, border: `2px solid ${isSelected ? T.sage : T.border}`, borderRadius: "0.5rem", padding: "0.6rem 0.7rem", cursor: "pointer", textAlign: "left", fontFamily: "'Inter', sans-serif" }}>
@@ -12693,8 +12701,8 @@ function EnrichmentBotQueue() {
               );
             })}
             {job.currentIngredients && (
-              <button onClick={() => setSelectedIngredients(null)} style={{ background: T.surfaceAlt, border: `2px solid ${selectedIngredients === null ? T.textMid : T.border}`, borderRadius: "0.5rem", padding: "0.6rem 0.7rem", cursor: "pointer", textAlign: "left", fontFamily: "'Inter', sans-serif" }}>
-                <div style={{ fontSize: "0.7rem", fontWeight: 600, color: T.textMid, marginBottom: "0.3rem" }}>Keep current</div>
+              <button onClick={() => setSelectedIngredients("keep")} style={{ background: T.surfaceAlt, border: `2px solid ${selectedIngredients === "keep" ? T.sage : T.border}`, borderRadius: "0.5rem", padding: "0.6rem 0.7rem", cursor: "pointer", textAlign: "left", fontFamily: "'Inter', sans-serif" }}>
+                <div style={{ fontSize: "0.7rem", fontWeight: 600, color: selectedIngredients === "keep" ? T.sage : T.textMid, marginBottom: "0.3rem" }}>Keep current</div>
                 <div style={{ fontSize: "0.62rem", color: T.textMid, lineHeight: 1.45, maxHeight: "3.5rem", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}>{job.currentIngredients.slice(0, 200)}</div>
               </button>
             )}
