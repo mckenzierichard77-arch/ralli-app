@@ -9846,9 +9846,9 @@ const ADMIN_UIDS = []; // add your UID here once you see it in Profile
 const ADMIN_EMAILS = ["mckenzierichard77@gmail.com", "morganrichard777@gmail.com"];
 // VA / contractor emails — get full admin access but the dashboard defaults
 // them into "VA Mode" (focused queue, power tools tucked away).
-// Add the VA's email here once you've hired her.
+// Add a VA's email here when onboarding a new contractor.
 const VA_EMAILS = [
-  "banilaroselyn0628@gmail.com",
+  // No active VAs.
 ];
 function isAdmin(user) {
   return ADMIN_UIDS.includes(user?.uid) || ADMIN_EMAILS.includes(user?.email) || VA_EMAILS.includes(user?.email);
