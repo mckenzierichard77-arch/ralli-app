@@ -11659,7 +11659,7 @@ function AdminProductHub({ user } = {}) {
             <div style={{fontSize:"1.15rem",flexShrink:0}}>🤖</div>
             <div style={{flex:1,textAlign:"left"}}>
               <div style={{fontSize:"0.78rem",fontWeight:"700",color:T.text}}>Enrichment Bot</div>
-              <div style={{fontSize:"0.6rem",color:T.textMid,marginTop:"1px"}}>Batch search images + ingredients. You approve.</div>
+              <div style={{fontSize:"0.6rem",color:T.textMid,marginTop:"1px"}}>Batch search ingredient lists. You approve.</div>
             </div>
             <div style={{fontSize:"0.7rem",color:T.navy,fontWeight:"700"}}>Open →</div>
           </button>
@@ -12267,67 +12267,25 @@ function AdminManageProducts(props) { return <AdminProductHub/>; }
    Bot NEVER overwrites data. Admin picks the right image/ingredients to save.
    ============================================================================ */
 
-// Validate an image URL.
-// Strategy: try direct load first (fastest, no proxy traffic). If that fails
-// (often due to CORS on brand CDN images returned by Claude search), fall
-// back to fetching through the allorigins.win proxy as a blob, then loading
-// the blob as a data URL to measure dimensions.
-function validateImageCandidate(url, timeoutMs = 6000) {
-  return new Promise(async resolve => {
-    if (!url || typeof url !== "string") { resolve(null); return; }
+/* ============================================================================
+   ENRICHMENT BOT — INGREDIENTS ONLY.
 
-    // Stage 1 — try direct image load
-    const directResult = await new Promise(res => {
-      const img = new Image();
-      const timer = setTimeout(() => { img.src = ""; res(null); }, timeoutMs);
-      img.onload = () => {
-        clearTimeout(timer);
-        if (img.naturalWidth < 200 || img.naturalHeight < 200) { res(null); return; }
-        res({ ok: true, width: img.naturalWidth, height: img.naturalHeight, url });
-      };
-      img.onerror = () => { clearTimeout(timer); res(null); };
-      img.src = url;
-    });
+   Why ingredients only:
+   - Claude with web_search reliably returns ingredient text from brand sites
+     (the ingredients appear in page text snippets, which web_search exposes).
+   - It does NOT reliably return image URLs (web_search returns metadata, not
+     raw HTML, so og:image and structured image data aren't accessible).
+   - Sephora/ULTA scraping was primarily for images and returned no ingredients,
+     so removed entirely to reduce per-product latency.
+   - Open Beauty Facts has spotty coverage of indie/DTC skincare brands.
 
-    if (directResult) { resolve(directResult); return; }
+   Result: focused tool that does one thing well — sources clean INCI
+   ingredient lists at scale and lets admin review/approve. Images are
+   handled separately via manual upload, screenshot from brand sites, or
+   future Amazon Creators API integration.
+   ============================================================================ */
 
-    // Stage 2 — try via proxy (rescues CORS-blocked images from brand CDNs)
-    try {
-      const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-      const r = await fetch(proxied, { signal: AbortSignal.timeout(8000) });
-      if (!r.ok) { resolve(null); return; }
-      const blob = await r.blob();
-      if (blob.size < 2000 || !blob.type.startsWith("image/")) { resolve(null); return; }
-
-      // Load the blob as a data URL to measure dimensions
-      const dataUrl = await new Promise(res => {
-        const reader = new FileReader();
-        reader.onload = () => res(reader.result);
-        reader.onerror = () => res(null);
-        reader.readAsDataURL(blob);
-      });
-      if (!dataUrl) { resolve(null); return; }
-
-      const proxyResult = await new Promise(res => {
-        const img = new Image();
-        const timer = setTimeout(() => { img.src = ""; res(null); }, 4000);
-        img.onload = () => {
-          clearTimeout(timer);
-          if (img.naturalWidth < 200 || img.naturalHeight < 200) { res(null); return; }
-          // IMPORTANT: return the ORIGINAL url (not data URL) so we can re-fetch
-          // it later via proxy when admin approves.
-          res({ ok: true, width: img.naturalWidth, height: img.naturalHeight, url, viaProxy: true });
-        };
-        img.onerror = () => { clearTimeout(timer); res(null); };
-        img.src = dataUrl;
-      });
-      resolve(proxyResult);
-    } catch {
-      resolve(null);
-    }
-  });
-}
-
+// OBF — barcode lookup + name search. Returns only ingredient candidates.
 async function botSearchOBF({ barcode, productName, brand }) {
   const candidates = [];
   if (barcode) {
@@ -12335,11 +12293,9 @@ async function botSearchOBF({ barcode, productName, brand }) {
       const r = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${barcode}.json`, { signal: AbortSignal.timeout(6000) });
       if (r.ok) {
         const d = await r.json();
-        if (d?.product) {
-          const p = d.product;
-          const img = p.image_front_url || p.image_url;
-          const ingredients = p.ingredients_text_en || p.ingredients_text;
-          if (img || ingredients) candidates.push({ source: "OBF (barcode)", imageUrl: img || null, ingredients: ingredients || null });
+        const ingredients = d?.product?.ingredients_text_en || d?.product?.ingredients_text;
+        if (ingredients && ingredients.length > 40 && ingredients.includes(",")) {
+          candidates.push({ source: "OBF (barcode)", ingredients: ingredients.trim() });
         }
       }
     } catch {}
@@ -12347,13 +12303,14 @@ async function botSearchOBF({ barcode, productName, brand }) {
   try {
     const q = `${brand || ""} ${productName || ""}`.trim();
     if (q) {
-      const r = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=5&fields=product_name,brands,code,ingredients_text,ingredients_text_en,image_front_url`, { signal: AbortSignal.timeout(7000) });
+      const r = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=5&fields=product_name,brands,code,ingredients_text,ingredients_text_en`, { signal: AbortSignal.timeout(7000) });
       if (r.ok) {
         const d = await r.json();
         for (const p of (d.products || []).slice(0, 3)) {
-          const img = p.image_front_url;
           const ingredients = p.ingredients_text_en || p.ingredients_text;
-          if (img || ingredients) candidates.push({ source: "OBF (search)", imageUrl: img || null, ingredients: ingredients || null });
+          if (ingredients && ingredients.length > 40 && ingredients.includes(",")) {
+            candidates.push({ source: "OBF (search)", ingredients: ingredients.trim() });
+          }
         }
       }
     }
@@ -12361,87 +12318,31 @@ async function botSearchOBF({ barcode, productName, brand }) {
   return candidates;
 }
 
-async function botSearchSephora({ productName, brand }) {
-  const candidates = [];
-  try {
-    const q = `${brand || ""} ${productName || ""}`.trim();
-    if (!q) return candidates;
-    const url = `https://www.sephora.com/api/catalog/search?q=${encodeURIComponent(q)}&pageSize=6`;
-    const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-    const r = await fetch(proxied, { signal: AbortSignal.timeout(8000) });
-    if (r.ok) {
-      const d = await r.json();
-      for (const p of (d.products || []).slice(0, 4)) {
-        if (p.heroImage) candidates.push({ source: "Sephora", imageUrl: p.heroImage.startsWith("http") ? p.heroImage : `https://www.sephora.com${p.heroImage}`, ingredients: null });
-      }
-    }
-  } catch {}
-  return candidates;
-}
-
-async function botSearchUlta({ productName, brand }) {
-  const candidates = [];
-  try {
-    const q = `${brand || ""} ${productName || ""}`.trim();
-    if (!q) return candidates;
-    const url = `https://www.ulta.com/api/search?query=${encodeURIComponent(q)}&pageSize=6`;
-    const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-    const r = await fetch(proxied, { signal: AbortSignal.timeout(8000) });
-    if (r.ok) {
-      const d = await r.json();
-      const products = d?.results?.products || d?.products || [];
-      for (const p of products.slice(0, 4)) {
-        if (p.image || p.imageUrl) candidates.push({ source: "ULTA", imageUrl: p.image || p.imageUrl, ingredients: null });
-      }
-    }
-  } catch {}
-  return candidates;
-}
-
+// Claude with web_search — finds the brand's product page and pulls the
+// official INCI ingredient list. Single-purpose, no image hunting.
 async function botSearchClaude({ productName, brand }) {
   try {
-    // Two-step explicit prompt. The previous version conflated finding the
-    // product with extracting an image URL — Claude would find the right page
-    // but fail to consistently pull the image. This version walks Claude
-    // through the steps and tells it exactly where to look (og:image, JSON-LD,
-    // schema.org Product structured data) which are reliable structured fields
-    // present on virtually every modern brand site.
-    const prompt = `You are extracting skincare product data. Work through these steps in order.
+    const prompt = `You are extracting the official INCI ingredient list for a skincare product.
 
 PRODUCT TO FIND:
 Brand: ${brand || "unknown"}
 Product: ${productName || "unknown"}
 
-STEP 1 — Find the product's official page.
-Use web_search. Prefer (in order):
-  a) The brand's own DTC site (e.g., biossance.com, clearstem.com, alpynbeauty.com)
-  b) Sephora, Ulta, or Amazon product pages
-  c) Other reputable retailer pages
+STEPS:
+1. Use web_search to find the official product page. Prefer the brand's own website (e.g., biossance.com, clearstem.com, alpynbeauty.com), then Sephora/Ulta as fallbacks.
+2. Find the COMPLETE INCI ingredient list on that page. It should be a long comma-separated list, typically 10-50+ ingredients, in descending order of concentration.
+3. Return ONLY this JSON object:
 
-STEP 2 — Extract the canonical image URL.
-On the product page, the canonical product image is almost always available in one of these places (in priority order):
-  1. The og:image meta tag (used for Facebook/Twitter share previews) — this is the most reliable source and is a direct image URL
-  2. The schema.org Product JSON-LD "image" property (structured data in <script type="application/ld+json">)
-  3. Twitter card meta tag (twitter:image)
-  4. The first <img> tag inside the main product gallery
-
-Look for these specifically. Do NOT guess at image URLs — if you cannot find a structured image source, return null for imageUrl.
-
-STEP 3 — Extract the COMPLETE INCI ingredient list.
-Find it on the product page itself, in the official "ingredients" section. Do NOT use ingredient lists from third-party reviews, blog posts, or your training data. If the page only shows a partial or "key ingredients" list (e.g., "Featured Ingredients: Squalane, Niacinamide..."), return null — partial lists are worse than no list.
-
-STEP 4 — Return the JSON.
-Return ONLY this JSON object, no commentary:
 {
-  "imageUrl": "...the direct image URL from step 2, or null...",
-  "ingredients": "...the full INCI list from step 3 as a comma-separated string, or null...",
+  "ingredients": "...the full INCI list as a comma-separated string, in the exact order shown on the official source...",
   "sourceUrl": "...the exact URL of the page you used..."
 }
 
 Critical rules:
-- imageUrl must be a direct URL ending in .jpg, .jpeg, .png, .webp, or a known image CDN path. Not a page URL, not a placeholder.
-- Either field can be null independently — return what you found.
-- Never invent or fabricate ingredients.
+- The ingredient list MUST come from the actual product page, not from your training data, not from third-party reviews, not from blog posts.
+- If the page only shows "key ingredients" or a partial list (e.g., "Featured: Squalane, Niacinamide..."), return null for ingredients - partial lists are worse than no list.
+- Do NOT abbreviate, summarize, paraphrase, or invent. Copy the list verbatim.
+- If you cannot find the product or its full ingredient list, return null for ingredients. Never guess.
 - Return ONLY the JSON.`;
     const r = await fetch("/api/anthropic", {
       method: "POST",
@@ -12470,27 +12371,10 @@ Critical rules:
       console.warn(`[botSearchClaude] JSON parse failed:`, jsonMatch[0].slice(0, 200));
       return [];
     }
-    if (!parsed.imageUrl && !parsed.ingredients) return [];
-
-    // Validate that imageUrl actually looks like an image URL, not a page URL.
-    // Reject common false positives where Claude returns the page URL instead.
-    let cleanImageUrl = parsed.imageUrl;
-    if (cleanImageUrl) {
-      const lower = cleanImageUrl.toLowerCase();
-      const looksLikeImage = /\.(jpg|jpeg|png|webp|gif)(\?|$)/.test(lower)
-        || /\/cdn\.shopify\.com\//.test(lower)
-        || /\/cdn\//.test(lower)
-        || /images?\./.test(lower);
-      if (!looksLikeImage) {
-        console.warn(`[botSearchClaude] rejected non-image URL: ${cleanImageUrl}`);
-        cleanImageUrl = null;
-      }
-    }
-
+    if (!parsed.ingredients || parsed.ingredients.length < 40 || !parsed.ingredients.includes(",")) return [];
     return [{
       source: parsed.sourceUrl ? `Claude (${(()=>{ try { return new URL(parsed.sourceUrl).hostname.replace(/^www\./, ""); } catch { return "web"; } })()})` : "Claude (web search)",
-      imageUrl: cleanImageUrl,
-      ingredients: parsed.ingredients || null,
+      ingredients: parsed.ingredients.trim(),
     }];
   } catch (e) {
     console.warn("[botSearchClaude] error:", e?.message || e);
@@ -12500,31 +12384,24 @@ Critical rules:
 
 async function botEnrichProduct(product) {
   const baseQuery = { barcode: product.barcode, productName: product.productName, brand: product.brand };
-  // ALL sources run in parallel. Claude is no longer a "fallback" — for
-  // indie/DTC-heavy catalogs, the structured retailer APIs miss most products,
-  // and Claude with web search is often the only source that finds anything.
-  // Cost: ~$0.003 per Haiku+search call, negligible for catalog sizes <500.
-  const [obf, sephora, ulta, claude] = await Promise.all([
+  // Two ingredient sources in parallel: OBF (free, fast, spotty coverage) +
+  // Claude (paid pennies-per-call, slower, much better coverage for indie brands).
+  const [obf, claude] = await Promise.all([
     botSearchOBF(baseQuery),
-    botSearchSephora(baseQuery),
-    botSearchUlta(baseQuery),
     botSearchClaude(baseQuery),
   ]);
-  const allCandidates = [...obf, ...sephora, ...ulta, ...claude];
-
-  const imageValidations = await Promise.all(
-    allCandidates.filter(c => c.imageUrl).map(async c => {
-      const v = await validateImageCandidate(c.imageUrl);
-      if (!v) return null;
-      return { source: c.source, url: c.imageUrl, w: v.width, h: v.height };
-    })
-  );
-  const imageCandidates = imageValidations.filter(Boolean).slice(0, 6);
-  const ingredientCandidates = allCandidates
-    .filter(c => c.ingredients && c.ingredients.length > 40 && c.ingredients.includes(","))
-    .map(c => ({ source: c.source, text: c.ingredients.trim() }))
-    .slice(0, 4);
-  return { imageCandidates, ingredientCandidates };
+  const allCandidates = [...obf, ...claude];
+  // De-duplicate near-identical ingredient lists (same source repeated, etc.)
+  const seen = new Set();
+  const ingredientCandidates = [];
+  for (const c of allCandidates) {
+    const fingerprint = c.ingredients.toLowerCase().replace(/\s+/g, "").slice(0, 200);
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    ingredientCandidates.push({ source: c.source, text: c.ingredients });
+    if (ingredientCandidates.length >= 4) break;
+  }
+  return { ingredientCandidates };
 }
 
 async function saveEnrichmentJob(productId, payload) {
@@ -12536,13 +12413,13 @@ async function saveEnrichmentJob(productId, payload) {
 function EnrichmentBot({ onBack }) {
   const [view, setView] = useState("setup");
   const [eligibleProducts, setEligibleProducts] = useState([]);
-  const [filterMode, setFilterMode] = useState("missing-image");
+  const [filterMode, setFilterMode] = useState("missing-ingredients");
   const [batchSize, setBatchSize] = useState(10);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0, current: "" });
   const [queueCount, setQueueCount] = useState(0);
   // Run log — visible record of what happened to every product in the most recent batch.
-  // Each entry: { productId, productName, brand, status, detail, imgCount, ingCount }
+  // Each entry: { productId, productName, brand, status, detail, ingCount }
   const [runLog, setRunLog] = useState([]);
   // When true, the bot will re-process products that already had a recent
   // enrichment job. Off by default — once you've decided about a product, it
@@ -12628,15 +12505,13 @@ function EnrichmentBot({ onBack }) {
         brand: p.brand,
         status: "pending",
         detail: "",
-        imgCount: 0,
         ingCount: 0,
       };
 
-      // Phase 1: enrich (search all sources)
+      // Phase 1: enrich (search OBF + Claude for ingredients)
       let result;
       try {
         result = await botEnrichProduct(p);
-        entry.imgCount = result.imageCandidates.length;
         entry.ingCount = result.ingredientCandidates.length;
       } catch (e) {
         entry.status = "search_failed";
@@ -12649,21 +12524,19 @@ function EnrichmentBot({ onBack }) {
 
       // Phase 2: save to Firestore
       try {
-        const status = (result.imageCandidates.length > 0 || result.ingredientCandidates.length > 0) ? "pending_review" : "no_results";
+        const status = result.ingredientCandidates.length > 0 ? "pending_review" : "no_results";
         await saveEnrichmentJob(p.id, {
           productName: p.productName,
           brand: p.brand,
           scanCount: p.scanCount || 0,
           currentIngredients: p.ingredients || "",
-          currentImage: p.adminImage || p.image || "",
-          imageCandidates: result.imageCandidates,
           ingredientCandidates: result.ingredientCandidates,
           status,
         });
         entry.status = status === "pending_review" ? "queued" : "no_results";
         entry.detail = status === "pending_review"
-          ? `${result.imageCandidates.length} image(s) + ${result.ingredientCandidates.length} ingredient list(s)`
-          : "Bot found nothing usable from any source";
+          ? `${result.ingredientCandidates.length} ingredient list(s) found`
+          : "No ingredient list found on OBF or via Claude search";
       } catch (e) {
         entry.status = "save_failed";
         entry.detail = (e?.code === "permission-denied")
@@ -12686,7 +12559,7 @@ function EnrichmentBot({ onBack }) {
       <button onClick={onBack} style={{ background: "none", border: "none", color: T.textMid, cursor: "pointer", fontSize: "0.75rem", marginBottom: "0.75rem", padding: 0 }}>&larr; Back</button>
       <div style={{ marginBottom: "1rem" }}>
         <div style={{ fontSize: "1.15rem", fontWeight: 700, color: T.text, letterSpacing: "-0.01em" }}>🤖 Enrichment Bot</div>
-        <div style={{ fontSize: "0.7rem", color: T.textLight, marginTop: "0.2rem" }}>Finds product images and ingredients. You approve.</div>
+        <div style={{ fontSize: "0.7rem", color: T.textLight, marginTop: "0.2rem" }}>Finds INCI ingredient lists from brand sites. You approve.</div>
       </div>
       <div style={{ display: "flex", gap: "0.3rem", marginBottom: "1rem", background: T.surfaceAlt, padding: "0.25rem", borderRadius: "0.6rem" }}>
         <button onClick={() => setView("setup")} style={{ flex: 1, padding: "0.5rem", background: view === "setup" ? T.surface : "transparent", border: "none", borderRadius: "0.4rem", fontSize: "0.7rem", fontWeight: view === "setup" ? 600 : 400, color: view === "setup" ? T.text : T.textMid, cursor: "pointer", fontFamily: "'Inter', sans-serif" }}>🔍 Run Bot</button>
@@ -12701,9 +12574,9 @@ function EnrichmentBot({ onBack }) {
             <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.4rem" }}>What to enrich</div>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
               {[
-                ["missing-image", "Products missing images"],
                 ["missing-ingredients", "Products missing ingredients"],
-                ["missing-either", "Missing either images OR ingredients"],
+                ["missing-either", "Missing ingredients OR images"],
+                ["missing-image", "Products missing images (won't get any)"],
                 ["all", "All approved products (re-verify)"],
               ].map(([id, lbl]) => (
                 <button key={id} onClick={() => setFilterMode(id)} style={{ padding: "0.55rem 0.8rem", background: filterMode === id ? T.iceBlue : T.surface, border: `1px solid ${filterMode === id ? T.navy : T.border}`, borderRadius: "0.5rem", fontSize: "0.78rem", fontWeight: filterMode === id ? 600 : 400, color: T.text, cursor: "pointer", fontFamily: "'Inter', sans-serif", textAlign: "left" }}>{lbl}</button>
@@ -12774,21 +12647,6 @@ function EnrichmentBot({ onBack }) {
                   </div>
                 )}
                 {/* Per-product entries */}
-                {/* Sub-breakdown: of the queued ones, how many got images vs ingredients vs both */}
-                {queued > 0 && (() => {
-                  const queuedEntries = runLog.filter(e => e.status === "queued");
-                  const withImages = queuedEntries.filter(e => e.imgCount > 0).length;
-                  const withIngredients = queuedEntries.filter(e => e.ingCount > 0).length;
-                  const withBoth = queuedEntries.filter(e => e.imgCount > 0 && e.ingCount > 0).length;
-                  return (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginBottom: "0.6rem", paddingLeft: "0.2rem" }}>
-                      <span style={{ fontSize: "0.6rem", color: T.textMid }}>Of {queued} queued:</span>
-                      <span style={{ fontSize: "0.6rem", color: T.textMid }}>{withImages} with images,</span>
-                      <span style={{ fontSize: "0.6rem", color: T.textMid }}>{withIngredients} with ingredients,</span>
-                      <span style={{ fontSize: "0.6rem", color: T.textMid, fontWeight: 600 }}>{withBoth} with both</span>
-                    </div>
-                  );
-                })()}
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", maxHeight: "300px", overflowY: "auto" }}>
                   {runLog.map((entry, i) => {
                     const color = entry.status === "queued" ? T.sage
@@ -12803,16 +12661,10 @@ function EnrichmentBot({ onBack }) {
                         <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                           <span style={{ color, fontWeight: 700, minWidth: "0.9rem" }}>{icon}</span>
                           <span style={{ color: T.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.brand} — {entry.productName}</span>
-                          {/* Per-row count badges */}
-                          {entry.status === "queued" && (
-                            <div style={{ display: "flex", gap: "0.25rem", flexShrink: 0 }}>
-                              <span style={{ background: entry.imgCount > 0 ? T.sage + "22" : T.textLight + "22", color: entry.imgCount > 0 ? T.sage : T.textLight, padding: "0.1rem 0.35rem", borderRadius: "0.25rem", fontSize: "0.55rem", fontWeight: 700 }}>
-                                {entry.imgCount > 0 ? `📷 ${entry.imgCount}` : "📷 0"}
-                              </span>
-                              <span style={{ background: entry.ingCount > 0 ? T.sage + "22" : T.textLight + "22", color: entry.ingCount > 0 ? T.sage : T.textLight, padding: "0.1rem 0.35rem", borderRadius: "0.25rem", fontSize: "0.55rem", fontWeight: 700 }}>
-                                {entry.ingCount > 0 ? `🧪 ${entry.ingCount}` : "🧪 0"}
-                              </span>
-                            </div>
+                          {entry.status === "queued" && entry.ingCount > 0 && (
+                            <span style={{ background: T.sage + "22", color: T.sage, padding: "0.1rem 0.35rem", borderRadius: "0.25rem", fontSize: "0.55rem", fontWeight: 700, flexShrink: 0 }}>
+                              🧪 {entry.ingCount}
+                            </span>
                           )}
                         </div>
                         <div style={{ paddingLeft: "1.3rem", color: T.textLight, fontSize: "0.6rem" }}>{entry.detail}</div>
@@ -12849,7 +12701,6 @@ function EnrichmentBotQueue() {
   const [jobs, setJobs] = useState([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   // Tri-state: null = unselected, "keep" = deliberately keep current, object = chose a candidate
-  const [selectedImage, setSelectedImage] = useState(null);
   const [selectedIngredients, setSelectedIngredients] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -12863,7 +12714,7 @@ function EnrichmentBotQueue() {
     return unsub;
   }, []);
 
-  useEffect(() => { setSelectedImage(null); setSelectedIngredients(null); }, [currentIdx, jobs.length]);
+  useEffect(() => { setSelectedIngredients(null); }, [currentIdx, jobs.length]);
 
   const job = jobs[currentIdx];
 
@@ -12878,82 +12729,30 @@ function EnrichmentBotQueue() {
   }
   if (!job) { return <div style={{ padding: "2rem", textAlign: "center", color: T.textLight }}>Loading…</div>; }
 
-  // Helpers — does the user have something chosen for this slot? "keep" counts.
-  const imgChosen = selectedImage !== null;
   const ingChosen = selectedIngredients !== null;
-  // Is this slot a "real new candidate" vs "keep current"?
-  const imgIsNew = imgChosen && selectedImage !== "keep";
   const ingIsNew = ingChosen && selectedIngredients !== "keep";
 
   async function approve() {
     if (saving) return;
-    if (!imgChosen && !ingChosen) { alert("Select an image or ingredient list first (or tap 'Keep current' for both)."); return; }
+    if (!ingChosen) { alert("Select an ingredient list first (or tap 'Keep current' to skip)."); return; }
     setSaving(true);
     try {
-      // GUARD 1 — Verify the product actually exists before we try to write anything.
-      // This protects against orphaned enrichment jobs where the product was deleted.
+      // GUARD 1 — Verify product exists
       const productRef = doc(db, "products", job.productId);
       const productSnap = await getDoc(productRef);
       if (!productSnap.exists()) {
-        // Mark the job as orphaned and move on — don't try to write to a missing product.
         await updateDoc(doc(db, "enrichmentJobs", job.productId), {
           status: "orphaned",
           orphanedAt: serverTimestamp(),
           orphanReason: `No product exists at products/${job.productId}`,
         }).catch(e => console.error("orphan mark failed:", e));
-        alert(`This product no longer exists in the database (id: ${job.productId}).\n\nThe job has been marked as orphaned and removed from the queue. The next product will load.`);
+        alert(`This product no longer exists in the database (id: ${job.productId}).\n\nThe job has been marked as orphaned. The next product will load.`);
         setSaving(false);
         if (currentIdx >= jobs.length - 1) setCurrentIdx(Math.max(0, jobs.length - 2));
         return;
       }
 
       const updates = { lastVerified: serverTimestamp() };
-      let imageUploadFailed = false;
-      let imageFailReason = "";
-
-      if (imgIsNew) {
-        // Try the image fetch in two stages — same as validation strategy.
-        // Some CDNs allow direct fetch; others need the proxy. Try both.
-        async function tryFetchImage(url) {
-          // Stage 1: direct fetch
-          try {
-            const r = await fetch(url, { signal: AbortSignal.timeout(12000), mode: "cors" });
-            if (r.ok) {
-              const blob = await r.blob();
-              if (blob.size > 2000 && blob.type.startsWith("image/")) {
-                return { blob, source: "direct" };
-              }
-            }
-          } catch (e) { /* fall through to proxy */ }
-          // Stage 2: proxy fetch
-          try {
-            const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-            const r = await fetch(proxied, { signal: AbortSignal.timeout(15000) });
-            if (!r.ok) throw new Error(`proxy returned HTTP ${r.status}`);
-            const blob = await r.blob();
-            if (blob.size <= 2000) throw new Error(`image too small (${blob.size} bytes — proxy may have returned an error page)`);
-            if (!blob.type.startsWith("image/")) throw new Error(`got ${blob.type} instead of image (proxy may have returned an error page)`);
-            return { blob, source: "proxy" };
-          } catch (e) {
-            throw e;
-          }
-        }
-
-        try {
-          const { blob, source } = await tryFetchImage(selectedImage.url);
-          const ext = (blob.type || "image/jpeg").split("/")[1] || "jpg";
-          const ref = storageRef(storage, `products/${job.productId}/image.${ext}`);
-          await uploadBytes(ref, blob, { contentType: blob.type });
-          const url = await getDownloadURL(ref);
-          updates.adminImage = url;
-          updates.image = url;
-          console.log(`[bot] image saved via ${source} for ${job.productId}`);
-        } catch (e) {
-          console.error("[bot] image save failed:", e, "URL was:", selectedImage.url);
-          imageUploadFailed = true;
-          imageFailReason = e?.message || String(e);
-        }
-      }
 
       if (ingIsNew) {
         updates.ingredients = selectedIngredients.text;
@@ -12965,22 +12764,12 @@ function EnrichmentBotQueue() {
         } catch (e) { console.error("score recompute failed", e); }
       }
 
-      // GUARD 2 — Use setDoc with merge:true instead of updateDoc.
-      // setDoc + merge silently no-ops on missing docs in some scenarios and
-      // is generally safer than updateDoc which throws on any missing field path.
-      // We've already verified the product exists, but this is belt-and-suspenders.
       await setDoc(productRef, updates, { merge: true });
       await updateDoc(doc(db, "enrichmentJobs", job.productId), { status: "approved", approvedAt: serverTimestamp() });
-
-      // Surface any non-fatal warning AFTER the successful save
-      if (imageUploadFailed && imgIsNew) {
-        alert(`Saved ingredients! Image upload failed.\n\nReason: ${imageFailReason}\n\nThe current image was kept. Try a different image candidate, or skip the image for now.`);
-      }
 
       if (currentIdx >= jobs.length - 1) setCurrentIdx(Math.max(0, jobs.length - 2));
     } catch (e) {
       console.error("approve failed:", e);
-      // More descriptive error — include the product ID so we can debug
       alert(`Save failed for product ${job.productId}:\n\n${e?.message || "unknown error"}\n\nNothing was changed. The job stays in the queue.\nCheck the browser console for full details.`);
     }
     setSaving(false);
@@ -12992,7 +12781,6 @@ function EnrichmentBotQueue() {
   async function reject() {
     try { await updateDoc(doc(db, "enrichmentJobs", job.productId), { status: "rejected", rejectedAt: serverTimestamp() }); } catch {}
   }
-  // Manually mark a job as orphaned (admin can use this if the product clearly doesn't exist)
   async function markOrphaned() {
     if (!confirm(`Mark this job as orphaned and remove from queue?\n\nProduct ID: ${job.productId}`)) return;
     try {
@@ -13012,43 +12800,14 @@ function EnrichmentBotQueue() {
         <div style={{ fontSize: "0.7rem", color: T.textMid }}>{job.brand}</div>
         <div style={{ fontSize: "0.55rem", color: T.textLight, marginTop: "0.3rem", fontFamily: "monospace" }}>id: {job.productId}</div>
       </div>
-      {(!job.imageCandidates || job.imageCandidates.length === 0) && (!job.ingredientCandidates || job.ingredientCandidates.length === 0) && (
+
+      {(!job.ingredientCandidates || job.ingredientCandidates.length === 0) && (
         <div style={{ padding: "1.25rem", background: T.amber + "15", border: `1px solid ${T.amber}40`, borderRadius: "0.55rem", marginBottom: "1rem" }}>
-          <div style={{ fontSize: "0.78rem", fontWeight: 600, color: T.amber, marginBottom: "0.3rem" }}>⚠ Bot couldn't find anything</div>
-          <div style={{ fontSize: "0.7rem", color: T.textMid }}>This product doesn't appear in OBF, Sephora, ULTA, or via Claude search. Try editing it manually in Manage Products.</div>
+          <div style={{ fontSize: "0.78rem", fontWeight: 600, color: T.amber, marginBottom: "0.3rem" }}>⚠ No ingredients found</div>
+          <div style={{ fontSize: "0.7rem", color: T.textMid }}>Bot couldn't find an ingredient list for this product on Open Beauty Facts or via Claude web search. You can still keep the current ingredients (if any) or skip and edit manually in Manage Products.</div>
         </div>
       )}
-      {job.imageCandidates && job.imageCandidates.length > 0 && (
-        <div style={{ marginBottom: "1.25rem" }}>
-          <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.5rem" }}>Choose an image {imgChosen && <span style={{color:T.sage,fontWeight:700}}>✓</span>}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
-            {job.imageCandidates.map((img, i) => {
-              const isSelected = selectedImage && selectedImage !== "keep" && selectedImage.url === img.url;
-              return (
-                <button key={i} onClick={() => setSelectedImage(img)} style={{ background: T.surface, border: `2px solid ${isSelected ? T.sage : T.border}`, borderRadius: "0.5rem", padding: "0.4rem", cursor: "pointer", display: "flex", flexDirection: "column", gap: "0.3rem", fontFamily: "'Inter', sans-serif" }}>
-                  <div style={{ width: "100%", aspectRatio: "1", background: "#fff", borderRadius: "0.3rem", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <img src={img.url} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} alt="" />
-                  </div>
-                  <div style={{ fontSize: "0.6rem", color: T.textMid, textAlign: "left" }}>
-                    <div style={{ fontWeight: 600, color: isSelected ? T.sage : T.text }}>{img.source}</div>
-                    <div>{img.w}x{img.h}</div>
-                  </div>
-                </button>
-              );
-            })}
-            {job.currentImage && (
-              <button onClick={() => setSelectedImage("keep")} style={{ background: T.surfaceAlt, border: `2px solid ${selectedImage === "keep" ? T.sage : T.border}`, borderRadius: "0.5rem", padding: "0.4rem", cursor: "pointer", display: "flex", flexDirection: "column", gap: "0.3rem", fontFamily: "'Inter', sans-serif" }}>
-                <div style={{ width: "100%", aspectRatio: "1", background: "#fff", borderRadius: "0.3rem", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <img src={job.currentImage} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} alt="" />
-                </div>
-                <div style={{ fontSize: "0.6rem", color: T.textMid, textAlign: "left" }}>
-                  <div style={{ fontWeight: 600, color: selectedImage === "keep" ? T.sage : T.text }}>Keep current</div>
-                </div>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
+
       {job.ingredientCandidates && job.ingredientCandidates.length > 0 && (
         <div style={{ marginBottom: "1.25rem" }}>
           <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.5rem" }}>Choose an ingredient list {ingChosen && <span style={{color:T.sage,fontWeight:700}}>✓</span>}</div>
@@ -13078,6 +12837,12 @@ function EnrichmentBotQueue() {
           </div>
         </div>
       )}
+
+      {/* Note about images: this bot is ingredients-only. */}
+      <div style={{ marginBottom: "1rem", padding: "0.6rem 0.7rem", background: T.iceBlue + "55", border: `1px solid ${T.iceBlue}`, borderRadius: "0.5rem", fontSize: "0.65rem", color: T.textMid }}>
+        <strong style={{ color: T.text }}>Note:</strong> Images aren't auto-found. Add or update images in Manage Products → product edit screen.
+      </div>
+
       <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.6rem" }}>
         <button onClick={() => setCurrentIdx(Math.max(0, currentIdx - 1))} disabled={currentIdx === 0} style={{ flex: "0 0 auto", padding: "0.7rem 0.9rem", background: T.surface, border: `1px solid ${T.border}`, borderRadius: "0.5rem", color: currentIdx === 0 ? T.textLight : T.text, cursor: currentIdx === 0 ? "default" : "pointer", fontSize: "0.78rem", fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>&larr; Prev</button>
         <button onClick={approve} disabled={saving} style={{ flex: 1, padding: "0.7rem", background: T.sage, color: "#fff", border: "none", borderRadius: "0.5rem", cursor: saving ? "default" : "pointer", fontSize: "0.78rem", fontWeight: 700, fontFamily: "'Inter', sans-serif" }}>
@@ -13771,7 +13536,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
         <div style={{fontSize:"1.5rem",flexShrink:0}}>🤖</div>
         <div style={{flex:1}}>
           <div style={{fontSize:"0.82rem",fontWeight:"700",color:T.text}}>Enrichment Bot</div>
-          <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"1px"}}>Batch search images + ingredients. You approve.</div>
+          <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"1px"}}>Batch search ingredient lists. You approve.</div>
         </div>
         <div style={{fontSize:"0.7rem",color:T.navy,fontWeight:"700"}}>Open →</div>
       </button>
