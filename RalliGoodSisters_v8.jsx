@@ -12354,49 +12354,83 @@ async function botSearchUlta({ productName, brand }) {
 
 async function botSearchClaude({ productName, brand }) {
   try {
-    const prompt = `Find the official product page for "${brand || ""} ${productName || ""}".
-Return ONLY a JSON object with these fields, nothing else:
+    // Stronger prompt: tell Claude exactly what to do, where to look, and
+    // prevent hallucination by requiring source URL verification.
+    const prompt = `You are searching for skincare product data. The product is:
+
+Brand: ${brand || "unknown"}
+Product: ${productName || "unknown"}
+
+Use web search to find this product on either:
+1. The brand's own official website (preferred)
+2. A major retailer page (Sephora, Ulta, Amazon, brand DTC site)
+
+Then return a JSON object with these fields, nothing else:
 {
-  "imageUrl": "direct URL to a clean product photo on a white background",
-  "ingredients": "the full INCI ingredient list as a comma-separated string",
-  "officialPageUrl": "the brand's product detail page URL"
+  "imageUrl": "direct URL to a clean product photo (white background preferred). Must be a real image URL ending in .jpg, .jpeg, .png, or .webp",
+  "ingredients": "the COMPLETE INCI ingredient list as a comma-separated string, in the exact order shown on the official source. Do NOT abbreviate, summarize, or invent.",
+  "sourceUrl": "the exact URL where you found this data"
 }
-If you cannot find a value, use null. Do not invent ingredients.`;
+
+Critical rules:
+- If you cannot find the product, return null for that field — do NOT guess or invent.
+- The ingredient list must come from the actual product page, not your training data.
+- If the page only shows partial ingredients (like "key ingredients"), set ingredients to null — do NOT return a partial list.
+- Return ONLY the JSON object, no commentary.`;
     const r = await fetch("/api/anthropic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 1500,
+        max_tokens: 2000,
         tools: [{ type: "web_search_20250305", name: "web_search" }],
         messages: [{ role: "user", content: prompt }],
       }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(45000),
     });
-    if (!r.ok) return [];
+    if (!r.ok) {
+      console.warn(`[botSearchClaude] HTTP ${r.status}`);
+      return [];
+    }
     const d = await r.json();
     const textBlocks = (d.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
-    const jsonMatch = textBlocks.match(/\{[\s\S]*?\}/);
-    if (!jsonMatch) return [];
+    // More forgiving JSON extraction — allows code fences and surrounding text
+    const jsonMatch = textBlocks.match(/\{[\s\S]*?"sourceUrl"[\s\S]*?\}/) || textBlocks.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn(`[botSearchClaude] no JSON found for ${brand} ${productName}`);
+      return [];
+    }
     let parsed;
-    try { parsed = JSON.parse(jsonMatch[0]); } catch { return []; }
+    try { parsed = JSON.parse(jsonMatch[0]); } catch (e) {
+      console.warn(`[botSearchClaude] JSON parse failed:`, jsonMatch[0].slice(0, 200));
+      return [];
+    }
     if (!parsed.imageUrl && !parsed.ingredients) return [];
-    return [{ source: "Claude (web search)", imageUrl: parsed.imageUrl || null, ingredients: parsed.ingredients || null }];
-  } catch { return []; }
+    return [{
+      source: parsed.sourceUrl ? `Claude (${new URL(parsed.sourceUrl).hostname.replace(/^www\./, "")})` : "Claude (web search)",
+      imageUrl: parsed.imageUrl || null,
+      ingredients: parsed.ingredients || null,
+    }];
+  } catch (e) {
+    console.warn("[botSearchClaude] error:", e?.message || e);
+    return [];
+  }
 }
 
 async function botEnrichProduct(product) {
   const baseQuery = { barcode: product.barcode, productName: product.productName, brand: product.brand };
-  const [obf, sephora, ulta] = await Promise.all([
-    botSearchOBF(baseQuery), botSearchSephora(baseQuery), botSearchUlta(baseQuery),
+  // ALL sources run in parallel. Claude is no longer a "fallback" — for
+  // indie/DTC-heavy catalogs, the structured retailer APIs miss most products,
+  // and Claude with web search is often the only source that finds anything.
+  // Cost: ~$0.003 per Haiku+search call, negligible for catalog sizes <500.
+  const [obf, sephora, ulta, claude] = await Promise.all([
+    botSearchOBF(baseQuery),
+    botSearchSephora(baseQuery),
+    botSearchUlta(baseQuery),
+    botSearchClaude(baseQuery),
   ]);
-  let allCandidates = [...obf, ...sephora, ...ulta];
-  const imageCount = allCandidates.filter(c => c.imageUrl).length;
-  const ingredientCount = allCandidates.filter(c => c.ingredients).length;
-  if (imageCount < 3 || ingredientCount < 1) {
-    const claude = await botSearchClaude(baseQuery);
-    allCandidates = [...allCandidates, ...claude];
-  }
+  const allCandidates = [...obf, ...sephora, ...ulta, ...claude];
+
   const imageValidations = await Promise.all(
     allCandidates.filter(c => c.imageUrl).map(async c => {
       const v = await validateImageCandidate(c.imageUrl);
