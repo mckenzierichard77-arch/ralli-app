@@ -12544,25 +12544,64 @@ function EnrichmentBot({ onBack }) {
   // Run log — visible record of what happened to every product in the most recent batch.
   // Each entry: { productId, productName, brand, status, detail, imgCount, ingCount }
   const [runLog, setRunLog] = useState([]);
+  // When true, the bot will re-process products that already had a recent
+  // enrichment job. Off by default — once you've decided about a product, it
+  // shouldn't reappear in the next batch.
+  const [reprocessRecent, setReprocessRecent] = useState(false);
+  // How many products are excluded by the recent-job filter. Surface this so
+  // admin understands why their eligible count might be smaller than expected.
+  const [excludedByRecentJobs, setExcludedByRecentJobs] = useState(0);
 
   useEffect(() => {
     (async () => {
       try {
+        // Step 1 — load all approved products
         const snap = await getDocs(query(collection(db, "products"), where("approved", "==", true), limit(500)));
         const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Step 2 — load recent enrichment job IDs (regardless of status) so we
+        // can exclude products that have already been touched. 30-day window
+        // matches the product re-verification cadence.
+        let recentJobIds = new Set();
+        if (!reprocessRecent) {
+          try {
+            const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+            const jobsSnap = await getDocs(collection(db, "enrichmentJobs"));
+            jobsSnap.forEach(d => {
+              const data = d.data();
+              const ts = data.createdAt?.seconds ? data.createdAt.seconds * 1000 : (data.createdAt || 0);
+              // Exclude if the job is recent AND it's in a terminal state
+              // (approved, rejected, orphaned, no_results, skipped). pending_review
+              // jobs are also excluded — they're already in the queue, no need
+              // to re-process. Only failed jobs eventually fall back into eligible.
+              if (ts > cutoff) {
+                recentJobIds.add(data.productId || d.id);
+              }
+            });
+          } catch (e) { console.warn("recent jobs load failed", e); }
+        }
+
+        // Step 3 — apply both the missing-data filter AND the recent-job exclusion
+        let excludedCount = 0;
         const filtered = all.filter(p => {
           const noImage = !p.adminImage && !p.image;
           const noIng = !p.ingredients || p.ingredients.length < 30;
-          if (filterMode === "missing-image") return noImage;
-          if (filterMode === "missing-ingredients") return noIng;
-          if (filterMode === "missing-either") return noImage || noIng;
+          let matchesNeed = false;
+          if (filterMode === "missing-image") matchesNeed = noImage;
+          else if (filterMode === "missing-ingredients") matchesNeed = noIng;
+          else if (filterMode === "missing-either") matchesNeed = noImage || noIng;
+          else matchesNeed = true;
+
+          if (!matchesNeed) return false;
+          if (recentJobIds.has(p.id)) { excludedCount++; return false; }
           return true;
         });
         filtered.sort((a, b) => (b.scanCount || 0) - (a.scanCount || 0));
         setEligibleProducts(filtered);
+        setExcludedByRecentJobs(excludedCount);
       } catch (e) { console.error("loading eligible products failed", e); }
     })();
-  }, [filterMode]);
+  }, [filterMode, reprocessRecent]);
 
   useEffect(() => {
     const q = query(collection(db, "enrichmentJobs"), where("status", "==", "pending_review"));
@@ -12679,6 +12718,19 @@ function EnrichmentBot({ onBack }) {
               ))}
             </div>
             <div style={{ fontSize: "0.65rem", color: T.textLight, marginTop: "0.4rem" }}>{eligibleProducts.length} eligible products. Bot will work through {Math.min(batchSize, eligibleProducts.length)} now.</div>
+            {excludedByRecentJobs > 0 && (
+              <div style={{ fontSize: "0.6rem", color: T.textLight, marginTop: "0.3rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                <span>{excludedByRecentJobs} skipped (already enriched in last 30 days).</span>
+                <button onClick={() => setReprocessRecent(true)} style={{ background: "none", border: "none", color: T.navy, fontSize: "0.6rem", textDecoration: "underline", cursor: "pointer", padding: 0, fontFamily: "'Inter', sans-serif" }}>
+                  Include them anyway
+                </button>
+              </div>
+            )}
+            {reprocessRecent && (
+              <div style={{ fontSize: "0.6rem", color: T.amber, marginTop: "0.3rem" }}>
+                ⚠ Including recently-enriched products. <button onClick={() => setReprocessRecent(false)} style={{ background: "none", border: "none", color: T.navy, fontSize: "0.6rem", textDecoration: "underline", cursor: "pointer", padding: 0, fontFamily: "'Inter', sans-serif" }}>Reset</button>
+              </div>
+            )}
           </div>
           <button onClick={startBatch} disabled={running || eligibleProducts.length === 0} style={{ width: "100%", padding: "0.8rem", background: running || eligibleProducts.length === 0 ? T.textLight : T.navy, color: "#fff", border: "none", borderRadius: "0.6rem", fontSize: "0.85rem", fontWeight: 700, cursor: running || eligibleProducts.length === 0 ? "default" : "pointer", fontFamily: "'Inter', sans-serif" }}>
             {running ? `Running… ${progress.done}/${progress.total}` : eligibleProducts.length === 0 ? "No eligible products" : `Start enriching ${Math.min(batchSize, eligibleProducts.length)} products`}
