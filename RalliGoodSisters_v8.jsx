@@ -11470,6 +11470,12 @@ function AdminProductHub({ user } = {}) {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // BOT MODE — Enrichment Bot for batch image+ingredient search
+  // ─────────────────────────────────────────────────────────────────────────
+  if (mode==="bot") return <EnrichmentBot onBack={()=>setMode("list")}/>;
+
+  // ─────────────────────────────────────────────────────────────────────────
   // ADD PRODUCT MODE
   // ─────────────────────────────────────────────────────────────────────────
   if (mode==="add") return (
@@ -11646,6 +11652,17 @@ function AdminProductHub({ user } = {}) {
               ＋ Add new
             </button>
           </div>
+
+          {/* Enrichment Bot — batch search + review queue */}
+          <button onClick={()=>setMode("bot")}
+            style={{marginTop:"0.5rem",width:"100%",padding:"0.7rem 0.85rem",background:`linear-gradient(135deg, ${T.iceBlue}, ${T.iceBlue}cc)`,border:`1.5px solid ${T.navy}`,borderRadius:"0.6rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",gap:"0.6rem"}}>
+            <div style={{fontSize:"1.15rem",flexShrink:0}}>🤖</div>
+            <div style={{flex:1,textAlign:"left"}}>
+              <div style={{fontSize:"0.78rem",fontWeight:"700",color:T.text}}>Enrichment Bot</div>
+              <div style={{fontSize:"0.6rem",color:T.textMid,marginTop:"1px"}}>Batch search images + ingredients. You approve.</div>
+            </div>
+            <div style={{fontSize:"0.7rem",color:T.navy,fontWeight:"700"}}>Open →</div>
+          </button>
         </div>
       ) : (
         <div style={{background:T.sage+"15",border:`1.5px solid ${T.sage}55`,borderRadius:"0.85rem",padding:"0.95rem 1rem",fontFamily:"'Inter',sans-serif",textAlign:"center"}}>
