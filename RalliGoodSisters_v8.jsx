@@ -12426,6 +12426,9 @@ function EnrichmentBot({ onBack }) {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0, current: "" });
   const [queueCount, setQueueCount] = useState(0);
+  // Run log — visible record of what happened to every product in the most recent batch.
+  // Each entry: { productId, productName, brand, status, detail, imgCount, ingCount }
+  const [runLog, setRunLog] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -12455,22 +12458,70 @@ function EnrichmentBot({ onBack }) {
   async function startBatch() {
     if (running) return;
     setRunning(true);
+    setRunLog([]); // clear previous log
     const batch = eligibleProducts.slice(0, batchSize);
     setProgress({ done: 0, total: batch.length, current: "" });
+
+    const log = [];
+
     for (let i = 0; i < batch.length; i++) {
       const p = batch[i];
       setProgress({ done: i, total: batch.length, current: `${p.brand} - ${p.productName}` });
+
+      const entry = {
+        productId: p.id,
+        productName: p.productName,
+        brand: p.brand,
+        status: "pending",
+        detail: "",
+        imgCount: 0,
+        ingCount: 0,
+      };
+
+      // Phase 1: enrich (search all sources)
+      let result;
       try {
-        const result = await botEnrichProduct(p);
+        result = await botEnrichProduct(p);
+        entry.imgCount = result.imageCandidates.length;
+        entry.ingCount = result.ingredientCandidates.length;
+      } catch (e) {
+        entry.status = "search_failed";
+        entry.detail = e?.message || String(e);
+        console.error(`[bot] search failed for ${p.id} (${p.brand} - ${p.productName}):`, e);
+        log.push(entry);
+        setRunLog([...log]);
+        continue;
+      }
+
+      // Phase 2: save to Firestore
+      try {
         const status = (result.imageCandidates.length > 0 || result.ingredientCandidates.length > 0) ? "pending_review" : "no_results";
         await saveEnrichmentJob(p.id, {
-          productName: p.productName, brand: p.brand, scanCount: p.scanCount || 0,
-          currentIngredients: p.ingredients || "", currentImage: p.adminImage || p.image || "",
-          imageCandidates: result.imageCandidates, ingredientCandidates: result.ingredientCandidates,
+          productName: p.productName,
+          brand: p.brand,
+          scanCount: p.scanCount || 0,
+          currentIngredients: p.ingredients || "",
+          currentImage: p.adminImage || p.image || "",
+          imageCandidates: result.imageCandidates,
+          ingredientCandidates: result.ingredientCandidates,
           status,
         });
-      } catch (e) { console.error(`enrichment failed for ${p.id}:`, e); }
+        entry.status = status === "pending_review" ? "queued" : "no_results";
+        entry.detail = status === "pending_review"
+          ? `${result.imageCandidates.length} image(s) + ${result.ingredientCandidates.length} ingredient list(s)`
+          : "Bot found nothing usable from any source";
+      } catch (e) {
+        entry.status = "save_failed";
+        entry.detail = (e?.code === "permission-denied")
+          ? "PERMISSION DENIED — Firestore rules likely missing for `enrichmentJobs`. Deploy the rules first."
+          : (e?.message || String(e));
+        console.error(`[bot] save failed for ${p.id} (${p.brand} - ${p.productName}):`, e);
+      }
+
+      log.push(entry);
+      setRunLog([...log]);
     }
+
     setProgress({ done: batch.length, total: batch.length, current: "" });
     setRunning(false);
     setEligibleProducts(prev => prev.slice(batchSize));
@@ -12526,7 +12577,61 @@ function EnrichmentBot({ onBack }) {
               </div>
             </div>
           )}
-          {!running && eligibleProducts.length > 0 && (
+
+          {/* Run log — visible record of what happened to every product. Stays visible after batch finishes so admin can diagnose. */}
+          {runLog.length > 0 && (() => {
+            const queued = runLog.filter(e => e.status === "queued").length;
+            const noResults = runLog.filter(e => e.status === "no_results").length;
+            const searchFailed = runLog.filter(e => e.status === "search_failed").length;
+            const saveFailed = runLog.filter(e => e.status === "save_failed").length;
+            const hasPermissionIssue = runLog.some(e => e.detail && e.detail.includes("PERMISSION DENIED"));
+            return (
+              <div style={{ marginTop: "1rem" }}>
+                <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.4rem" }}>
+                  Run log ({runLog.length} {running ? "so far" : "total"})
+                </div>
+                {/* Summary chips */}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginBottom: "0.6rem" }}>
+                  {queued > 0 && <span style={{ background: T.sage + "22", color: T.sage, padding: "0.2rem 0.5rem", borderRadius: "999px", fontSize: "0.62rem", fontWeight: 600 }}>✓ {queued} queued</span>}
+                  {noResults > 0 && <span style={{ background: T.amber + "22", color: T.amber, padding: "0.2rem 0.5rem", borderRadius: "999px", fontSize: "0.62rem", fontWeight: 600 }}>○ {noResults} no results</span>}
+                  {searchFailed > 0 && <span style={{ background: T.rose + "22", color: T.rose, padding: "0.2rem 0.5rem", borderRadius: "999px", fontSize: "0.62rem", fontWeight: 600 }}>⚠ {searchFailed} search error</span>}
+                  {saveFailed > 0 && <span style={{ background: T.rose + "22", color: T.rose, padding: "0.2rem 0.5rem", borderRadius: "999px", fontSize: "0.62rem", fontWeight: 600 }}>✗ {saveFailed} save failed</span>}
+                </div>
+                {/* Permission issue banner */}
+                {hasPermissionIssue && (
+                  <div style={{ padding: "0.7rem 0.85rem", background: T.rose + "15", border: `1px solid ${T.rose}55`, borderRadius: "0.5rem", marginBottom: "0.6rem" }}>
+                    <div style={{ fontSize: "0.72rem", fontWeight: 700, color: T.rose, marginBottom: "0.2rem" }}>⚠ Firestore rules not deployed</div>
+                    <div style={{ fontSize: "0.65rem", color: T.textMid, lineHeight: 1.5 }}>
+                      The bot can't save to <code style={{background:T.surface,padding:"0 0.2rem",borderRadius:"0.2rem",fontSize:"0.6rem"}}>enrichmentJobs</code> collection because the Firestore rules don't allow it yet. Open Firebase Console → Firestore → Rules tab, and publish the updated rules file. Then re-run.
+                    </div>
+                  </div>
+                )}
+                {/* Per-product entries */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", maxHeight: "300px", overflowY: "auto" }}>
+                  {runLog.map((entry, i) => {
+                    const color = entry.status === "queued" ? T.sage
+                      : entry.status === "no_results" ? T.amber
+                      : T.rose;
+                    const icon = entry.status === "queued" ? "✓"
+                      : entry.status === "no_results" ? "○"
+                      : entry.status === "search_failed" ? "⚠"
+                      : "✗";
+                    return (
+                      <div key={i} style={{ padding: "0.4rem 0.6rem", background: T.surface, border: `1px solid ${T.border}`, borderRadius: "0.4rem", fontSize: "0.65rem", display: "flex", flexDirection: "column", gap: "0.15rem" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                          <span style={{ color, fontWeight: 700, minWidth: "0.9rem" }}>{icon}</span>
+                          <span style={{ color: T.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.brand} — {entry.productName}</span>
+                        </div>
+                        <div style={{ paddingLeft: "1.3rem", color: T.textLight, fontSize: "0.6rem" }}>{entry.detail}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {!running && runLog.length === 0 && eligibleProducts.length > 0 && (
             <div style={{ marginTop: "1.25rem" }}>
               <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.4rem" }}>Next up (sorted by scan count)</div>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
