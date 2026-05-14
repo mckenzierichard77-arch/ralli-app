@@ -10271,37 +10271,9 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
     });
   }
 
-  // Claude web search — finds real product image URLs using web search
+  // Claude web search — DISABLED (was costing ~$0.04/call).
+  // To re-enable: revert this function. See earlier file versions for working code.
   async function tryClaude(p) {
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": ANTHROPIC_KEY,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true"
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 400,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-          system: "Find direct product image URLs for a skincare product from Sephora, Ulta, or the brand website. Return ONLY a JSON object with an array: {\"urls\": [\"https://...\", \"https://...\"]} — up to 4 direct image URLs (.jpg, .png, .webp). No explanation. No nulls in the array.",
-          messages: [{ role: "user", content: `Find product image URLs for: ${p.brand} ${p.productName}` }]
-        })
-      });
-      const data = await res.json();
-      if (data.error) return null;
-      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").replace(/```json|```/g,"").trim();
-      const match = text.match(/\{[\s\S]*?\}/);
-      if (!match) return null;
-      const result = JSON.parse(match[0]);
-      // Return first valid URL for auto-fix, but also expose all for manual picker
-      const urls = (result.urls||[result.url]).filter(u=>u&&u.startsWith("http"));
-      for (const url of urls) {
-        if (await validateImg(url)) return { img: url, urls, buyUrl: "", source: "Claude" };
-      }
-    } catch {}
     return null;
   }
 
@@ -12318,83 +12290,24 @@ async function botSearchOBF({ barcode, productName, brand }) {
   return candidates;
 }
 
-// Claude with web_search — finds the brand's product page and pulls the
-// official INCI ingredient list. Single-purpose, no image hunting.
+// Claude with web_search — DISABLED to control API costs.
+// Was costing ~$0.04/call due to Anthropic's web search fee.
+// To re-enable: revert this stub to the previous implementation.
+// See git history or earlier file versions for the working code.
 async function botSearchClaude({ productName, brand }) {
-  try {
-    const prompt = `You are extracting the official INCI ingredient list for a skincare product.
-
-PRODUCT TO FIND:
-Brand: ${brand || "unknown"}
-Product: ${productName || "unknown"}
-
-STEPS:
-1. Use web_search to find the official product page. Prefer the brand's own website (e.g., biossance.com, clearstem.com, alpynbeauty.com), then Sephora/Ulta as fallbacks.
-2. Find the COMPLETE INCI ingredient list on that page. It should be a long comma-separated list, typically 10-50+ ingredients, in descending order of concentration.
-3. Return ONLY this JSON object:
-
-{
-  "ingredients": "...the full INCI list as a comma-separated string, in the exact order shown on the official source...",
-  "sourceUrl": "...the exact URL of the page you used..."
-}
-
-Critical rules:
-- The ingredient list MUST come from the actual product page, not from your training data, not from third-party reviews, not from blog posts.
-- If the page only shows "key ingredients" or a partial list (e.g., "Featured: Squalane, Niacinamide..."), return null for ingredients - partial lists are worse than no list.
-- Do NOT abbreviate, summarize, paraphrase, or invent. Copy the list verbatim.
-- If you cannot find the product or its full ingredient list, return null for ingredients. Never guess.
-- Return ONLY the JSON.`;
-    const r = await fetch("/api/anthropic", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 2500,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-        messages: [{ role: "user", content: prompt }],
-      }),
-      signal: AbortSignal.timeout(50000),
-    });
-    if (!r.ok) {
-      console.warn(`[botSearchClaude] HTTP ${r.status}`);
-      return [];
-    }
-    const d = await r.json();
-    const textBlocks = (d.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
-    const jsonMatch = textBlocks.match(/\{[\s\S]*?"sourceUrl"[\s\S]*?\}/) || textBlocks.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      console.warn(`[botSearchClaude] no JSON found for ${brand} ${productName}`);
-      return [];
-    }
-    let parsed;
-    try { parsed = JSON.parse(jsonMatch[0]); } catch (e) {
-      console.warn(`[botSearchClaude] JSON parse failed:`, jsonMatch[0].slice(0, 200));
-      return [];
-    }
-    if (!parsed.ingredients || parsed.ingredients.length < 40 || !parsed.ingredients.includes(",")) return [];
-    return [{
-      source: parsed.sourceUrl ? `Claude (${(()=>{ try { return new URL(parsed.sourceUrl).hostname.replace(/^www\./, ""); } catch { return "web"; } })()})` : "Claude (web search)",
-      ingredients: parsed.ingredients.trim(),
-    }];
-  } catch (e) {
-    console.warn("[botSearchClaude] error:", e?.message || e);
-    return [];
-  }
+  // Returns empty array — bot falls back to OBF only.
+  return [];
 }
 
 async function botEnrichProduct(product) {
   const baseQuery = { barcode: product.barcode, productName: product.productName, brand: product.brand };
-  // Two ingredient sources in parallel: OBF (free, fast, spotty coverage) +
-  // Claude (paid pennies-per-call, slower, much better coverage for indie brands).
-  const [obf, claude] = await Promise.all([
-    botSearchOBF(baseQuery),
-    botSearchClaude(baseQuery),
-  ]);
-  const allCandidates = [...obf, ...claude];
-  // De-duplicate near-identical ingredient lists (same source repeated, etc.)
+  // OBF only — Claude web search disabled to control API costs.
+  // Coverage is lower (~20-40% for indie brands) but cost is zero.
+  // For products OBF doesn't have, edit ingredients manually in Manage Products.
+  const obf = await botSearchOBF(baseQuery);
   const seen = new Set();
   const ingredientCandidates = [];
-  for (const c of allCandidates) {
+  for (const c of obf) {
     const fingerprint = c.ingredients.toLowerCase().replace(/\s+/g, "").slice(0, 200);
     if (seen.has(fingerprint)) continue;
     seen.add(fingerprint);
@@ -12559,7 +12472,7 @@ function EnrichmentBot({ onBack }) {
       <button onClick={onBack} style={{ background: "none", border: "none", color: T.textMid, cursor: "pointer", fontSize: "0.75rem", marginBottom: "0.75rem", padding: 0 }}>&larr; Back</button>
       <div style={{ marginBottom: "1rem" }}>
         <div style={{ fontSize: "1.15rem", fontWeight: 700, color: T.text, letterSpacing: "-0.01em" }}>🤖 Enrichment Bot</div>
-        <div style={{ fontSize: "0.7rem", color: T.textLight, marginTop: "0.2rem" }}>Finds INCI ingredient lists from brand sites. You approve.</div>
+        <div style={{ fontSize: "0.7rem", color: T.textLight, marginTop: "0.2rem" }}>Finds INCI ingredient lists from Open Beauty Facts. Free, lower coverage.</div>
       </div>
       <div style={{ display: "flex", gap: "0.3rem", marginBottom: "1rem", background: T.surfaceAlt, padding: "0.25rem", borderRadius: "0.6rem" }}>
         <button onClick={() => setView("setup")} style={{ flex: 1, padding: "0.5rem", background: view === "setup" ? T.surface : "transparent", border: "none", borderRadius: "0.4rem", fontSize: "0.7rem", fontWeight: view === "setup" ? 600 : 400, color: view === "setup" ? T.text : T.textMid, cursor: "pointer", fontFamily: "'Inter', sans-serif" }}>🔍 Run Bot</button>
@@ -13043,67 +12956,9 @@ function AdminEnrichPipeline({ onBack }) {
   }
 
   async function enrichProduct(productName, brand) {
-    const prompt = `You are helping build a skincare app database. Find accurate data for this product: "${productName}"${brand ? " by " + brand : ""}.
-
-Search for this product and return ONLY a valid JSON object with these exact fields:
-
-{
-  "ingredients": "the complete official INCI ingredient list copied exactly from the brand website, Sephora product page, ULTA product page, or incidecoder.com — empty string if not found",
-  "imageUrl": "a high-quality direct product image URL — MUST come from one of these sources in priority order: 1) brand's own website (e.g. cerave.com, theordinary.com, eltamd.com), 2) Sephora CDN (cdni.sephora.com or www.sephora.com/productimages), 3) ULTA (images.ulta.com), 4) Dermstore, 5) Cult Beauty. The URL MUST end in .jpg, .jpeg, .png, or .webp. Do NOT use Amazon, eBay, user-submitted photos, blog images, or thumbnails. Empty string if no high-quality source found.",
-  "category": "exactly one of: Face Wash, Moisturiser, Serum, SPF, Toner, Eye Cream, Mask, Acne Treatment, Body, Hair, Lip",
-  "skinTypes": "comma-separated from: All, Oily, Dry, Sensitive, Combination, Normal, Acne-prone, Ageing, Dull, Hyperpigmentation",
-  "reason": "one sentence max 100 chars in format: key ingredient(s) — main benefit"
-}
-
-Critical rules:
-- ingredients: copy the exact INCI list, do not summarize or paraphrase
-- imageUrl: only use official retailer/brand CDN URLs. If the best you can find is Amazon or a blog, use empty string instead
-- Never fabricate data — use empty string for any field you cannot verify
-- Return ONLY the JSON object, no other text`;
-
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 2000,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-        messages: [{ role: "user", content: prompt }]
-      })
-    });
-
-    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-    const data = await res.json();
-
-    // Extract text blocks (skip tool_use blocks)
-    const raw = (data.content || [])
-      .filter(b => b.type === "text")
-      .map(b => b.text)
-      .join("");
-
-    // Parse JSON from response
-    const m = raw.match(/\{[\s\S]*\}/);
-    if (!m) throw new Error("No JSON in response");
-
-    const result = JSON.parse(m[0]);
-
-    // Validate imageUrl — reject known bad sources
-    const badSources = ["amazon.com","ebay.","walmart.com","target.com","blogspot","wordpress","instagram","pinterest","tumblr","facebook","twitter","reddit","aliexpress","wish.com","openbeautyfacts"];
-    if (result.imageUrl) {
-      const urlLow = result.imageUrl.toLowerCase();
-      const isBad = badSources.some(s => urlLow.includes(s));
-      const hasGoodExt = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(result.imageUrl);
-      if (isBad || !hasGoodExt) {
-        result.imageUrl = ""; // reject bad image sources
-      }
-    }
-
-    return result;
+    // DISABLED to control API costs. Was using Claude web_search at ~$0.04/call.
+    // Returns empty result; admin can fill ingredients manually.
+    throw new Error("AI enrichment is disabled. Please fill product data manually or use the OBF-only Enrichment Bot.");
   }
 
   async function updateFirestore(productName, brand, data) {
@@ -14227,30 +14082,9 @@ function AdminIngredientFiller() {
     return null;
   }
 
-  // -- Source 6: AI (haiku) — last resort -----------------------
+  // -- Source 6: AI (haiku) — DISABLED to control API costs --
+  // Was using Claude web_search at ~$0.04/call.
   async function tryAI(p) {
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 800,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-          system: "Find the full ingredient list for a skincare product. Search Sephora or the brand website. Return ONLY JSON: {ingredients: \"full INCI list comma-separated\" or null, source: \"where you found it\"}. No markdown, no explanation.",
-          messages: [{ role: "user", content: "Find ingredients for: " + p.productName + " by " + p.brand + ". Return ONLY the JSON object." }]
-        })
-      });
-      const data = await res.json();
-      if (data.error) return null;
-      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").replace(/```json|```/g,"").trim();
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) return null;
-      const result = JSON.parse(match[0]);
-      if (result.ingredients && result.ingredients.trim().length > 10) {
-        return { ingredients: result.ingredients.trim(), source: "AI" };
-      }
-    } catch {}
     return null;
   }
 
