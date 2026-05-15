@@ -7210,14 +7210,70 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
     try {
       await updateDoc(doc(db,"users",user.uid),{[field]:arrayUnion(value)});
       onUpdate(p=>({...p,[field]:[...(p[field]||[]),value]}));
-    } catch {}
+
+      // Also create a matching feed post so this activity shows up on the
+      // user's profile and in their followers' feeds. Without this, adding
+      // a product via Edit Profile bypasses post creation entirely — which
+      // is why direct-routine-edits produced an empty Activity tab.
+      const reactionType = field === "routine" ? "loved" :
+                          field === "brokeout" ? "brokeout" :
+                          field === "wantToTry" ? "wantToTry" : null;
+      if (reactionType) {
+        // Look up the product to get ingredients + brand for the post snapshot.
+        const product = shopProducts.find(p =>
+          (p.productName || "").toLowerCase() === value.toLowerCase()
+        ) || posts.find(p =>
+          (p.productName || "").toLowerCase() === value.toLowerCase()
+        );
+
+        const ingText = product?.ingredients || "";
+        const analysis = ingText ? analyzeIngredients(ingText) : { found: [], avgScore: 0 };
+        const ps = ingText ? Math.round(analysis.avgScore ?? 0) : (product?.poreScore || 0);
+        const dispName = profile?.displayName || user.displayName || "Anonymous";
+        const phURL = profile?.photoURL || user.photoURL || "";
+        const brand = product?.brand || "";
+
+        try {
+          await postScan(user.uid, dispName, phURL, value, brand, ps, null, ingText, analysis.found || [], reactionType);
+          console.log(`[addToList] created ${reactionType} post for "${value}"`);
+        } catch (e) {
+          console.warn(`[addToList] failed to create post for "${value}":`, e?.message || e);
+        }
+      }
+    } catch (e) {
+      console.error(`[addToList] failed for field=${field} value=${value}:`, e?.message || e);
+    }
   }
 
   async function removeFromList(field, value) {
     try {
       await updateDoc(doc(db,"users",user.uid),{[field]:arrayRemove(value)});
       onUpdate(p=>({...p,[field]:(p[field]||[]).filter(v=>v!==value)}));
-    } catch {}
+
+      // Also delete the matching feed post so removing a product from a list
+      // also removes the corresponding activity card. Mirrors toggleList's behavior.
+      const reactionType = field === "routine" ? "loved" :
+                          field === "brokeout" ? "brokeout" :
+                          field === "wantToTry" ? "wantToTry" : null;
+      if (reactionType) {
+        try {
+          const q = query(
+            collection(db, "posts"),
+            where("uid", "==", user.uid),
+            where("productName", "==", value),
+            where("postType", "==", reactionType),
+            limit(5)
+          );
+          const snap = await getDocs(q);
+          await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
+          if (snap.docs.length > 0) console.log(`[removeFromList] deleted ${snap.docs.length} post(s) for "${value}"`);
+        } catch (e) {
+          console.warn(`[removeFromList] failed to delete post for "${value}":`, e?.message || e);
+        }
+      }
+    } catch (e) {
+      console.error(`[removeFromList] failed for field=${field} value=${value}:`, e?.message || e);
+    }
   }
 
   const tabs = [
