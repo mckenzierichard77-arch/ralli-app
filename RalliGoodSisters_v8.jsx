@@ -1603,11 +1603,22 @@ async function postScan(uid, displayName, photoURL, productName, brand, poreScor
 async function getFeed(followingIds, currentUid) {
   try {
     const ids = [...(followingIds||[]), currentUid].slice(0,10);
-    if (!ids.length) return [];
+    // If the user follows nobody yet (just themselves), fall back to the
+    // global recent feed instead of returning empty. This means new users
+    // always see real activity from anyone using the app, not just mocks.
+    // Auto-follow founders on signup means most users will have ids.length > 1,
+    // but this is the belt-and-suspenders safety net for any 0-follow edge case.
+    if (ids.length <= 1) {
+      console.log("[getFeed] user has 0 follows, falling back to global feed");
+      return await getGlobalFeed();
+    }
     const q = query(collection(db,"posts"), where("uid","in",ids), orderBy("createdAt","desc"), limit(20));
     const snap = await getDocs(q);
     return snap.docs.map(d=>({id:d.id,...d.data()}));
-  } catch { return []; }
+  } catch (e) {
+    console.error("[getFeed] failed:", e?.message || e);
+    return [];
+  }
 }
 
 async function getGlobalFeed() {
@@ -1693,8 +1704,15 @@ async function getUserPosts(uid) {
   try {
     const q = query(collection(db,"posts"),where("uid","==",uid),orderBy("createdAt","desc"),limit(100));
     const snap = await getDocs(q);
-    return snap.docs.map(d=>({id:d.id,...d.data()}));
-  } catch { return []; }
+    const posts = snap.docs.map(d=>({id:d.id,...d.data()}));
+    console.log(`[getUserPosts] uid=${uid} found ${posts.length} posts`);
+    return posts;
+  } catch (e) {
+    // Surface what went wrong — most common cause is a missing Firestore index.
+    // The error message will include a direct URL to create the index in Firebase Console.
+    console.error(`[getUserPosts] failed for uid=${uid}:`, e?.message || e, e);
+    return [];
+  }
 }
 
 // -- Barcode lookup — tries multiple sources -------------------
@@ -6560,16 +6578,84 @@ function PeopleFinder({ user, profile, onUpdate, onUserTap }) {
     if (!user?.uid) return;
     (async () => {
       try {
-        const allSnap = await getDocs(query(collection(db,"users"), limit(40)));
-        const allUsers = allSnap.docs.map(d=>({uid:d.id,...d.data()})).filter(u=>u.uid!==user.uid);
-        const followingSet = new Set(profile?.following||[]);
-        const mySkinTypes = Array.isArray(profile?.skinType)?profile.skinType:profile?.skinType?[profile.skinType]:[];
-        const notFollowing = allUsers.filter(u=>!followingSet.has(u.uid));
-        const sug = notFollowing.filter(u=>(u.followers||[]).some(f=>followingSet.has(f))).slice(0,10);
-        const fallback = notFollowing.filter(u=>!sug.find(s=>s.uid===u.uid)).sort((a,b)=>(b.followers||[]).length-(a.followers||[]).length).slice(0,10-sug.length);
-        setSuggested([...sug,...fallback].slice(0,10));
-        setSkinMatches(notFollowing.filter(u=>{ const t=Array.isArray(u.skinType)?u.skinType:u.skinType?[u.skinType]:[]; return t.some(s=>mySkinTypes.includes(s)); }).slice(0,8));
-      } catch {}
+        // ── Founder pinning + test-account filtering ─────────────────────
+        // Founders (McKenzie & Morgan) are always shown at the top of the
+        // recommendations regardless of follower count. Test/seed accounts
+        // are filtered out so new users see a curated experience.
+        const FOUNDER_UIDS = [
+          "rNOrHLZzbXOAh58uB1tv6OXoWEq2", // Morgan
+          "jXGCJEHLl8c0CGPBlU9963qFvb83", // McKenzie
+        ];
+        const FOUNDER_EMAILS = [
+          "mckenzierichard77@gmail.com",
+          "morganrichard777@gmail.com",
+        ];
+
+        // Patterns that mark an account as test/seed/junk content
+        const TEST_NAME_PATTERNS = [
+          /^test/i, /test\d/i, /^skincare lover$/i, /^demo/i,
+          /^user\d+$/i, /^new user$/i, /^anonymous$/i, /^placeholder/i,
+        ];
+        const isTestAccount = (u) => {
+          const name = (u.displayName || "").trim();
+          if (!name) return true; // Unnamed accounts hidden
+          return TEST_NAME_PATTERNS.some(p => p.test(name));
+        };
+
+        // Step 1 — Fetch founders directly by UID so we get fresh photo + bio.
+        // Don't rely on the generic getDocs returning them with valid data.
+        const founderDocs = await Promise.all(
+          FOUNDER_UIDS
+            .filter(uid => uid !== user.uid)
+            .map(async uid => {
+              try {
+                const snap = await getDoc(doc(db, "users", uid));
+                if (snap.exists()) return { uid, ...snap.data(), _isFounder: true };
+              } catch {}
+              return null;
+            })
+        );
+        const founders = founderDocs.filter(Boolean);
+
+        // Step 2 — Fetch all users for the rest of the recommendations.
+        const allSnap = await getDocs(query(collection(db, "users"), limit(40)));
+        const allUsers = allSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+
+        // Step 3 — Filter out: current user, founders (we already have them),
+        // test accounts, and anyone already followed.
+        const followingSet = new Set(profile?.following || []);
+        const mySkinTypes = Array.isArray(profile?.skinType)
+          ? profile.skinType
+          : profile?.skinType ? [profile.skinType] : [];
+
+        const filtered = allUsers.filter(u =>
+          u.uid !== user.uid &&
+          !FOUNDER_UIDS.includes(u.uid) &&
+          !FOUNDER_EMAILS.includes(u.email || "") &&
+          !followingSet.has(u.uid) &&
+          !isTestAccount(u)
+        );
+
+        // Step 4 — Sort non-founders by mutual connections, then by followers
+        const sug = filtered.filter(u =>
+          (u.followers || []).some(f => followingSet.has(f))
+        );
+        const fallback = filtered
+          .filter(u => !sug.find(s => s.uid === u.uid))
+          .sort((a, b) => (b.followers || []).length - (a.followers || []).length);
+
+        // Step 5 — Assemble: founders first (always), then suggestions
+        const finalSuggested = [...founders, ...sug, ...fallback].slice(0, 10);
+        setSuggested(finalSuggested);
+
+        // Skin matches — also filter test accounts
+        setSkinMatches(
+          filtered.filter(u => {
+            const t = Array.isArray(u.skinType) ? u.skinType : u.skinType ? [u.skinType] : [];
+            return t.some(s => mySkinTypes.includes(s));
+          }).slice(0, 8)
+        );
+      } catch (e) { console.error("[PeopleFinder] suggestion load failed:", e); }
     })();
   }, [user?.uid]);
 
@@ -6578,10 +6664,16 @@ function PeopleFinder({ user, profile, onUpdate, onUserTap }) {
     if (!search.trim()) { setResults([]); return; }
     setLoading(true);
     const q = search.toLowerCase();
+    const TEST_PATTERNS = [/^test/i, /test\d/i, /^skincare lover$/i, /^demo/i, /^user\d+$/i, /^new user$/i, /^anonymous$/i, /^placeholder/i];
+    const isTest = (u) => {
+      const name = (u.displayName || "").trim();
+      if (!name) return true;
+      return TEST_PATTERNS.some(p => p.test(name));
+    };
     getDocs(query(collection(db,"users"), limit(50)))
       .then(snap => {
         const res = snap.docs.map(d=>({uid:d.id,...d.data()}))
-          .filter(u => u.uid!==user.uid && (
+          .filter(u => u.uid!==user.uid && !isTest(u) && (
             (u.displayName||"").toLowerCase().includes(q) ||
             (u.email||"").toLowerCase().includes(q)
           )).slice(0,15);
@@ -6803,11 +6895,28 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
         const sx = (img.width - min) / 2;
         const sy = (img.height - min) / 2;
         ctx.drawImage(img, sx, sy, min, min, 0, 0, size, size);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+
         try {
-          await updateDoc(doc(db,"users",user.uid), { photoURL: dataUrl });
-          onUpdate(p => ({...p, photoURL: dataUrl}));
-        } catch(err) { console.error(err); }
+          // Convert canvas to a JPEG blob and upload to Firebase Storage.
+          // This replaces the previous data-URL approach which bloated user
+          // docs and could cause truncation when many users were queried at once.
+          const blob = await new Promise(resolve =>
+            canvas.toBlob(resolve, "image/jpeg", 0.85)
+          );
+          if (!blob) throw new Error("canvas.toBlob returned null");
+
+          const ref = storageRef(storage, `avatars/${user.uid}.jpg`);
+          await uploadBytes(ref, blob, { contentType: "image/jpeg" });
+          const downloadUrl = await getDownloadURL(ref);
+
+          await updateDoc(doc(db, "users", user.uid), { photoURL: downloadUrl });
+          onUpdate(p => ({ ...p, photoURL: downloadUrl }));
+        } catch (err) {
+          console.error("[handlePhotoUpload] Storage upload failed:", err);
+          // Fallback: if Storage upload fails (rules issue, quota, etc.),
+          // surface the error rather than silently losing the upload.
+          alert("Photo upload failed: " + (err?.message || "unknown error") + "\n\nPlease try again or contact support if this persists.");
+        }
         setPhotoUploading(false);
       };
       img.src = ev.target.result;
@@ -17683,9 +17792,41 @@ function AppInner() {
       user={user} profile={profile}
       onComplete={async (updates)=>{
         try {
-          await updateDoc(doc(db,"users",user.uid),{...updates, isNew:false});
-          setProfile(p=>({...p,...updates,isNew:false}));
-        } catch {}
+          // Auto-follow founders on signup so the new user lands with a
+          // non-empty feed and immediate social context. This is the standard
+          // pattern for new social apps (Instagram, Threads, TikTok all do it).
+          // Excludes the user from following themselves if they happen to be
+          // a founder logging in.
+          const FOUNDER_UIDS = [
+            "rNOrHLZzbXOAh58uB1tv6OXoWEq2", // Morgan
+            "jXGCJEHLl8c0CGPBlU9963qFvb83", // McKenzie
+          ];
+          const foundersToFollow = FOUNDER_UIDS.filter(uid => uid !== user.uid);
+          const newFollowing = [...new Set([...(profile?.following||[]), ...foundersToFollow])];
+
+          await updateDoc(doc(db,"users",user.uid),{
+            ...updates,
+            following: newFollowing,
+            isNew:false,
+          });
+
+          // Also bump the founders' followers arrays — best-effort; if rules
+          // block it the canonical follower list is still recoverable from
+          // querying all users whose `following` contains the founder UID.
+          for (const founderUid of foundersToFollow) {
+            try {
+              await updateDoc(doc(db,"users",founderUid), {
+                followers: arrayUnion(user.uid)
+              });
+            } catch(e) {
+              console.warn(`[onboarding] could not update founder ${founderUid} followers:`, e?.message);
+            }
+          }
+
+          setProfile(p=>({...p,...updates,following:newFollowing,isNew:false}));
+        } catch(e) {
+          console.error("[onboarding] complete failed:", e);
+        }
         setShowOnboarding(false);
       }}
     /></>
