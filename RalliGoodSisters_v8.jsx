@@ -1625,9 +1625,12 @@ async function getFeed(followingIds, currentUid) {
       console.log("[getFeed] user has 0 follows, falling back to global feed");
       return await getGlobalFeed();
     }
+    console.log(`[getFeed] querying for ${ids.length} uids:`, ids);
     const q = query(collection(db,"posts"), where("uid","in",ids), orderBy("createdAt","desc"), limit(20));
     const snap = await getDocs(q);
-    return snap.docs.map(d=>({id:d.id,...d.data()}));
+    const posts = snap.docs.map(d=>({id:d.id,...d.data()}));
+    console.log(`[getFeed] found ${posts.length} posts from followed users`);
+    return posts;
   } catch (e) {
     console.error("[getFeed] failed:", e?.message || e);
     return [];
@@ -1638,8 +1641,17 @@ async function getGlobalFeed() {
   try {
     const q = query(collection(db,"posts"), orderBy("createdAt","desc"), limit(30));
     const snap = await getDocs(q);
-    return snap.docs.map(d=>({id:d.id,...d.data()}));
-  } catch { return []; }
+    const posts = snap.docs.map(d=>({id:d.id,...d.data()}));
+    console.log(`[getGlobalFeed] found ${posts.length} total posts in collection`);
+    if (posts.length > 0) {
+      const sampleUids = [...new Set(posts.slice(0,10).map(p => p.uid))];
+      console.log(`[getGlobalFeed] post uids:`, sampleUids);
+    }
+    return posts;
+  } catch (e) {
+    console.error("[getGlobalFeed] failed:", e?.message || e);
+    return [];
+  }
 }
 
 async function toggleLike(postId, uid) {
@@ -1718,12 +1730,38 @@ async function getUserPosts(uid) {
     const q = query(collection(db,"posts"),where("uid","==",uid),orderBy("createdAt","desc"),limit(100));
     const snap = await getDocs(q);
     const posts = snap.docs.map(d=>({id:d.id,...d.data()}));
-    console.log(`[getUserPosts] uid=${uid} found ${posts.length} posts`);
+    console.log(`[getUserPosts] uid=${uid} found ${posts.length} posts (indexed query)`);
+
+    // If indexed query returned 0, run a diagnostic query without orderBy.
+    // This tells us whether posts genuinely don't exist for this uid, or
+    // whether the orderBy is failing due to a missing composite index.
+    if (posts.length === 0) {
+      try {
+        const fallbackQ = query(collection(db,"posts"), where("uid","==",uid), limit(100));
+        const fallbackSnap = await getDocs(fallbackQ);
+        const fallbackPosts = fallbackSnap.docs.map(d=>({id:d.id,...d.data()}));
+        console.log(`[getUserPosts] fallback (no orderBy) found ${fallbackPosts.length} posts for uid=${uid}`);
+        if (fallbackPosts.length > 0) {
+          console.warn(`[getUserPosts] INDEX ISSUE: posts exist but ordered query returned 0. Create composite index for posts (uid ASC, createdAt DESC) in Firebase Console.`);
+          console.log(`[getUserPosts] sample post:`, fallbackPosts[0]);
+          // Use the fallback posts but sort them in memory
+          fallbackPosts.sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+          return fallbackPosts;
+        }
+      } catch (e2) {
+        console.error(`[getUserPosts] fallback also failed for uid=${uid}:`, e2?.message || e2);
+      }
+
+      // Also check if posts exist anywhere for similar uids (typos in seed data, etc.)
+      try {
+        const anyPosts = await getDocs(query(collection(db,"posts"), limit(5)));
+        const sampleUids = anyPosts.docs.map(d => d.data().uid).filter(Boolean);
+        console.log(`[getUserPosts] sample post uids in collection:`, sampleUids);
+      } catch {}
+    }
     return posts;
   } catch (e) {
-    // Surface what went wrong — most common cause is a missing Firestore index.
-    // The error message will include a direct URL to create the index in Firebase Console.
-    console.error(`[getUserPosts] failed for uid=${uid}:`, e?.message || e, e);
+    console.error(`[getUserPosts] FAILED for uid=${uid}:`, e?.message || e, e);
     return [];
   }
 }
