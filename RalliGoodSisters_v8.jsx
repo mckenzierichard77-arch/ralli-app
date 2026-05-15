@@ -4099,10 +4099,9 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
         {(() => {
           const priv = profile.listPrivacy || {};
           const routineCount = (!priv.routine && (profile.routine || []).length) || 0;
-          const lovedCount = (!priv.loved && (profile.loved || []).length) || 0;
           const wantCount = (!priv.wantToTry && (profile.wantToTry || []).length) || 0;
           const brokeCount = (!priv.brokeout && (profile.brokeout || []).length) || 0;
-          const totalListItems = lovedCount + wantCount + brokeCount;
+          const totalListItems = wantCount + brokeCount;
 
           const tabs = [
             { id: "activity", label: "Activity", count: posts.length },
@@ -4214,7 +4213,6 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
         {activeTab === "lists" && (() => {
           const priv = profile.listPrivacy || {};
           const visibleLists = [
-            { field:"loved",     title:"Loved",         color:T.sage },
             { field:"wantToTry", title:"Want to Try",   color:T.amber },
             { field:"brokeout",  title:"Broke Me Out",  color:T.rose },
           ].filter(l => !priv[l.field] && (profile[l.field] || []).length > 0);
@@ -6999,7 +6997,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
   const [posts, setPosts]               = useState([]);
   const [shopProducts, setShopProducts] = useState([]);
   const [loading, setLoading]           = useState(true);
-  const [activeTab, setActiveTab]       = useState("lists");
+  const [activeTab, setActiveTab]       = useState("scans");
   const [editing, setEditing]           = useState(false);
   const [bio, setBio]                   = useState(profile?.bio||"");
   const [skinTypes2, setSkinTypes2]     = useState(
@@ -7223,10 +7221,10 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
   }
 
   const tabs = [
-    {id:"lists",   label:"My Lists"},
-    {id:"scans",   label:"Scans"},
+    {id:"scans",   label:"Activity"},
+    {id:"routine", label:"Routine"},
+    {id:"lists",   label:"Lists"},
     {id:"ratings", label:"Ratings"},
-    {id:"people",  label:"People"},
   ];
 
   useEffect(() => {
@@ -7357,17 +7355,33 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
           </div>
         )}
 
-        {/* Edit Profile button */}
-        <button onClick={()=>editing?saveProfile():setEditing(true)}
-          style={{width:"100%",padding:"0.5rem",background:editing?T.accent:"transparent",
-            color:editing?"#fff":T.navy,
-            border:`1.5px solid ${editing?T.accent:T.navy}22`,
-            borderRadius:"0.6rem",fontSize:"0.8rem",fontWeight:"700",cursor:"pointer",
-            fontFamily:"'Inter',sans-serif",letterSpacing:"-0.01em",
-            background: editing ? T.accent : T.surfaceAlt,
-          }}>
-          {editing ? "Save Profile" : "Edit Profile"}
-        </button>
+        {/* Edit Profile + Find People buttons */}
+        <div style={{display:"flex",gap:"0.5rem"}}>
+          <button onClick={()=>editing?saveProfile():setEditing(true)}
+            style={{flex:1,padding:"0.5rem",
+              color:editing?"#fff":T.navy,
+              border:`1.5px solid ${editing?T.accent:T.navy}22`,
+              borderRadius:"0.6rem",fontSize:"0.8rem",fontWeight:"700",cursor:"pointer",
+              fontFamily:"'Inter',sans-serif",letterSpacing:"-0.01em",
+              background: editing ? T.accent : T.surfaceAlt,
+            }}>
+            {editing ? "Save Profile" : "Edit Profile"}
+          </button>
+          {!editing&&(
+            <button onClick={()=>setActiveTab("people")}
+              style={{flex:1,padding:"0.5rem",
+                color:T.navy,
+                border:`1.5px solid ${T.navy}22`,
+                borderRadius:"0.6rem",fontSize:"0.8rem",fontWeight:"700",cursor:"pointer",
+                fontFamily:"'Inter',sans-serif",letterSpacing:"-0.01em",
+                background:T.surfaceAlt,
+                display:"flex",alignItems:"center",justifyContent:"center",gap:"0.4rem",
+              }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11h-6"/><path d="M19 8v6"/></svg>
+              Find People
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Compact Routine Score badge */}
@@ -7409,26 +7423,32 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.navy} strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
 
-      {/* Tab switcher */}
-      <div style={{display:"flex",borderBottom:`2px solid ${T.border}`,marginBottom:"1.25rem",gap:0}}>
-        {tabs.map(t=>(
-          <button key={t.id} onClick={()=>setActiveTab(t.id)}
-            style={{flex:1,padding:"0.65rem 0.5rem",background:"transparent",border:"none",
-              borderBottom:`2px solid ${activeTab===t.id?T.navy:"transparent"}`,marginBottom:"-2px",
-              fontSize:"0.82rem",fontWeight:activeTab===t.id?"700":"400",
-              color:activeTab===t.id?T.navy:T.textLight,cursor:"pointer",
-              fontFamily:"'Inter',sans-serif",transition:"all 0.15s",letterSpacing:"-0.01em"}}>
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {/* Tab switcher — hidden when viewing People (Find Friends) */}
+      {activeTab!=="people"&&(
+        <div style={{display:"flex",borderBottom:`2px solid ${T.border}`,marginBottom:"1.25rem",gap:0}}>
+          {tabs.map(t=>(
+            <button key={t.id} onClick={()=>setActiveTab(t.id)}
+              style={{flex:1,padding:"0.65rem 0.5rem",background:"transparent",border:"none",
+                borderBottom:`2px solid ${activeTab===t.id?T.navy:"transparent"}`,marginBottom:"-2px",
+                fontSize:"0.82rem",fontWeight:activeTab===t.id?"700":"400",
+                color:activeTab===t.id?T.navy:T.textLight,cursor:"pointer",
+                fontFamily:"'Inter',sans-serif",transition:"all 0.15s",letterSpacing:"-0.01em"}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Scans tab */}
       {activeTab==="scans"&&(
         loading
           ? <div style={{textAlign:"center",padding:"2rem",color:T.textLight}}>Loading…</div>
           : posts.filter(p=>!p._fromRatings).length===0
-            ? <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.85rem"}}>No scans yet — use the Scan tab to get started.</div>
+            ? <div style={{textAlign:"center",color:T.textLight,padding:"2.5rem 1rem",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif"}}>
+                <div style={{fontSize:"1.6rem",marginBottom:"0.5rem",opacity:0.4}}>✨</div>
+                <div>No activity yet.</div>
+                <div style={{fontSize:"0.72rem",marginTop:"0.4rem",opacity:0.7}}>Scan a product, search for one, or react to something to start your activity.</div>
+              </div>
             : <>{posts.filter(p=>!p._fromRatings).map((p,i)=><CardReveal key={p.id} delay={i*40}><PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/></CardReveal>)}</>
       )}
 
@@ -7491,15 +7511,11 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       )}
 
       {/* Lists tab */}
-      {activeTab==="lists"&&(
+      {/* Routine tab — just My Routine list with full edit/privacy controls */}
+      {activeTab==="routine"&&(
         <div className="fu">
           {(()=>{
             const allProds = [...shopProducts, ...posts];
-            // The modal does its own canonical product lookup via the
-            // ProductCacheContext. We just need to give it enough identity to
-            // look up — the product name is enough. Snapshot fallback fields
-            // come from allProds so the modal renders something useful even
-            // before/if the cache misses.
             function openListItem(name) {
               const found = allProds.find(p=>(p.productName||p.name||"").toLowerCase()===name.toLowerCase());
               setSelectedProduct({
@@ -7527,6 +7543,34 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             allProducts={allProds}
             onItemTap={openListItem}
           />
+          <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate} onUserTap={onUserTap}/>
+            </>);
+          })()}
+        </div>
+      )}
+
+      {/* Lists tab — Broke Me Out + Want to Try */}
+      {activeTab==="lists"&&(
+        <div className="fu">
+          {(()=>{
+            const allProds = [...shopProducts, ...posts];
+            function openListItem(name) {
+              const found = allProds.find(p=>(p.productName||p.name||"").toLowerCase()===name.toLowerCase());
+              setSelectedProduct({
+                id: found?.id || "",
+                productId: found?.id || "",
+                productName: name,
+                brand: found?.brand||"",
+                poreScore: found?.poreScore??0,
+                communityRating: found?.communityRating||null,
+                image: getProductImage(found),
+                adminImage: found?.adminImage||"",
+                ingredients: found?.ingredients||"",
+                flaggedIngredients: found?.flaggedIngredients||[],
+                buyUrl: found?.buyUrl||"",
+              });
+            }
+            return (<>
           <ListSection
             title="Broke Me Out" icon="!" color={T.rose}
             items={brokeout} isPrivate={!!privacy.brokeout}
@@ -7555,9 +7599,15 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
 
 
 
-      {/* People tab — Find Friends */}
+      {/* People view — Find Friends (accessed via Find People button) */}
       {activeTab==="people"&&(
-        <PeopleFinder user={user} profile={profile} onUpdate={onUpdate} onUserTap={onUserTap}/>
+        <div>
+          <button onClick={()=>setActiveTab("scans")} style={{background:"none",border:"none",color:T.textMid,fontSize:"0.85rem",cursor:"pointer",padding:"0 0 0.75rem 0",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",gap:"0.3rem"}}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+            Back to profile
+          </button>
+          <PeopleFinder user={user} profile={profile} onUpdate={onUpdate} onUserTap={onUserTap}/>
+        </div>
       )}
 
       {/* Legal links */}
