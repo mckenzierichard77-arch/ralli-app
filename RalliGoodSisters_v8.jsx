@@ -10136,6 +10136,67 @@ async function getAdminStats() {
     if (u.pronoun && u.pronoun !== "skip") { withPronoun++; pronounCounts[u.pronoun] = (pronounCounts[u.pronoun]||0) + 1; }
   });
 
+  // ── User signup & activity insights ──────────────────────────────────
+  // Pulled from existing data — no new tracking needed:
+  //   - createdAt: when each user signed up
+  //   - updatedAt: most recently changed user doc (proxy for activity)
+  // For real login tracking we'd need a `loginEvents` collection (Level 3),
+  // but for a small founder-led launch this gives us a useful picture.
+  const userInsights = (() => {
+    const now = Date.now();
+    const dayMs = 86400000;
+
+    let signupsToday = 0, signupsThisWeek = 0, signupsThisMonth = 0;
+    const signupsByDay = {};
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(now - i * dayMs);
+      signupsByDay[d.toLocaleDateString("en-US", { month: "short", day: "numeric" })] = 0;
+    }
+
+    let activeToday = 0, activeThisWeek = 0;
+    const recentlyActive = [];
+
+    users.forEach(u => {
+      const created = u.createdAt?.seconds ? u.createdAt.seconds * 1000 : (typeof u.createdAt === "number" ? u.createdAt : null);
+      const updated = u.updatedAt?.seconds ? u.updatedAt.seconds * 1000 : (typeof u.updatedAt === "number" ? u.updatedAt : null);
+
+      if (created) {
+        const ageDays = (now - created) / dayMs;
+        if (ageDays < 1) signupsToday++;
+        if (ageDays < 7) signupsThisWeek++;
+        if (ageDays < 30) signupsThisMonth++;
+        if (ageDays < 14) {
+          const key = new Date(created).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          if (signupsByDay[key] != null) signupsByDay[key]++;
+        }
+      }
+
+      if (updated) {
+        const ageDays = (now - updated) / dayMs;
+        if (ageDays < 1) activeToday++;
+        if (ageDays < 7) activeThisWeek++;
+        recentlyActive.push({
+          uid: u.uid || u.id,
+          displayName: u.displayName || u.email || "Anonymous",
+          photoURL: u.photoURL || null,
+          lastActive: updated,
+        });
+      }
+    });
+
+    recentlyActive.sort((a, b) => b.lastActive - a.lastActive);
+
+    return {
+      signupsToday,
+      signupsThisWeek,
+      signupsThisMonth,
+      activeToday,
+      activeThisWeek,
+      signupsByDay: Object.entries(signupsByDay),
+      recentlyActive: recentlyActive.slice(0, 10),
+    };
+  })();
+
   return {
     totalPosts: posts.length,
     totalUsers: users.length,
@@ -10154,6 +10215,7 @@ async function getAdminStats() {
     pronounCounts,
     withPronoun,
     totalUsersCount: users.length,
+    userInsights,
   };
 }
 
@@ -14647,6 +14709,95 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
               <span style={{fontSize:"0.5rem",color:T.textLight}}>{stats.daily[stats.daily.length-1]?.[0]}</span>
             </div>
           </div>
+
+          {/* ── Login & Signup Insights ─────────────────────────────────── */}
+          {stats.userInsights && (() => {
+            const ui = stats.userInsights;
+            const maxSignup = Math.max(...ui.signupsByDay.map(([, c]) => c), 1);
+            return (
+              <div style={{background:T.surface,borderRadius:"1rem",padding:"1rem",border:`1px solid ${T.border}`,display:"flex",flexDirection:"column",gap:"0.9rem"}}>
+                <div style={{fontSize:"0.65rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.07em",fontFamily:"'Inter',sans-serif"}}>👥 Login & signup insights</div>
+
+                {/* Two-row stat grid */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0.5rem"}}>
+                  {[
+                    {label:"Today",value:ui.signupsToday,sub:"new signups",color:T.sage},
+                    {label:"This week",value:ui.signupsThisWeek,sub:"new signups",color:T.accent},
+                    {label:"This month",value:ui.signupsThisMonth,sub:"new signups",color:T.navy},
+                  ].map(s=>(
+                    <div key={s.label} style={{padding:"0.55rem 0.6rem",background:T.surfaceAlt,borderRadius:"0.55rem"}}>
+                      <div style={{fontSize:"1.1rem",fontWeight:"800",color:s.color,lineHeight:1,fontFamily:"'Inter',sans-serif"}}>{s.value}</div>
+                      <div style={{fontSize:"0.52rem",color:T.textLight,marginTop:"2px",textTransform:"uppercase",letterSpacing:"0.05em"}}>{s.label}</div>
+                      <div style={{fontSize:"0.58rem",color:T.textMid,marginTop:"1px"}}>{s.sub}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem"}}>
+                  {[
+                    {label:"Active today",value:ui.activeToday,color:T.sage},
+                    {label:"Active this week",value:ui.activeThisWeek,color:T.accent},
+                  ].map(s=>(
+                    <div key={s.label} style={{padding:"0.55rem 0.6rem",background:T.surfaceAlt,borderRadius:"0.55rem"}}>
+                      <div style={{fontSize:"1.1rem",fontWeight:"800",color:s.color,lineHeight:1,fontFamily:"'Inter',sans-serif"}}>{s.value}</div>
+                      <div style={{fontSize:"0.55rem",color:T.textLight,marginTop:"2px",textTransform:"uppercase",letterSpacing:"0.05em"}}>{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Signups bar chart */}
+                <div>
+                  <div style={{fontSize:"0.58rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.4rem"}}>Signups — last 14 days</div>
+                  <div style={{display:"flex",alignItems:"flex-end",gap:"3px",height:"50px"}}>
+                    {ui.signupsByDay.map(([date,count])=>(
+                      <div key={date} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center"}}
+                        title={`${date}: ${count} signup${count===1?"":"s"}`}>
+                        <div style={{width:"100%",background:count>0?T.sage:T.surfaceAlt,borderRadius:"2px 2px 0 0",height:`${Math.max((count/maxSignup)*42,count>0?4:2)}px`,transition:"height 0.3s"}}/>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",marginTop:"3px"}}>
+                    <span style={{fontSize:"0.5rem",color:T.textLight}}>{ui.signupsByDay[0]?.[0]}</span>
+                    <span style={{fontSize:"0.5rem",color:T.textLight}}>{ui.signupsByDay[ui.signupsByDay.length-1]?.[0]}</span>
+                  </div>
+                </div>
+
+                {/* Most recently active users */}
+                {ui.recentlyActive.length > 0 && (
+                  <div>
+                    <div style={{fontSize:"0.58rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.4rem"}}>Most recently active</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:"0.3rem"}}>
+                      {ui.recentlyActive.slice(0, 5).map((u,i)=>{
+                        const ageMs = Date.now() - u.lastActive;
+                        const ageStr =
+                          ageMs < 3600000 ? Math.floor(ageMs/60000) + "m ago" :
+                          ageMs < 86400000 ? Math.floor(ageMs/3600000) + "h ago" :
+                          ageMs < 7*86400000 ? Math.floor(ageMs/86400000) + "d ago" :
+                          new Date(u.lastActive).toLocaleDateString("en-US",{month:"short",day:"numeric"});
+                        return (
+                          <div key={u.uid || i} style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.35rem 0.5rem",background:T.surfaceAlt,borderRadius:"0.4rem"}}>
+                            {u.photoURL ? (
+                              <img src={u.photoURL} style={{width:"22px",height:"22px",borderRadius:"50%",objectFit:"cover",flexShrink:0}} alt=""/>
+                            ) : (
+                              <div style={{width:"22px",height:"22px",borderRadius:"50%",background:T.iceBlue,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.55rem",color:T.navy,fontWeight:700,flexShrink:0}}>
+                                {(u.displayName?.[0] || "?").toUpperCase()}
+                              </div>
+                            )}
+                            <span style={{fontSize:"0.7rem",color:T.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName}</span>
+                            <span style={{fontSize:"0.6rem",color:T.textLight,flexShrink:0}}>{ageStr}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{fontSize:"0.55rem",color:T.textLight,fontStyle:"italic",lineHeight:1.4}}>
+                  Activity is measured by when a user's profile was last updated (a proxy for app use). For exact login times, see Firebase Console → Authentication → Users.
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Hourly activity heatmap */}
           {stats.hourly&&(
