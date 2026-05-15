@@ -1131,6 +1131,19 @@ function initials(name="") {
   return name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() || "?";
 }
 
+// Display-time fallback for user names. Empty/generic/legacy "Skincare Lover"
+// values become "Rallier" — Ralli's default community name. This is a
+// display fallback only; the stored displayName isn't modified.
+function displayNameOf(user) {
+  const raw = (user?.displayName || "").trim();
+  if (!raw) return "Rallier";
+  const lower = raw.toLowerCase();
+  if (lower === "skincare lover" || lower === "anonymous" || lower === "user" || lower === "undefined" || lower === "null") {
+    return "Rallier";
+  }
+  return raw;
+}
+
 function timeAgo(ts) {
   if (!ts) return "";
   const diff = Date.now() - (ts.seconds ? ts.seconds*1000 : new Date(ts).getTime());
@@ -2254,7 +2267,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
 
   if (deleted) return null;
 
-  const firstName = post.displayName?.split(" ")[0] || "Someone";
+  const firstName = displayNameOf(post)?.split(" ")[0] || "Rallier";
   // Activity labels mirror the profile list categories so the feed reads as
   // "Mckenzie added this to her routine" not generic "Mckenzie loves this".
   // For the user's own posts, switch to second-person ("you added this to your routine").
@@ -2308,7 +2321,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
           {/* Card header */}
           <div style={{display:"flex",alignItems:"center",gap:"0.6rem",padding:"0.7rem 0.85rem 0.6rem",borderBottom:`1px solid ${T.border}50`}}>
             <button onClick={()=>onUserTap(post.uid)} style={{background:"none",border:"none",padding:0,cursor:"pointer",flexShrink:0}}>
-              <Avatar photoURL={post.photoURL} name={post.displayName} size={34}/>
+              <Avatar photoURL={post.photoURL} name={displayNameOf(post)} size={34}/>
             </button>
             <div style={{flex:1,minWidth:0}}>
               <div style={{display:"flex",alignItems:"center",gap:"0.35rem"}}>
@@ -3989,6 +4002,7 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
   const [loading, setLoading]   = useState(true);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showFollowList, setShowFollowList] = useState(null);
+  const [activeTab, setActiveTab] = useState("activity");
   const isMe = uid === currentUid;
   const isFollowing = (currentProfile?.following||[]).includes(uid);
 
@@ -4043,31 +4057,162 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
           </button>
         )}
 
-        {/* Their lists (public only) */}
-        {profile&&(()=>{
-          const priv = profile.listPrivacy||{};
-          const lists = [
-            {field:"routine",  title:"My Routine",   icon:"", color:T.sage},
-            {field:"brokeout", title:"Broke Me Out",  icon:"", color:T.rose},
-            {field:"wantToTry",title:"Want to Try",   icon:"", color:T.amber},
-          ].filter(l=>!priv[l.field]&&(profile[l.field]||[]).length>0);
-          if (!lists.length) return null;
+        {/* Tab nav */}
+        {(() => {
+          const priv = profile.listPrivacy || {};
+          const routineCount = (!priv.routine && (profile.routine || []).length) || 0;
+          const lovedCount = (!priv.loved && (profile.loved || []).length) || 0;
+          const wantCount = (!priv.wantToTry && (profile.wantToTry || []).length) || 0;
+          const brokeCount = (!priv.brokeout && (profile.brokeout || []).length) || 0;
+          const totalListItems = lovedCount + wantCount + brokeCount;
+
+          const tabs = [
+            { id: "activity", label: "Activity", count: posts.length },
+            { id: "routine",  label: "Routine",  count: routineCount },
+            { id: "lists",    label: "Lists",    count: totalListItems },
+          ];
+
           return (
-            <div style={{marginBottom:"1.25rem"}}>
-              {lists.map(l=>(
-                <ListSection key={l.field} title={l.title} icon={l.icon} color={l.color}
-                  items={profile[l.field]||[]} readOnly={true}
-                  onItemTap={name=>setSelectedProduct({productName:name,poreScore:0,communityRating:null,image:null,ingredients:"",flaggedIngredients:[]})}/>
-              ))}
+            <div style={{display:"flex",gap:"0",borderBottom:`1px solid ${T.border}`,marginBottom:"1rem"}}>
+              {tabs.map(tab => {
+                const isActive = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    style={{
+                      flex:1, padding:"0.7rem 0.4rem",
+                      background:"none", border:"none", cursor:"pointer",
+                      fontSize:"0.78rem",
+                      fontWeight: isActive ? "700" : "500",
+                      color: isActive ? T.navy : T.textLight,
+                      borderBottom: `2px solid ${isActive ? T.sage : "transparent"}`,
+                      marginBottom: "-1px",
+                      fontFamily:"'Inter',sans-serif",
+                      transition:"all 0.15s",
+                      display:"flex", alignItems:"center", justifyContent:"center", gap:"0.35rem",
+                    }}
+                  >
+                    {tab.label}
+                    {tab.count > 0 && (
+                      <span style={{
+                        fontSize:"0.62rem", fontWeight:"600",
+                        color: isActive ? T.sage : T.textLight,
+                        background: isActive ? T.sage+"18" : T.surfaceAlt,
+                        padding:"0.08rem 0.45rem",
+                        borderRadius:"999px",
+                        minWidth:"18px",
+                      }}>{tab.count}</span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           );
         })()}
 
-        {/* Posts */}
-        {posts.length===0
-          ? <div style={{textAlign:"center",color:T.textLight,padding:"2rem",fontSize:"0.85rem"}}>No scans yet</div>
-          : posts.map(p=><PostCard key={p.id} post={p} currentUid={currentUid} onUserTap={()=>{}} onProductTap={p2=>setSelectedProduct({productName:p2.productName,brand:p2.brand,image:p2.productImage||"",poreScore:p2.poreScore??0,communityRating:p2.communityRating,ingredients:p2.ingredients||"",flaggedIngredients:p2.flaggedIngredients||[]})}/>)
-        }
+        {/* Tab content */}
+        {activeTab === "activity" && (
+          posts.length === 0
+            ? <div style={{textAlign:"center",color:T.textLight,padding:"2.5rem 1rem",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif"}}>
+                <div style={{fontSize:"1.6rem",marginBottom:"0.5rem",opacity:0.4}}>✨</div>
+                <div>{isMe ? "You haven't posted anything yet." : `${displayNameOf(profile)} hasn't posted anything yet.`}</div>
+                <div style={{fontSize:"0.72rem",marginTop:"0.4rem",opacity:0.7}}>Posts are created when scanning, searching, or reacting to products.</div>
+              </div>
+            : <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+                {posts.map(p => (
+                  <PostCard
+                    key={p.id}
+                    post={p}
+                    currentUid={currentUid}
+                    onUserTap={() => {}}
+                    onProductTap={p2 => setSelectedProduct({
+                      productName: p2.productName,
+                      brand: p2.brand,
+                      image: p2.productImage || "",
+                      poreScore: p2.poreScore ?? 0,
+                      communityRating: p2.communityRating,
+                      ingredients: p2.ingredients || "",
+                      flaggedIngredients: p2.flaggedIngredients || [],
+                    })}
+                  />
+                ))}
+              </div>
+        )}
+
+        {activeTab === "routine" && (() => {
+          const priv = profile.listPrivacy || {};
+          if (priv.routine) {
+            return <div style={{textAlign:"center",color:T.textLight,padding:"2.5rem 1rem",fontSize:"0.85rem"}}>This routine is private.</div>;
+          }
+          const routine = profile.routine || [];
+          if (routine.length === 0) {
+            return (
+              <div style={{textAlign:"center",color:T.textLight,padding:"2.5rem 1rem",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif"}}>
+                <div style={{fontSize:"1.6rem",marginBottom:"0.5rem",opacity:0.4}}>🧴</div>
+                <div>{isMe ? "You haven't built a routine yet." : `${displayNameOf(profile)} hasn't built a routine yet.`}</div>
+              </div>
+            );
+          }
+          return (
+            <ListSection
+              title="My Routine"
+              icon=""
+              color={T.sage}
+              items={routine}
+              readOnly={true}
+              onItemTap={name => setSelectedProduct({
+                productName: name,
+                poreScore: 0,
+                communityRating: null,
+                image: null,
+                ingredients: "",
+                flaggedIngredients: [],
+              })}
+            />
+          );
+        })()}
+
+        {activeTab === "lists" && (() => {
+          const priv = profile.listPrivacy || {};
+          const visibleLists = [
+            { field:"loved",     title:"Loved",         color:T.sage },
+            { field:"wantToTry", title:"Want to Try",   color:T.amber },
+            { field:"brokeout",  title:"Broke Me Out",  color:T.rose },
+          ].filter(l => !priv[l.field] && (profile[l.field] || []).length > 0);
+
+          if (visibleLists.length === 0) {
+            return (
+              <div style={{textAlign:"center",color:T.textLight,padding:"2.5rem 1rem",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif"}}>
+                <div style={{fontSize:"1.6rem",marginBottom:"0.5rem",opacity:0.4}}>📋</div>
+                <div>{isMe ? "You haven't added to any lists yet." : `${displayNameOf(profile)} hasn't added to any lists yet.`}</div>
+              </div>
+            );
+          }
+
+          return (
+            <div style={{display:"flex",flexDirection:"column",gap:"1rem"}}>
+              {visibleLists.map(l => (
+                <ListSection
+                  key={l.field}
+                  title={l.title}
+                  icon=""
+                  color={l.color}
+                  items={profile[l.field] || []}
+                  readOnly={true}
+                  onItemTap={name => setSelectedProduct({
+                    productName: name,
+                    poreScore: 0,
+                    communityRating: null,
+                    image: null,
+                    ingredients: "",
+                    flaggedIngredients: [],
+                  })}
+                />
+              ))}
+            </div>
+          );
+        })()}
       </div>
     </div>
 
@@ -4111,7 +4256,15 @@ function FollowListSheetContent({ mode, profileUid, followingUids, followerUids,
     let cancelled = false;
     async function load() {
       setLoading(true);
-      const GENERIC = ["skincare lover","anonymous","user","undefined","null",""];
+      // Test-account patterns we want to hide from follow lists entirely.
+      // We do NOT filter out generic-named users anymore — instead we rename
+      // them to "Rallier" at display time so they show up consistently in
+      // counts and lists. Only obvious test/debug accounts get hidden.
+      const TEST_PATTERNS = [/^test/i, /test\d/i, /^demo/i, /^user\d+$/i, /^new user$/i, /^anonymous$/i, /^placeholder/i];
+      const isTestAccount = (u) => {
+        const name = (u.displayName || "").trim();
+        return TEST_PATTERNS.some(p => p.test(name));
+      };
       let collected = [];
 
       if (mode === "following") {
@@ -4123,7 +4276,7 @@ function FollowListSheetContent({ mode, profileUid, followingUids, followerUids,
         collected = snaps
           .filter(s => s && s.exists())
           .map(s => ({ uid: s.id, ...s.data() }))
-          .filter(u => !GENERIC.includes((u.displayName || "").toLowerCase().trim()));
+          .filter(u => !isTestAccount(u));
       } else {
         // Followers: query Firestore for everyone who has profileUid in their
         // following array. This is the source of truth — independent of the
@@ -4131,9 +4284,7 @@ function FollowListSheetContent({ mode, profileUid, followingUids, followerUids,
         // security rules may block writes to other users' docs).
         if (profileUid) {
           const realFollowers = await queryFollowersOf(profileUid);
-          collected = realFollowers.filter(u =>
-            !GENERIC.includes((u.displayName || "").toLowerCase().trim())
-          );
+          collected = realFollowers.filter(u => !isTestAccount(u));
         }
         // Fall back to the array if the query came up empty AND we have UIDs
         // listed (in case the user didn't have permission to query).
@@ -4144,7 +4295,7 @@ function FollowListSheetContent({ mode, profileUid, followingUids, followerUids,
           collected = snaps
             .filter(s => s && s.exists())
             .map(s => ({ uid: s.id, ...s.data() }))
-            .filter(u => !GENERIC.includes((u.displayName || "").toLowerCase().trim()));
+            .filter(u => !isTestAccount(u));
         }
       }
 
@@ -4180,9 +4331,9 @@ function FollowListSheetContent({ mode, profileUid, followingUids, followerUids,
         {!loading && users.map(u => (
           <button key={u.uid} onClick={() => onUserTap(u.uid)}
             style={{width:"100%",display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.6rem 0.5rem",background:"none",border:"none",cursor:"pointer",borderBottom:`1px solid ${T.border}`,textAlign:"left"}}>
-            <Avatar photoURL={u.photoURL} name={u.displayName} size={38}/>
+            <Avatar photoURL={u.photoURL} name={displayNameOf(u)} size={38}/>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName||"Ralli User"}</div>
+              <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{displayNameOf(u)}</div>
               <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>{(u.followers||[]).length} followers</div>
             </div>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
@@ -5368,9 +5519,13 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
         getFeed(profile?.following, user.uid),
         getNotifications(user.uid),
       ]);
-      const FEED_TYPES = new Set(["brokeout","wantToTry","loved","commented"]);
-      const realPosts = p.filter(post => FEED_TYPES.has(post.postType))
+      // Accept ALL real post types. The previous strict allow-list filtered
+      // out legitimate posts like "scan" and "search" that real users were
+      // posting from McKenzie's and Morgan's accounts.
+      // Only filter out posts with truly empty/missing postType.
+      const realPosts = p.filter(post => post.postType && post.uid)
         .sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+      console.log(`[loadFeed] ${p.length} fetched, ${realPosts.length} real posts after filter`);
       // Seeds always append — real posts take priority if same product name
       const realNames = new Set(realPosts.map(p => p.productName?.toLowerCase()));
       const seedPosts = MOCK_POSTS.filter(m => !realNames.has(m.productName?.toLowerCase()));
@@ -5806,11 +5961,19 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
                 </div>
                 <div style={{padding:"0 1rem 0.5rem",fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"'Inter',sans-serif"}}>What the community is using</div>
                 <div style={{display:"flex",flexDirection:"column",gap:"0.75rem",padding:"0 0.75rem"}}>
-                  {MOCK_POSTS.slice(0,6).map((p,i)=>(
-                    <CardReveal key={p.id} delay={i*40}>
-                      <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>
-                    </CardReveal>
-                  ))}
+                  {(() => {
+                    // Real posts first (anyone using the app — McKenzie, Morgan,
+                    // other real users), then mock posts as filler if we don't
+                    // have enough real activity yet.
+                    const realCommunityPosts = posts.filter(p => !p.uid?.startsWith("seed_") && p.uid && p.postType);
+                    const mocksToFill = MOCK_POSTS.slice(0, Math.max(0, 6 - realCommunityPosts.length));
+                    const combined = [...realCommunityPosts, ...mocksToFill].slice(0, 6);
+                    return combined.map((p, i) => (
+                      <CardReveal key={p.id || p.uid+i} delay={i*40}>
+                        <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>
+                      </CardReveal>
+                    ));
+                  })()}
                 </div>
               </div>
             );
@@ -6698,9 +6861,9 @@ function PeopleFinder({ user, profile, onUpdate, onUserTap }) {
     const skinMatch = theirTypes.some(t=>mySkinTypes.includes(t));
     return (
       <div style={{background:T.surface,borderRadius:"0.85rem",border:`1px solid ${isFollowed?T.sage:T.border}`,padding:"0.75rem",display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.5rem",transition:"border-color 0.2s"}}>
-        <button onClick={()=>onUserTap(u.uid)} style={{background:"none",border:"none",padding:0,cursor:"pointer",flexShrink:0}}><Avatar photoURL={u.photoURL} name={u.displayName} size={42}/></button>
+        <button onClick={()=>onUserTap(u.uid)} style={{background:"none",border:"none",padding:0,cursor:"pointer",flexShrink:0}}><Avatar photoURL={u.photoURL} name={displayNameOf(u)} size={42}/></button>
         <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>onUserTap(u.uid)}>
-          <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName}</div>
+          <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{displayNameOf(u)}</div>
           <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"2px",display:"flex",alignItems:"center",gap:"0.4rem",flexWrap:"wrap"}}>
             {shared>0&&<span style={{color:T.accent,fontWeight:"600"}}>{shared} mutual</span>}
             {skinMatch&&<span style={{background:T.sage+"18",color:T.sage,padding:"0.1rem 0.4rem",borderRadius:"999px",fontWeight:"600",fontSize:"0.6rem"}}>Same skin type</span>}
@@ -6767,7 +6930,7 @@ function PeopleFinder({ user, profile, onUpdate, onUserTap }) {
                 <div key={u.uid} onClick={()=>onUserTap(u.uid)} style={{flexShrink:0,width:"130px",background:T.surface,borderRadius:"1rem",border:`1px solid ${isFollowed?T.sage:T.border}`,padding:"0.85rem 0.5rem 0.65rem",display:"flex",flexDirection:"column",alignItems:"center",gap:"0.4rem",cursor:"pointer"}}>
                   <Avatar photoURL={u.photoURL} name={u.displayName} size={44}/>
                   <div style={{fontSize:"0.75rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif",textAlign:"center",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",width:"100%",padding:"0 0.25rem"}}>{u.displayName}</div>
-                  <div style={{fontSize:"0.6rem",color:T.textLight,textAlign:"center"}}>{Array.isArray(u.skinType)?u.skinType.join(", "):u.skinType||"Skincare lover"}</div>
+                  <div style={{fontSize:"0.6rem",color:T.textLight,textAlign:"center"}}>{Array.isArray(u.skinType)?u.skinType.join(", "):u.skinType||"Rallier"}</div>
                   <button onClick={e=>{e.stopPropagation();!isFollowed&&doFollow(u.uid,u.displayName,u.photoURL);}}
                     style={{marginTop:"0.15rem",padding:"0.3rem 0.75rem",background:isFollowed?T.sage+"22":T.accent,color:isFollowed?T.sage:"#fff",border:`1.5px solid ${isFollowed?T.sage:T.accent}`,borderRadius:"999px",fontSize:"0.68rem",fontWeight:"700",cursor:isFollowed?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
                     {isFollowed?"✓":"Follow"}
@@ -15209,10 +15372,10 @@ function FollowingList({uids, currentUid, onUserTap, onUnfollow}) {
       {users.filter(u=>!unfollowed.has(u.uid)).map(u=>(
         <div key={u.uid} style={{background:T.surface,borderRadius:"0.85rem",border:`1px solid ${T.border}`,padding:"0.65rem 0.85rem",display:"flex",alignItems:"center",gap:"0.75rem"}}>
           <div onClick={()=>onUserTap(u.uid)} style={{cursor:"pointer",flexShrink:0}}>
-            <Avatar photoURL={u.photoURL} name={u.displayName} size={40}/>
+            <Avatar photoURL={u.photoURL} name={displayNameOf(u)} size={40}/>
           </div>
           <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>onUserTap(u.uid)}>
-            <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.displayName}</div>
+            <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{displayNameOf(u)}</div>
             <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>{(u.followers||[]).length} followers</div>
           </div>
           <button onClick={async()=>{ await onUnfollow(u.uid); setUnfollowed(prev=>new Set([...prev,u.uid])); }}
