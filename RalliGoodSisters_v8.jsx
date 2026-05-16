@@ -6656,69 +6656,75 @@ function RoutineScoreExplainer({ analysis, routine, onClose }) {
       <div style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",padding:"1.25rem",maxHeight:"85vh",overflowY:"auto",zIndex:1,paddingBottom:"calc(1.5rem + env(safe-area-inset-bottom))"}}>
         {/* Header */}
         <div style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"1rem"}}>
-          <div style={{fontSize:"1.05rem",fontWeight:"800",color:T.text,fontFamily:"'Inter',sans-serif",flex:1,letterSpacing:"-0.02em"}}>How your score is calculated</div>
+          <div style={{fontSize:"1.05rem",fontWeight:"800",color:T.text,fontFamily:"'Inter',sans-serif",flex:1,letterSpacing:"-0.02em"}}>Your score</div>
           <button onClick={onClose} style={{background:T.surfaceAlt,border:"none",cursor:"pointer",width:"30px",height:"30px",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center"}}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textMid} strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
 
-        {/* Score breakdown */}
-        <div style={{background:T.surfaceAlt,borderRadius:"0.9rem",padding:"0.9rem",marginBottom:"1rem"}}>
-          <div style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.75rem"}}>
-            <div style={{fontSize:"2rem",fontWeight:"800",color:analysis.gradeColor,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{analysis.grade}</div>
-            <div>
-              <div style={{fontSize:"1.15rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>{analysis.overall}/10</div>
-              <div style={{fontSize:"0.7rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{analysis.label}</div>
+        {/* Score breakdown — the answer the user came here for */}
+        <div style={{background:T.surfaceAlt,borderRadius:"0.9rem",padding:"1rem",marginBottom:"1rem"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"0.85rem",marginBottom:"0.85rem"}}>
+            <div style={{fontSize:"2.4rem",fontWeight:"800",color:analysis.gradeColor,fontFamily:"'Inter',sans-serif",lineHeight:1,letterSpacing:"-0.03em",minWidth:"38px",textAlign:"center"}}>{analysis.grade}</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:"1.05rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>{analysis.overall}/10</div>
+              <div style={{fontSize:"0.75rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{analysis.label}</div>
             </div>
           </div>
           <div style={{fontSize:"0.78rem",color:T.textMid,fontFamily:"'Inter',sans-serif",lineHeight:1.6}}>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"0.35rem 0",borderBottom:`1px solid ${T.border}`}}>
-              <span>Base score (from average pore score across {analysis.withData} products)</span>
-              <span style={{fontWeight:"600",color:T.text,whiteSpace:"nowrap",marginLeft:"0.5rem"}}>{analysis.baseScore}/10</span>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"0.4rem 0",borderBottom:`1px solid ${T.border}`}}>
+              <span>Base score</span>
+              <span style={{fontWeight:"600",color:T.text}}>{analysis.baseScore}/10</span>
             </div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"0.35rem 0",color: analysis.overlapPenalty > 0 ? T.rose : T.textMid}}>
-              <span>Overlap penalty (high-risk ingredients in multiple products)</span>
-              <span style={{fontWeight:"600",whiteSpace:"nowrap",marginLeft:"0.5rem"}}>{analysis.overlapPenalty > 0 ? `−${analysis.overlapPenalty}` : "0"}</span>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"0.4rem 0",color: analysis.overlapPenalty > 0 ? T.rose : T.textMid}}>
+              <span>Overlap penalty</span>
+              <span style={{fontWeight:"600"}}>{analysis.overlapPenalty > 0 ? `−${analysis.overlapPenalty}` : "0"}</span>
             </div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"0.5rem 0 0",marginTop:"0.25rem",borderTop:`2px solid ${T.text}`,fontWeight:"700",color:T.text}}>
-              <span>Final score</span>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"0.55rem 0 0",marginTop:"0.25rem",borderTop:`2px solid ${T.text}`,fontWeight:"700",color:T.text,fontSize:"0.85rem"}}>
+              <span>Final</span>
               <span>{analysis.overall}/10</span>
             </div>
           </div>
         </div>
 
-        {/* Overlapping ingredients */}
+        {/* Overlapping ingredients — only shown when there's a penalty */}
         {analysis.overlaps?.length > 0 && (
           <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.9rem",padding:"0.9rem",marginBottom:"1rem"}}>
-            <div style={{fontSize:"0.72rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.6rem",fontFamily:"'Inter',sans-serif"}}>⚠ Overlapping high-risk ingredients</div>
+            <div style={{fontSize:"0.7rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.5rem",fontFamily:"'Inter',sans-serif"}}>⚠ In multiple products</div>
             {analysis.overlaps.map((o,i) => (
-              <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.5rem 0",borderBottom: i < analysis.overlaps.length-1 ? `1px solid ${T.border}` : "none",fontFamily:"'Inter',sans-serif"}}>
+              <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.4rem 0",borderBottom: i < analysis.overlaps.length-1 ? `1px solid ${T.border}` : "none",fontFamily:"'Inter',sans-serif"}}>
                 <div>
-                  <div style={{fontSize:"0.82rem",fontWeight:"600",color:T.text,textTransform:"capitalize"}}>{o.name}</div>
-                  <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"1px"}}>Appears in {o.count} of your products</div>
+                  <div style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,textTransform:"capitalize"}}>{o.name}</div>
+                  <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>In {o.count} products</div>
                 </div>
-                <div style={{display:"flex",alignItems:"center",gap:"0.4rem",flexShrink:0,marginLeft:"0.5rem"}}>
-                  <div style={{fontSize:"0.68rem",color:T.textLight}}>comedogenic</div>
-                  <div style={{fontSize:"0.82rem",fontWeight:"700",color:o.score >= 4 ? T.rose : T.amber,fontFamily:"'Inter',sans-serif"}}>{o.score}/5</div>
-                </div>
+                <div style={{fontSize:"0.78rem",fontWeight:"700",color:o.score >= 4 ? T.rose : T.amber,whiteSpace:"nowrap",marginLeft:"0.5rem"}}>{o.score}/5 clog</div>
               </div>
             ))}
-            <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"0.6rem",lineHeight:1.5,fontStyle:"italic"}}>
-              Only ingredients with comedogenic rating 3+ count toward the penalty. Common ingredients like water, glycerin, or niacinamide aren't penalized.
-            </div>
           </div>
         )}
 
-        {/* Methodology */}
-        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.9rem",padding:"0.9rem",marginBottom:"1rem"}}>
-          <div style={{fontSize:"0.72rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.6rem",fontFamily:"'Inter',sans-serif"}}>How it works</div>
-          <div style={{fontSize:"0.78rem",color:T.textMid,fontFamily:"'Inter',sans-serif",lineHeight:1.6}}>
-            <p style={{margin:"0 0 0.6rem"}}><strong style={{color:T.text}}>1. Pore Score per product (0–5)</strong><br/>Every product's ingredient list is parsed against a curated database of ~250 comedogenic ingredients. The product's Pore Score is the rounded average of matched ingredients' ratings.</p>
-            <p style={{margin:"0 0 0.6rem"}}><strong style={{color:T.text}}>2. Base Routine Score (0–10)</strong><br/>10 minus 2× the average Pore Score across all your routine products. Lower pore scores → higher routine score.</p>
-            <p style={{margin:"0 0 0.6rem"}}><strong style={{color:T.text}}>3. Overlap penalty</strong><br/>Subtracts up to 2.5 points when high-risk ingredients (comedogenic rating 3+) appear in multiple products. Common base ingredients aren't penalized.</p>
-            <p style={{margin:"0 0 0.6rem"}}><strong style={{color:T.text}}>4. Letter grade</strong><br/>Mapped to standard GPA-style grading. A+ requires 9.7+, A requires 9.3+, B+ requires 8.7+, etc. An A on Ralli reflects a genuinely exceptional routine.</p>
-            <p style={{margin:0,color:T.textLight,fontSize:"0.7rem",fontStyle:"italic"}}>This is a guide, not medical advice. Pore-clogging potential varies by skin type and formulation.</p>
+        {/* Grade bands — single row reference */}
+        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.9rem",padding:"0.85rem 0.9rem",marginBottom:"1rem"}}>
+          <div style={{fontSize:"0.7rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.5rem",fontFamily:"'Inter',sans-serif"}}>Grade bands</div>
+          <div style={{display:"flex",justifyContent:"space-between",gap:"0.4rem",fontFamily:"'Inter',sans-serif"}}>
+            {[
+              {g:"A", s:"9.0+", c:T.sage},
+              {g:"B", s:"8.0+", c:T.sage},
+              {g:"C", s:"7.0+", c:T.amber},
+              {g:"D", s:"6.0+", c:T.rose},
+              {g:"F", s:"<6.0", c:T.rose},
+            ].map((b,i) => (
+              <div key={i} style={{flex:1,textAlign:"center",padding:"0.4rem 0",background:b.g===analysis.grade?b.c+"15":"transparent",borderRadius:"0.5rem",border:`1px solid ${b.g===analysis.grade?b.c+"40":"transparent"}`}}>
+                <div style={{fontSize:"0.95rem",fontWeight:"800",color:b.c,letterSpacing:"-0.02em"}}>{b.g}</div>
+                <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"1px"}}>{b.s}</div>
+              </div>
+            ))}
           </div>
+        </div>
+
+        {/* One-line disclaimer */}
+        <div style={{fontSize:"0.65rem",color:T.textLight,fontStyle:"italic",fontFamily:"'Inter',sans-serif",textAlign:"center",marginBottom:"0.9rem"}}>
+          A guide, not medical advice.
         </div>
 
         <button onClick={onClose} style={{width:"100%",padding:"0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.7rem",fontSize:"0.88rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",letterSpacing:"-0.01em"}}>
@@ -6798,30 +6804,23 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
 
     const overall = Math.max(0, Math.min(10, baseScore - overlapPenalty));
 
-    // 3. Grade bands — strict US school grading (GPA-style).
-    //    Score × 10 = percent. A+ requires 9.7+ (97+%), A requires 9.3+ (93+%), etc.
-    //    Earning an A signals a genuinely exceptional routine; most users sit B/C.
+    // 3. Grade bands — simplified 5-letter scale (v95). A=excellent,
+    //    B=good, C=okay, D=needs work, F=high risk. Cleaner share moment
+    //    ("I got a B" reads better than "B−") and removes arbitrary cliffs
+    //    where 8.69 → B+ and 8.70 → A−.
     const grade =
-      overall >= 9.7 ? "A+" :
-      overall >= 9.3 ? "A"  :
-      overall >= 9.0 ? "A−" :
-      overall >= 8.7 ? "B+" :
-      overall >= 8.3 ? "B"  :
-      overall >= 8.0 ? "B−" :
-      overall >= 7.7 ? "C+" :
-      overall >= 7.3 ? "C"  :
-      overall >= 7.0 ? "C−" :
-      overall >= 6.7 ? "D+" :
-      overall >= 6.3 ? "D"  :
-      overall >= 6.0 ? "D−" : "F";
-    // Colors: A range = sage, B range = amber, C/D/F = rose
-    const gradeColor = overall >= 9.0 ? T.sage : overall >= 8.0 ? T.amber : T.rose;
-    // Labels still describe the routine quality plainly
+      overall >= 9.0 ? "A" :
+      overall >= 8.0 ? "B" :
+      overall >= 7.0 ? "C" :
+      overall >= 6.0 ? "D" : "F";
+    // Colors: A/B = sage (positive), C = amber (caution), D/F = rose (warning)
+    const gradeColor = overall >= 8.0 ? T.sage : overall >= 7.0 ? T.amber : T.rose;
+    // Labels — short, plain language
     const label =
-      overall >= 9.0 ? "Skin-safe routine"    :
-      overall >= 8.0 ? "Strong routine"       :
-      overall >= 7.0 ? "Mostly clear"         :
-      overall >= 6.0 ? "Some concern"         :
+      overall >= 9.0 ? "Skin-safe"        :
+      overall >= 8.0 ? "Strong routine"   :
+      overall >= 7.0 ? "Some concern"     :
+      overall >= 6.0 ? "Needs work"       :
                        "High risk";
 
     return {
@@ -6877,9 +6876,10 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
   if (compact) {
     const grade = analysis?.grade;
     const gradeColor = analysis?.gradeColor || T.sage;
-    // Hero card — promoted from a small pill (v85-v93) to the main visual on
-    // the profile (v94). Big grade letter on the left, label + score on the
-    // right. TWO tap targets: ⓘ opens explainer modal, ↗ opens share sheet.
+    // Hero card v95 — horizontal grade-first layout. Big grade on left,
+    // eyebrow + "label · score" on one line in the middle, icons stacked
+    // at the right. The overlap warning moves to the explainer modal (v94
+    // showed it on the card; v95 keeps the headline clean).
     async function handleShareScore() {
       const text = analysis
         ? `✨ My Ralli Routine Score: ${analysis.grade} (${analysis.overall}/10)\n"${analysis.label}"\n${routine.length} products in my routine\n\nCheck yours at https://app.theralliapp.com`
@@ -6894,38 +6894,36 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
     }
     return (
       <>
-      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"0.95rem 1rem",marginBottom:"1rem",display:"flex",alignItems:"center",gap:"0.85rem",position:"relative"}}>
-        {/* Big grade letter — also opens explainer when tapped */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"1rem 1.1rem",marginBottom:"1rem",display:"flex",alignItems:"center",gap:"1rem"}}>
+        {/* Big grade letter — tap to open explainer */}
         <button onClick={()=>setShowExplainer(true)} title="How is this calculated?"
-          style={{background:"none",border:"none",padding:0,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1,minWidth:"44px"}}>
+          style={{background:"none",border:"none",padding:0,cursor:"pointer",lineHeight:0.9,minWidth:"44px",textAlign:"center"}}>
           {grade
-            ? <div style={{fontSize:"2.1rem",fontWeight:"800",color:gradeColor,fontFamily:"'Inter',sans-serif",lineHeight:1,letterSpacing:"-0.02em"}}>{grade}</div>
-            : <div style={{fontSize:"1.2rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>—</div>
+            ? <div style={{fontSize:"2.7rem",fontWeight:"800",color:gradeColor,fontFamily:"'Inter',sans-serif",letterSpacing:"-0.04em"}}>{grade}</div>
+            : <div style={{fontSize:"1.4rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>—</div>
           }
-          {analysis?.overall!=null && <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",fontFamily:"'Inter',sans-serif"}}>{analysis.overall}/10</div>}
         </button>
-        {/* Label + status */}
-        <button onClick={()=>setShowExplainer(true)} style={{background:"none",border:"none",padding:0,cursor:"pointer",textAlign:"left",flex:1,fontFamily:"'Inter',sans-serif"}}>
-          <div style={{fontSize:"0.62rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"2px"}}>Routine Score</div>
-          <div style={{fontSize:"0.92rem",fontWeight:"600",color:T.text,letterSpacing:"-0.01em"}}>
-            {analysis?.label || (routine.length === 0 ? "Add products to your routine" : "Loading…")}
-          </div>
-          {analysis?.overlaps?.length > 0 && (
-            <div style={{fontSize:"0.65rem",color:T.amber,marginTop:"3px"}}>
-              ⚠ {analysis.overlaps.slice(0,2).map(o=>o.name).join(", ")}{analysis.overlaps.length>2 ? ` +${analysis.overlaps.length-2}` : ""}
+        {/* Eyebrow + label · score on one line */}
+        <button onClick={()=>setShowExplainer(true)} style={{background:"none",border:"none",padding:0,cursor:"pointer",textAlign:"left",flex:1,fontFamily:"'Inter',sans-serif",minWidth:0}}>
+          <div style={{fontSize:"0.62rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"4px"}}>Routine Score</div>
+          {analysis ? (
+            <div style={{fontSize:"0.88rem",fontWeight:"500",color:T.text,letterSpacing:"-0.01em",overflow:"hidden",textOverflow:"ellipsis"}}>
+              {analysis.label} <span style={{color:T.textLight,margin:"0 4px"}}>·</span> <span style={{color:T.textMid,fontWeight:"500"}}>{analysis.overall}/10</span>
+            </div>
+          ) : (
+            <div style={{fontSize:"0.88rem",fontWeight:"500",color:T.textLight}}>
+              {routine.length === 0 ? "Add products to your routine" : "Loading…"}
             </div>
           )}
         </button>
         {/* Right-side action buttons: info + share */}
-        <div style={{display:"flex",flexDirection:"column",gap:"0.4rem",alignItems:"center",flexShrink:0}}>
-          {/* Info — opens the explainer modal */}
+        <div style={{display:"flex",flexDirection:"column",gap:"0.25rem",alignItems:"center",flexShrink:0}}>
           <button onClick={()=>setShowExplainer(true)} title="How is this calculated?"
             style={{background:"none",border:"none",cursor:"pointer",padding:"0.3rem",display:"flex",alignItems:"center",justifyContent:"center",borderRadius:"50%",transition:"background 0.15s",color:T.textLight}}
             onMouseEnter={e=>{e.currentTarget.style.background=T.surfaceAlt;}}
             onMouseLeave={e=>{e.currentTarget.style.background="none";}}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
           </button>
-          {/* Share — opens native share sheet with score text */}
           {analysis && (
             <button onClick={handleShareScore} title="Share my routine score"
               style={{background:"none",border:"none",cursor:"pointer",padding:"0.3rem",display:"flex",alignItems:"center",justifyContent:"center",borderRadius:"50%",transition:"background 0.15s",color:T.textLight}}
