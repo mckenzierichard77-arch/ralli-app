@@ -2313,13 +2313,13 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
   const she = isMe ? "you" : firstName;
   const her = isMe ? "your" : "their";  // gender-neutral possessive avoids guessing
   const labelMap = {
-    brokeout:  isMe ? `you said this broke you out`         : `${firstName} said this broke them out`,
+    brokeout:  isMe ? `you said this wasn't worth it`        : `${firstName} said this wasn't worth it`,
     wantToTry: isMe ? `you want to try this`                : `${firstName} wants to try this`,
     loved:     isMe ? `you added this to your routine`      : `${firstName} added this to their routine`,
     commented: isMe ? `you commented on this`               : `${firstName} commented on this`,
   };
   const captionMap = {
-    brokeout:  { icon: "⚠️", text: labelMap.brokeout,  verb: "broke out from" },
+    brokeout:  { icon: "⚠️", text: labelMap.brokeout,  verb: "didn't think was worth it" },
     wantToTry: { icon: "👀", text: labelMap.wantToTry, verb: "wants to try" },
     loved:     { icon: "💖", text: labelMap.loved,     verb: "added to routine" },
     commented: { icon: "💬", text: labelMap.commented, verb: "commented on" },
@@ -2370,7 +2370,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
               <div style={{display:"flex",alignItems:"center",gap:"0.25rem",marginTop:"1px"}}>
                 <span style={{display:"flex",alignItems:"center"}}>{typeIcon}</span>
                 <span style={{fontSize:"0.68rem",fontWeight:"600",color:typeAccent,fontFamily:"'Inter',sans-serif"}}>
-                  {post.postType==="brokeout"?"broke out":post.postType==="wantToTry"?"wants to try":post.postType==="loved"?"added to routine":"checked this"}
+                  {post.postType==="brokeout"?"not worth it":post.postType==="wantToTry"?"wants to try":post.postType==="loved"?"added to routine":"checked this"}
                 </span>
               </div>
             </div>
@@ -2864,9 +2864,10 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
             const dispName = profile?.displayName || user.displayName || "Anonymous";
             const phURL    = profile?.photoURL || user.photoURL || "";
             const brand    = product.brand || "";
-            await postScan(user.uid, dispName, phURL, name, brand, ps, null, ingText, analysis.found || [], reactionType);
+            const postId = await postScan(user.uid, dispName, phURL, name, brand, ps, null, ingText, analysis.found || [], reactionType);
+            console.log(`[toggleList] created ${reactionType} post for "${name}" → postId=${postId || "(unknown)"}`);
           }
-        } catch(e) { console.warn("toggleList: failed to create linked post", e); }
+        } catch(e) { console.warn(`[toggleList] failed to create ${field} post for "${name}":`, e?.message || e); }
       }
       const listLabel = field==="routine"?"Routine":field==="loved"?"Loved":"Want to Try";
       const t = document.createElement("div"); t.className="save-toast"; t.textContent=inList?"Removed":`Added to ${listLabel} ✓`;
@@ -3042,7 +3043,7 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
             {[
               {field:"routine",   active:inRoutine,   label:"Add to Routine", activeLabel:"In Routine ✓"},
               {field:"wantToTry", active:inWantToTry, label:"Want to Try",     activeLabel:"Want to Try ✓"},
-              {field:"brokeout",  active:inBrokeout,  label:"Broke Me Out",    activeLabel:"Broke Out ✓"},
+              {field:"brokeout",  active:inBrokeout,  label:"Not Worth It",    activeLabel:"Not Worth It ✓"},
             ].map(({field,active,label,activeLabel})=>(
               <button key={field} onClick={()=>toggleList(field,active)}
                 style={{flex:1,padding:"0.6rem 0.2rem",background:active?T.navy:"transparent",color:active?"#fff":T.textMid,border:`1px solid ${active?T.navy:T.border}`,borderRadius:"999px",fontSize:"0.7rem",fontWeight:active?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.18s",minWidth:0,textAlign:"center",letterSpacing:active?"-0.01em":"0"}}>
@@ -4083,7 +4084,7 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
             <div style={{fontSize:"1.35rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif",letterSpacing:"-0.03em"}}>{profile.displayName}</div>
             {profile.bio&&<div style={{fontSize:"0.78rem",color:T.textMid,marginTop:"2px"}}>{profile.bio}</div>}
             <div style={{display:"flex",gap:"1rem",marginTop:"0.5rem"}}>
-              <span style={{fontSize:"0.75rem",color:T.textLight}}><b style={{color:T.text}}>{posts.length}</b> posts</span>
+              <span style={{fontSize:"0.75rem",color:T.textLight}}><b style={{color:T.text}}>{posts.length}</b> activity</span>
               <button onClick={()=>setShowFollowList("followers")} style={{fontSize:"0.75rem",color:T.textLight,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif"}}><b style={{color:T.text}}>{(profile.followers||[]).length}</b> followers</button>
               <button onClick={()=>setShowFollowList("following")} style={{fontSize:"0.75rem",color:T.textLight,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif"}}><b style={{color:T.text}}>{(profile.following||[]).length}</b> following</button>
             </div>
@@ -4214,7 +4215,7 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
           const priv = profile.listPrivacy || {};
           const visibleLists = [
             { field:"wantToTry", title:"Want to Try",   color:T.amber },
-            { field:"brokeout",  title:"Broke Me Out",  color:T.rose },
+            { field:"brokeout",  title:"Not Worth It",  color:T.rose },
           ].filter(l => !priv[l.field] && (profile[l.field] || []).length > 0);
 
           if (visibleLists.length === 0) {
@@ -7278,8 +7279,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
 
   const tabs = [
     {id:"scans",   label:"Activity"},
-    {id:"routine", label:"Routine"},
-    {id:"lists",   label:"Lists"},
+    {id:"lists",   label:"My Lists"},
     {id:"ratings", label:"Ratings"},
   ];
 
@@ -7379,7 +7379,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
           {/* Stats */}
           <div style={{flex:1,display:"flex",justifyContent:"space-around"}}>
             {[
-              {label:"Scans",     value:posts.filter(p=>!p._fromRatings).length,                   onClick:null},
+              {label:"Activity",  value:posts.filter(p=>!p._fromRatings).length,                   onClick:null},
               {label:"Followers", value: realFollowerCount ?? (profile.followers||[]).length,  onClick:()=>openUserList("followers")},
               {label:"Following", value: realFollowingCount ?? (profile.following||[]).length,  onClick:()=>openUserList("following")},
             ].map(({label,value,onClick})=>(
@@ -7567,8 +7567,8 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       )}
 
       {/* Lists tab */}
-      {/* Routine tab — just My Routine list with full edit/privacy controls */}
-      {activeTab==="routine"&&(
+      {/* My Lists tab — Routine + Want to Try + Not Worth It, all in one place */}
+      {activeTab==="lists"&&(
         <div className="fu">
           {(()=>{
             const allProds = [...shopProducts, ...posts];
@@ -7599,44 +7599,6 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             allProducts={allProds}
             onItemTap={openListItem}
           />
-          <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate} onUserTap={onUserTap}/>
-            </>);
-          })()}
-        </div>
-      )}
-
-      {/* Lists tab — Broke Me Out + Want to Try */}
-      {activeTab==="lists"&&(
-        <div className="fu">
-          {(()=>{
-            const allProds = [...shopProducts, ...posts];
-            function openListItem(name) {
-              const found = allProds.find(p=>(p.productName||p.name||"").toLowerCase()===name.toLowerCase());
-              setSelectedProduct({
-                id: found?.id || "",
-                productId: found?.id || "",
-                productName: name,
-                brand: found?.brand||"",
-                poreScore: found?.poreScore??0,
-                communityRating: found?.communityRating||null,
-                image: getProductImage(found),
-                adminImage: found?.adminImage||"",
-                ingredients: found?.ingredients||"",
-                flaggedIngredients: found?.flaggedIngredients||[],
-                buyUrl: found?.buyUrl||"",
-              });
-            }
-            return (<>
-          <ListSection
-            title="Broke Me Out" icon="!" color={T.rose}
-            items={brokeout} isPrivate={!!privacy.brokeout}
-            readOnly={false}
-            onTogglePrivacy={()=>togglePrivacy("brokeout")}
-            onAdd={v=>addToList("brokeout",v)}
-            onRemove={v=>removeFromList("brokeout",v)}
-            allProducts={allProds}
-            onItemTap={openListItem}
-          />
           <ListSection
             title="Want to Try" icon="→" color={T.amber}
             items={wantToTry} isPrivate={!!privacy.wantToTry}
@@ -7644,6 +7606,16 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             onTogglePrivacy={()=>togglePrivacy("wantToTry")}
             onAdd={v=>addToList("wantToTry",v)}
             onRemove={v=>removeFromList("wantToTry",v)}
+            allProducts={allProds}
+            onItemTap={openListItem}
+          />
+          <ListSection
+            title="Not Worth It" icon="!" color={T.rose}
+            items={brokeout} isPrivate={!!privacy.brokeout}
+            readOnly={false}
+            onTogglePrivacy={()=>togglePrivacy("brokeout")}
+            onAdd={v=>addToList("brokeout",v)}
+            onRemove={v=>removeFromList("brokeout",v)}
             allProducts={allProds}
             onItemTap={openListItem}
           />
@@ -13673,6 +13645,147 @@ function AdminNuclearClean({ onBack }) {
 }
 
 
+// -- BackfillActivityPostsCard — one-time fix for users whose lists were
+//    built before v78. Scans every user's routine/wantToTry/brokeout arrays,
+//    finds list items without a matching `posts` document, and creates them.
+//    Safe to re-run: skips items that already have a post.
+function BackfillActivityPostsCard() {
+  const [running, setRunning] = useState(false);
+  const [log, setLog] = useState([]);
+  const [done, setDone] = useState(false);
+
+  function addLog(msg, kind="info") {
+    setLog(prev => [...prev, { msg, kind, ts: Date.now() }]);
+  }
+
+  async function runBackfill() {
+    if (running) return;
+    if (!confirm("Backfill activity posts for ALL users?\n\nThis will create missing 'loved' / 'wantToTry' / 'brokeout' posts for products in users' lists that don't have a matching post yet. Safe to re-run.\n\nMay take 30-60 seconds for a small user base.")) return;
+    setRunning(true);
+    setLog([]);
+    setDone(false);
+    try {
+      addLog("Fetching all users…");
+      const usersSnap = await getDocs(collection(db, "users"));
+      const users = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+      addLog(`Found ${users.length} users to check.`);
+
+      let totalCreated = 0;
+      let totalSkipped = 0;
+      let totalErrors = 0;
+
+      for (const u of users) {
+        const listFieldMap = [
+          { field: "routine",   postType: "loved" },
+          { field: "wantToTry", postType: "wantToTry" },
+          { field: "brokeout",  postType: "brokeout" },
+        ];
+
+        for (const { field, postType } of listFieldMap) {
+          const items = u[field] || [];
+          if (!items.length) continue;
+
+          for (const productName of items) {
+            try {
+              // Check if a matching post already exists
+              const existingQ = query(
+                collection(db, "posts"),
+                where("uid", "==", u.uid),
+                where("productName", "==", productName),
+                where("postType", "==", postType),
+                limit(1)
+              );
+              const existing = await getDocs(existingQ);
+              if (!existing.empty) {
+                totalSkipped++;
+                continue;
+              }
+
+              // Look up the product to fill in brand, ingredients, etc.
+              const allProductsSnap = await getDocs(query(collection(db, "products"), limit(1000)));
+              const allProducts = allProductsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+              const product = allProducts.find(p =>
+                (p.productName || "").toLowerCase().trim() === productName.toLowerCase().trim()
+              );
+
+              const ingText = product?.ingredients || "";
+              const analysis = ingText ? analyzeIngredients(ingText) : { found: [], avgScore: 0 };
+              const ps = ingText ? Math.round(analysis.avgScore ?? 0) : (product?.poreScore || 0);
+              const dispName = u.displayName || "Anonymous";
+              const phURL = u.photoURL || "";
+              const brand = product?.brand || "";
+
+              await postScan(u.uid, dispName, phURL, productName, brand, ps, null, ingText, analysis.found || [], postType);
+              totalCreated++;
+              addLog(`✓ Created ${postType} post for ${u.displayName || u.uid}: "${productName}"`, "ok");
+            } catch (e) {
+              totalErrors++;
+              addLog(`✗ Failed for ${u.displayName}: "${productName}" — ${e?.message || e}`, "err");
+            }
+          }
+        }
+      }
+
+      addLog(`\n=== Done ===`, "ok");
+      addLog(`Created: ${totalCreated}`, "ok");
+      addLog(`Already existed (skipped): ${totalSkipped}`, "info");
+      addLog(`Errors: ${totalErrors}`, totalErrors > 0 ? "err" : "info");
+      setDone(true);
+    } catch (e) {
+      addLog(`FATAL: ${e?.message || e}`, "err");
+    }
+    setRunning(false);
+  }
+
+  return (
+    <div style={{ background: T.surface, borderRadius: "1rem", padding: "1rem", border: `1px solid ${T.border}`, display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+      <div>
+        <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", fontFamily: "'Inter',sans-serif", marginBottom: "0.3rem" }}>🔧 Backfill activity posts</div>
+        <div style={{ fontSize: "0.7rem", color: T.textMid, lineHeight: 1.4 }}>
+          Creates missing feed posts for products in users' routine / want-to-try / not-worth-it lists. Run this once after upgrading to v78+ so pre-existing list items show up as activity.
+        </div>
+      </div>
+
+      <button
+        onClick={runBackfill}
+        disabled={running}
+        style={{
+          padding: "0.65rem 1rem",
+          background: running ? T.surfaceAlt : T.navy,
+          color: running ? T.textLight : "#fff",
+          border: "none",
+          borderRadius: "0.55rem",
+          fontSize: "0.78rem",
+          fontWeight: 700,
+          cursor: running ? "default" : "pointer",
+          fontFamily: "'Inter',sans-serif",
+        }}
+      >
+        {running ? "Running…" : done ? "Run again" : "Backfill all users"}
+      </button>
+
+      {log.length > 0 && (
+        <div style={{
+          background: T.surfaceAlt,
+          borderRadius: "0.55rem",
+          padding: "0.55rem 0.7rem",
+          maxHeight: "240px",
+          overflowY: "auto",
+          fontFamily: "ui-monospace, SFMono-Regular, monospace",
+          fontSize: "0.62rem",
+          lineHeight: 1.5,
+        }}>
+          {log.map((entry, i) => (
+            <div key={i} style={{ color: entry.kind === "err" ? T.rose : entry.kind === "ok" ? T.sage : T.textMid, whiteSpace: "pre-wrap" }}>
+              {entry.msg}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAfLog, setAfDone, setAfProducts, afAddLog}) {
   const [products, setProducts] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
@@ -15214,6 +15327,13 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
               </div>
             );
           })()}
+
+          {/* ── Backfill Activity Posts ─────────────────────────────────────
+              One-time fix: creates missing feed posts for products users
+              have in their routine/wantToTry/brokeout lists that don't have
+              a matching post in the posts collection. Fixes pre-v78 data
+              where addToList didn't create posts. */}
+          <BackfillActivityPostsCard />
 
           {/* Hourly activity heatmap */}
           {stats.hourly&&(
