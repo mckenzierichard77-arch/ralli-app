@@ -2331,17 +2331,24 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
   const isMe = post.uid === currentUid;
   const she = isMe ? "you" : firstName;
   const her = isMe ? "your" : "their";  // gender-neutral possessive avoids guessing
+  // Rating value formatting helper (1-10 scale)
+  const ratingVal = Number(post.communityRating);
+  const ratingLabel = Number.isFinite(ratingVal) && ratingVal > 0
+    ? `rated ${ratingVal}/10`
+    : "rated this";
   const labelMap = {
     brokeout:  isMe ? `you said this wasn't worth it`        : `${firstName} said this wasn't worth it`,
     wantToTry: isMe ? `you want to try this`                : `${firstName} wants to try this`,
     loved:     isMe ? `you added this to your routine`      : `${firstName} added this to their routine`,
     commented: isMe ? `you commented on this`               : `${firstName} commented on this`,
+    rated:     isMe ? `you ${ratingLabel}`                  : `${firstName} ${ratingLabel}`,
   };
   const captionMap = {
     brokeout:  { icon: "⚠️", text: labelMap.brokeout,  verb: "didn't think was worth it" },
     wantToTry: { icon: "👀", text: labelMap.wantToTry, verb: "wants to try" },
     loved:     { icon: "💖", text: labelMap.loved,     verb: "added to routine" },
     commented: { icon: "💬", text: labelMap.commented, verb: "commented on" },
+    rated:     { icon: "⭐", text: labelMap.rated,     verb: ratingLabel },
   };
   const caption = captionMap[post.postType] || null;
 
@@ -2357,15 +2364,19 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
     return { text: `${she} checked the ingredients` };
   })();
 
-  // typeAccent: brokeout = rose, wantToTry = soft neutral gray (bookmark-style),
-  // loved = sage, anything else (scan/search/checked) = neutral text color
+  // typeAccent: brokeout = rose, wantToTry = soft neutral gray (bookmark),
+  // loved = sage, rated = colored by score (sage 8+, amber 5-7, rose 1-4),
+  // anything else (scan/search/checked) = neutral text color.
+  const ratedColor = Number.isFinite(ratingVal) && ratingVal > 0
+    ? (ratingVal >= 8 ? T.sage : ratingVal >= 5 ? T.amber : T.rose)
+    : T.textMid;
   const typeAccent =
     post.postType==="brokeout"  ? T.rose :
     post.postType==="wantToTry" ? T.textLight :
     post.postType==="loved"     ? T.sage :
+    post.postType==="rated"     ? ratedColor :
                                   T.textMid;
-  // typeIcon: each reaction gets a distinct icon. Want-to-try uses a bookmark
-  // (universal "save for later" pattern, neutral and non-committal).
+  // typeIcon: each reaction gets a distinct icon. Rated uses a filled star.
   const typeIcon =
     post.postType==="brokeout"
       ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
@@ -2373,6 +2384,8 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
       ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
     : post.postType==="loved"
       ? <svg width="12" height="12" viewBox="0 0 24 24" fill={typeAccent} stroke="none"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+    : post.postType==="rated"
+      ? <svg width="12" height="12" viewBox="0 0 24 24" fill={typeAccent} stroke="none"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
     : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
 
   return (
@@ -2400,7 +2413,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
               <div style={{display:"flex",alignItems:"center",gap:"0.25rem",marginTop:"1px"}}>
                 <span style={{display:"flex",alignItems:"center"}}>{typeIcon}</span>
                 <span style={{fontSize:"0.68rem",fontWeight:"600",color:typeAccent,fontFamily:"'Inter',sans-serif"}}>
-                  {post.postType==="brokeout"?"not worth it":post.postType==="wantToTry"?"wants to try":post.postType==="loved"?"added to routine":"checked this"}
+                  {post.postType==="brokeout"?"not worth it":post.postType==="wantToTry"?"wants to try":post.postType==="loved"?"added to routine":post.postType==="rated"?ratingLabel:"checked this"}
                 </span>
               </div>
             </div>
@@ -5548,7 +5561,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
       const q = query(collection(db,"posts"), where("uid","in",ids), orderBy("createdAt","desc"), limit(30));
       unsubFeed = onSnapshot(q, snap => {
         const fetched = snap.docs.map(d => ({id:d.id, ...d.data()}));
-        const FEED_TYPES = new Set(["brokeout","wantToTry","loved","commented"]);
+        const FEED_TYPES = new Set(["brokeout","wantToTry","loved","commented","rated","scan","search"]);
         const realPosts = fetched.filter(post => FEED_TYPES.has(post.postType))
           .sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
         // Seeds always append — real posts take priority if same product name
@@ -6592,6 +6605,7 @@ function RoutineScoreExplainer({ analysis, routine, onClose }) {
             <p style={{margin:"0 0 0.6rem"}}><strong style={{color:T.text}}>1. Pore Score per product (0–5)</strong><br/>Every product's ingredient list is parsed against a curated database of ~250 comedogenic ingredients. The product's Pore Score is the rounded average of matched ingredients' ratings.</p>
             <p style={{margin:"0 0 0.6rem"}}><strong style={{color:T.text}}>2. Base Routine Score (0–10)</strong><br/>10 minus 2× the average Pore Score across all your routine products. Lower pore scores → higher routine score.</p>
             <p style={{margin:"0 0 0.6rem"}}><strong style={{color:T.text}}>3. Overlap penalty</strong><br/>Subtracts up to 2.5 points when high-risk ingredients (comedogenic rating 3+) appear in multiple products. Common base ingredients aren't penalized.</p>
+            <p style={{margin:"0 0 0.6rem"}}><strong style={{color:T.text}}>4. Letter grade</strong><br/>Mapped to standard GPA-style grading. A+ requires 9.7+, A requires 9.3+, B+ requires 8.7+, etc. An A on Ralli reflects a genuinely exceptional routine.</p>
             <p style={{margin:0,color:T.textLight,fontSize:"0.7rem",fontStyle:"italic"}}>This is a guide, not medical advice. Pore-clogging potential varies by skin type and formulation.</p>
           </div>
         </div>
@@ -6673,19 +6687,31 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
 
     const overall = Math.max(0, Math.min(10, baseScore - overlapPenalty));
 
-    // 3. Grade bands recalibrated so a routine with low pore scores naturally
-    //    lands in A range. Was: 9/8/7/6/5/4/3 -> A+/A/B+/B/C+/C/D
-    //    Now: 8.5/7.5/6.5/5.5/4.5/3.5/2.5
+    // 3. Grade bands — strict US school grading (GPA-style).
+    //    Score × 10 = percent. A+ requires 9.7+ (97+%), A requires 9.3+ (93+%), etc.
+    //    Earning an A signals a genuinely exceptional routine; most users sit B/C.
     const grade =
-      overall >= 8.5 ? "A+" :
-      overall >= 7.5 ? "A"  :
-      overall >= 6.5 ? "B+" :
-      overall >= 5.5 ? "B"  :
-      overall >= 4.5 ? "C+" :
-      overall >= 3.5 ? "C"  :
-      overall >= 2.5 ? "D"  : "F";
-    const gradeColor = overall >= 6.5 ? T.sage : overall >= 4.5 ? T.amber : T.rose;
-    const label = overall >= 7.5 ? "Skin-safe routine" : overall >= 5.5 ? "Mostly clear" : overall >= 3.5 ? "Some concern" : "High risk";
+      overall >= 9.7 ? "A+" :
+      overall >= 9.3 ? "A"  :
+      overall >= 9.0 ? "A−" :
+      overall >= 8.7 ? "B+" :
+      overall >= 8.3 ? "B"  :
+      overall >= 8.0 ? "B−" :
+      overall >= 7.7 ? "C+" :
+      overall >= 7.3 ? "C"  :
+      overall >= 7.0 ? "C−" :
+      overall >= 6.7 ? "D+" :
+      overall >= 6.3 ? "D"  :
+      overall >= 6.0 ? "D−" : "F";
+    // Colors: A range = sage, B range = amber, C/D/F = rose
+    const gradeColor = overall >= 9.0 ? T.sage : overall >= 8.0 ? T.amber : T.rose;
+    // Labels still describe the routine quality plainly
+    const label =
+      overall >= 9.0 ? "Skin-safe routine"    :
+      overall >= 8.0 ? "Strong routine"       :
+      overall >= 7.0 ? "Mostly clear"         :
+      overall >= 6.0 ? "Some concern"         :
+                       "High risk";
 
     return {
       results,
@@ -7394,10 +7420,14 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       const merged = [...postsData];
       ratingsData.forEach(r => {
         if (!merged.some(p => p.productName===r.productName && Number(p.communityRating)===Number(r.communityRating))) {
-          merged.push(r);
+          // Tag rating items with postType="rated" so they render in the
+          // Activities tab with the star icon and rating-aware coloring.
+          merged.push({ ...r, postType: r.postType || "rated" });
         }
       });
       console.log("merged posts:", merged.length, "rated:", merged.filter(p=>Number(p.communityRating)>0).length);
+      // Sort by createdAt desc so the most recent activity surfaces first.
+      merged.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setPosts(merged);
       setLoading(false);
     });
@@ -7430,9 +7460,10 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
     getShopProducts().then(p=>setShopProducts(p));
   },[]);
 
-  // Reload posts when ratings tab opened OR after a new rating is submitted
+  // Reload posts when Activities tab opened OR after a new rating is submitted.
+  // (Ratings are now part of Activities — there's no separate Ratings tab.)
   useEffect(()=>{
-    if (activeTab === "ratings") reloadPosts();
+    if (activeTab === "scans") reloadPosts();
   },[activeTab]);
 
   useEffect(()=>{
@@ -7546,7 +7577,6 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
     {id:"routine", label:"Routine"},
     {id:"lists",   label:"Lists"},
     {id:"scans",   label:"Activities"},
-    {id:"ratings", label:"Ratings"},
   ];
 
   useEffect(() => {
@@ -7664,7 +7694,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
           {/* Stats */}
           <div style={{flex:1,display:"flex",justifyContent:"space-around"}}>
             {[
-              {label:"Activities", value:posts.filter(p=>!p._fromRatings).length,                   onClick:null},
+              {label:"Activities", value:posts.length,                                              onClick:null},
               {label:"Followers", value: realFollowerCount ?? (profile.followers||[]).length,  onClick:()=>openUserList("followers")},
               {label:"Following", value: realFollowingCount ?? (profile.following||[]).length,  onClick:()=>openUserList("following")},
             ].map(({label,value,onClick})=>(
@@ -7780,75 +7810,17 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
         </div>
       )}
 
-      {/* Scans tab */}
+      {/* Activities tab — includes scans, searches, reactions, AND ratings */}
       {activeTab==="scans"&&(
         loading
           ? <div style={{textAlign:"center",padding:"2rem",color:T.textLight}}>Loading…</div>
-          : posts.filter(p=>!p._fromRatings).length===0
+          : posts.length===0
             ? <div style={{textAlign:"center",color:T.textLight,padding:"2.5rem 1rem",fontSize:"0.85rem",fontFamily:"'Inter',sans-serif"}}>
                 <div style={{fontSize:"1.6rem",marginBottom:"0.5rem",opacity:0.4}}>✨</div>
                 <div>No activity yet.</div>
-                <div style={{fontSize:"0.72rem",marginTop:"0.4rem",opacity:0.7}}>Scan a product, search for one, or react to something to start your activity.</div>
+                <div style={{fontSize:"0.72rem",marginTop:"0.4rem",opacity:0.7}}>Scan a product, search for one, rate something, or react to start your activity.</div>
               </div>
-            : <>{posts.filter(p=>!p._fromRatings).map((p,i)=><CardReveal key={p.id} delay={i*40}><PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost}/></CardReveal>)}</>
-      )}
-
-      {/* Ratings tab */}
-      {activeTab==="ratings"&&(
-        loading
-          ? <div style={{textAlign:"center",padding:"2rem",color:T.textLight}}>Loading…</div>
-          : (() => {
-              const ratedPosts = posts.filter(p => {
-                const r = Number(p.communityRating);
-                return !isNaN(r) && r > 0;
-              });
-              if (ratedPosts.length === 0) {
-                // Empty state — suggest products to rate
-                const suggestions = [];
-                return (
-                  <div>
-                    <div style={{textAlign:"center",padding:"1.5rem 1rem 1rem",color:T.textLight,fontSize:"0.85rem"}}>
-                      <div style={{fontSize:"1.5rem",marginBottom:"0.4rem"}}>⭐</div>
-                      <div style={{fontWeight:"600",color:T.textMid,marginBottom:"0.25rem"}}>No ratings yet</div>
-                      <div style={{fontSize:"0.75rem"}}>Rate products after scanning them</div>
-                    </div>
-                    <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate} onUserTap={onUserTap}/>
-                  </div>
-                );
-              }
-              return (
-                <div>
-                  {ratedPosts.map(p=>(
-                    <button key={p.id}
-                      onClick={()=>openProductFromPost(p)}
-                      style={{width:"100%",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"0.9rem 1rem",marginBottom:"0.6rem",display:"flex",alignItems:"center",gap:"0.85rem",cursor:"pointer",textAlign:"left",transition:"border-color 0.15s"}}
-                      onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
-                      onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
-                      {(p.productImage||(p.adminImage||p.image))&&(
-                        <div style={{width:"40px",height:"40px",flexShrink:0,borderRadius:"0.5rem",overflow:"hidden",background:"#ffffff",border:`1px solid ${T.border}`}}>
-                          <img src={p.productImage||p.adminImage||p.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",padding:"3px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>e.target.style.opacity="0"}/>
-                        </div>
-                      )}
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
-                        {p.brand&&<div style={{fontSize:"0.7rem",color:T.textLight,marginTop:"1px"}}>{p.brand}</div>}
-                      </div>
-                      <div style={{display:"flex",gap:"0.5rem",flexShrink:0}}>
-                        <div style={{textAlign:"center",padding:"0.35rem 0.6rem",background:communityColor(p.communityRating)+"15",borderRadius:"0.6rem",border:`1px solid ${communityColor(p.communityRating)}25`}}>
-                          <div style={{fontSize:"1rem",fontWeight:"700",color:communityColor(p.communityRating),lineHeight:1}}>{p.communityRating}</div>
-                          <div style={{fontSize:"0.52rem",color:T.textLight,marginTop:"1px"}}>/10</div>
-                        </div>
-                        <div style={{textAlign:"center",padding:"0.35rem 0.6rem",background:poreStyle(p.poreScore??0).color+"15",borderRadius:"0.6rem",border:`1px solid ${poreStyle(p.poreScore??0).color}25`}}>
-                          <div style={{fontSize:"1rem",fontWeight:"700",color:poreStyle(p.poreScore??0).color,lineHeight:1}}>{p.poreScore??0}</div>
-                          <div style={{fontSize:"0.52rem",color:T.textLight,marginTop:"1px"}}>/5 pore</div>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                  <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate} onUserTap={onUserTap}/>
-                </div>
-              );
-            })()
+            : <>{posts.map((p,i)=><CardReveal key={p.id} delay={i*40}><PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost}/></CardReveal>)}</>
       )}
 
       {/* Lists tab */}
