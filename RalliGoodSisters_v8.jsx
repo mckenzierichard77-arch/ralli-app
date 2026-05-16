@@ -3013,8 +3013,25 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
           <div style={{display:"flex",alignItems:"center",gap:"0.65rem",padding:"0.6rem 0",borderBottom:`0.5px solid ${T.border}`}}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="1.5" style={{flexShrink:0}}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
             <span style={{fontSize:"0.8rem",color:T.textMid,flex:1,fontFamily:"'Inter',sans-serif"}}>Flagged ingredients</span>
-            <span style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{(modalCloggers.length+modalIrritants.length)>0?`${modalCloggers.length+modalIrritants.length} flagged`:"None found"}</span>
-            <div style={{width:8,height:8,borderRadius:"50%",flexShrink:0,background:(modalCloggers.length+modalIrritants.length)>2?T.rose:(modalCloggers.length+modalIrritants.length)>0?T.amber:T.sage}}/>
+            {(() => {
+              // Split count: pore-cloggers vs irritants (distinct concerns).
+              // If both 0 → "None found" (sage dot). If only irritants → amber dot.
+              // If any pore-cloggers → rose dot (most serious concern).
+              const c = modalCloggers.length;
+              const ir = modalIrritants.length;
+              let label;
+              if (c === 0 && ir === 0) label = "None found";
+              else if (c > 0 && ir > 0) label = `${c} clog · ${ir} irritate`;
+              else if (c > 0) label = `${c} may clog`;
+              else label = `${ir} may irritate`;
+              const dotColor = c > 0 ? T.rose : ir > 0 ? T.amber : T.sage;
+              return (
+                <>
+                  <span style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{label}</span>
+                  <div style={{width:8,height:8,borderRadius:"50%",flexShrink:0,background:dotColor}}/>
+                </>
+              );
+            })()}
           </div>
           {product.skinTypes?.length>0&&(
             <div style={{display:"flex",alignItems:"center",gap:"0.65rem",padding:"0.6rem 0",borderBottom:`0.5px solid ${T.border}`}}>
@@ -3253,18 +3270,33 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
                   // Use the shared matcher (same logic as analyzeIngredients).
                   const hit = lookup.find(entry => matchIngredientPattern(lowered, entry.pattern));
                   const dbEntry = hit ? hit.data : null;
-                  const isFlagged=dbEntry&&(dbEntry.score>=1||dbEntry.irritant);
+                  // Distinguish pore-cloggers (red ⚠) from irritants (amber ⓘ).
+                  // Pore-cloggers take priority — if both, treat as pore-clogger.
+                  const isPoreClogger = !!(dbEntry && dbEntry.score >= 1);
+                  const isIrritant    = !!(dbEntry && dbEntry.irritant && !isPoreClogger);
                   const isSelected=selectedIngredient?.name===trimmed;
+                  // Color treatments per category:
+                  //   pore-clogger: peach background, deep-red text, ⚠ triangle
+                  //   irritant:     amber-tinted bg, amber-brown text, ⓘ info dot
+                  //   neutral:      surfaceAlt bg, neutral text
+                  const styleByKind = (() => {
+                    if (isPoreClogger) return { bg: "#FAECE7", color: "#712B13", icon: " ⚠", weight: "600" };
+                    if (isIrritant)    return { bg: "#FBF1DE", color: "#8B6914", icon: " ⓘ",  weight: "600" };
+                    return { bg: T.surfaceAlt, color: T.textMid, icon: "", weight: "400" };
+                  })();
                   return(
                     <button key={i} onClick={()=>setSelectedIngredient(isSelected?null:{name:trimmed,irritant:dbEntry?.irritant,score:dbEntry?.score??0})}
-                      style={{fontSize:"0.6rem",padding:"0.18rem 0.55rem",borderRadius:20,cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.12s",border:isSelected?`1.5px solid ${T.navy}`:"none",background:isSelected?(isFlagged?"#FAECE7":T.accentSoft):isFlagged?"#FAECE7":T.surfaceAlt,color:isFlagged?"#712B13":isSelected?T.navy:T.textMid,fontWeight:isFlagged?"600":"400",outline:"none"}}>
-                      {trimmed}{isFlagged?" ⚠":""}
+                      style={{fontSize:"0.6rem",padding:"0.18rem 0.55rem",borderRadius:20,cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.12s",border:isSelected?`1.5px solid ${T.navy}`:"none",background:isSelected?(isPoreClogger?"#FAECE7":isIrritant?"#FBF1DE":T.accentSoft):styleByKind.bg,color:styleByKind.color,fontWeight:styleByKind.weight,outline:"none"}}>
+                      {trimmed}{styleByKind.icon}
                     </button>
                   );
                 });
               })()}
             </div>
-            <div style={{fontSize:"0.56rem",color:T.textLight,fontStyle:"italic",fontFamily:"'Inter',sans-serif"}}>⚠ flagged ingredients may clog pores or irritate</div>
+            <div style={{display:"flex",flexDirection:"column",gap:"0.15rem",fontSize:"0.56rem",fontStyle:"italic",fontFamily:"'Inter',sans-serif"}}>
+              <div style={{color:"#712B13"}}>⚠ may clog pores</div>
+              <div style={{color:"#8B6914"}}>ⓘ may cause irritation</div>
+            </div>
 
             {selectedIngredient&&<IngredientDetailSheet ing={selectedIngredient} onClose={()=>setSelectedIngredient(null)}/>}
           </div>
@@ -4264,6 +4296,7 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
               color={T.sage}
               items={routine}
               readOnly={true}
+              layout="grid"
               onItemTap={name => setSelectedProduct({
                 productName: name,
                 poreScore: 0,
@@ -6262,7 +6295,7 @@ function ListItemImage({name, color}) {
   );
 }
 
-function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onTogglePrivacy, readOnly, onItemTap, allProducts=[]}) {
+function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onTogglePrivacy, readOnly, onItemTap, allProducts=[], layout="scroll"}) {
   const productCache = useProductCache();
   const [input, setInput] = useState("");
   const [adding, setAdding] = useState(false);
@@ -6363,9 +6396,15 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
         </div>
       )}
 
-      {/* Carousel */}
+      {/* Items render: 3-column grid (layout="grid") OR horizontal scroll
+          (layout="scroll", default). Grid is used for Routine where seeing all
+          products at a glance matters; scroll for Want to Try / Not For Me
+          which can grow long and benefit from the compact carousel. */}
       {items.length > 0 ? (
-        <div style={{overflowX:"auto",scrollbarWidth:"none",msOverflowStyle:"none",WebkitOverflowScrolling:"touch",padding:"0.85rem 1rem",display:"flex",gap:"0.65rem",alignItems:"stretch"}}>
+        <div style={layout === "grid"
+          ? {display:"grid",gridTemplateColumns:"repeat(3, minmax(0, 1fr))",gap:"0.6rem",padding:"0.85rem 1rem",alignItems:"stretch"}
+          : {overflowX:"auto",scrollbarWidth:"none",msOverflowStyle:"none",WebkitOverflowScrolling:"touch",padding:"0.85rem 1rem",display:"flex",gap:"0.65rem",alignItems:"stretch"}
+        }>
           {items.map((item,i)=>{
             // Canonical product first (cache by name); fall back to the legacy
             // allProducts prop which is a snapshot of shopProducts + posts.
@@ -6375,14 +6414,25 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
             const ps = prod?.poreScore!=null ? poreStyle(prod.poreScore) : null;
             const imgSrc = getProductImage(prod);
             const hasImg = imgSrc.startsWith("http");
+            // Card sizing differs by layout:
+            //   grid:   no fixed width (fills grid cell), 1:1 image aspect
+            //   scroll: fixed 110px width + flexShrink:0, fixed 90px image height
+            const cardStyle = layout === "grid"
+              ? {background:"#fff",borderRadius:"1rem",border:`1px solid ${T.border}`,
+                  cursor:onItemTap?"pointer":"default",display:"flex",flexDirection:"column",overflow:"hidden",
+                  transition:"border-color 0.15s,box-shadow 0.15s",position:"relative",minWidth:0}
+              : {flexShrink:0,width:"110px",background:"#fff",borderRadius:"1rem",border:`1px solid ${T.border}`,
+                  cursor:onItemTap?"pointer":"default",display:"flex",flexDirection:"column",overflow:"hidden",
+                  transition:"border-color 0.15s,box-shadow 0.15s",position:"relative"};
+            const imageStyle = layout === "grid"
+              ? {width:"100%",aspectRatio:"1 / 1",background:hasImg?"#fff":color+"10",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",borderBottom:`1px solid ${T.border}`}
+              : {width:"100%",height:"90px",background:hasImg?"#fff":color+"10",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",borderBottom:`1px solid ${T.border}`};
             return (
               <div key={i} onClick={()=>onItemTap&&onItemTap(item)}
-                style={{flexShrink:0,width:"110px",background:"#fff",borderRadius:"1rem",border:`1px solid ${T.border}`,
-                  cursor:onItemTap?"pointer":"default",display:"flex",flexDirection:"column",overflow:"hidden",
-                  transition:"border-color 0.15s,box-shadow 0.15s",position:"relative"}}
+                style={cardStyle}
                 onMouseEnter={e=>{e.currentTarget.style.borderColor=color;e.currentTarget.style.boxShadow=`0 4px 16px ${color}25`;}}
                 onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.boxShadow="none";}}>
-                {/* Remove button */}
+                {/* Remove button — only on YOUR own profile (readOnly is false there) */}
                 {!readOnly&&(
                   <button onClick={e=>{e.stopPropagation();onRemove(item);}}
                     style={{position:"absolute",top:"5px",right:"5px",width:"18px",height:"18px",borderRadius:"50%",background:"rgba(255,255,255,0.9)",border:`1px solid ${T.border}`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2,padding:0,lineHeight:1,transition:"all 0.12s"}}
@@ -6392,7 +6442,7 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
                   </button>
                 )}
                 {/* Image area */}
-                <div style={{width:"100%",height:"90px",background:hasImg?"#fff":color+"10",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",borderBottom:`1px solid ${T.border}`}}>
+                <div style={imageStyle}>
                   {hasImg
                     ? <img src={imgSrc} style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>{e.target.style.display="none";}}/>
                     : <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"4px",padding:"0.5rem"}}>
@@ -6415,10 +6465,13 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
               </div>
             );
           })}
-          {/* Add card */}
+          {/* Add card — sizing follows the layout */}
           {!readOnly&&(
             <div onClick={()=>setAdding(a=>!a)}
-              style={{flexShrink:0,width:"80px",borderRadius:"1rem",border:`1.5px dashed ${color}50`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"0.4rem",cursor:"pointer",transition:"all 0.15s",padding:"1rem 0.5rem",background:color+"05"}}
+              style={layout === "grid"
+                ? {borderRadius:"1rem",border:`1.5px dashed ${color}50`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"0.4rem",cursor:"pointer",transition:"all 0.15s",padding:"1rem 0.5rem",background:color+"05",minHeight:"100%",minWidth:0}
+                : {flexShrink:0,width:"80px",borderRadius:"1rem",border:`1.5px dashed ${color}50`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"0.4rem",cursor:"pointer",transition:"all 0.15s",padding:"1rem 0.5rem",background:color+"05"}
+              }
               onMouseEnter={e=>{e.currentTarget.style.borderColor=color;e.currentTarget.style.background=color+"12";}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor=color+"50";e.currentTarget.style.background=color+"05";}}>
               <div style={{width:"28px",height:"28px",borderRadius:"50%",background:color+"20",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -6824,20 +6877,65 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
   if (compact) {
     const grade = analysis?.grade;
     const gradeColor = analysis?.gradeColor || T.sage;
+    // Hero card — promoted from a small pill (v85-v93) to the main visual on
+    // the profile (v94). Big grade letter on the left, label + score on the
+    // right. TWO tap targets: ⓘ opens explainer modal, ↗ opens share sheet.
+    async function handleShareScore() {
+      const text = analysis
+        ? `✨ My Ralli Routine Score: ${analysis.grade} (${analysis.overall}/10)\n"${analysis.label}"\n${routine.length} products in my routine\n\nCheck yours at https://app.theralliapp.com`
+        : `I'm building my skincare routine on Ralli — come join me!\nhttps://app.theralliapp.com`;
+      try {
+        if (navigator.share) {
+          await navigator.share({ title: "My Ralli Routine Score", text });
+        } else if (navigator.clipboard) {
+          await navigator.clipboard.writeText(text);
+        }
+      } catch(e) {/* user cancelled */}
+    }
     return (
       <>
-      <button onClick={()=>setShowExplainer(true)} style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.5rem 0.85rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"999px",marginBottom:"1rem",width:"fit-content",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-        <div style={{fontSize:"0.65rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em"}}>Routine</div>
-        {grade
-          ? <div style={{fontSize:"0.95rem",fontWeight:"800",color:gradeColor,lineHeight:1}}>{grade}</div>
-          : routine.length === 0
-            ? <div style={{fontSize:"0.75rem",color:T.textLight}}>Add products</div>
-            : <div style={{fontSize:"0.75rem",color:T.textLight}}>—</div>
-        }
-        {analysis?.overall!=null&&<div style={{fontSize:"0.65rem",color:T.textLight}}>{analysis.overall}/10</div>}
-        {analysis?.label&&<div style={{fontSize:"0.65rem",color:T.textMid,borderLeft:`1px solid ${T.border}`,paddingLeft:"0.5rem"}}>{analysis.label}</div>}
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" style={{flexShrink:0,opacity:0.6}}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-      </button>
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",padding:"0.95rem 1rem",marginBottom:"1rem",display:"flex",alignItems:"center",gap:"0.85rem",position:"relative"}}>
+        {/* Big grade letter — also opens explainer when tapped */}
+        <button onClick={()=>setShowExplainer(true)} title="How is this calculated?"
+          style={{background:"none",border:"none",padding:0,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1,minWidth:"44px"}}>
+          {grade
+            ? <div style={{fontSize:"2.1rem",fontWeight:"800",color:gradeColor,fontFamily:"'Inter',sans-serif",lineHeight:1,letterSpacing:"-0.02em"}}>{grade}</div>
+            : <div style={{fontSize:"1.2rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>—</div>
+          }
+          {analysis?.overall!=null && <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"3px",fontFamily:"'Inter',sans-serif"}}>{analysis.overall}/10</div>}
+        </button>
+        {/* Label + status */}
+        <button onClick={()=>setShowExplainer(true)} style={{background:"none",border:"none",padding:0,cursor:"pointer",textAlign:"left",flex:1,fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"0.62rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"2px"}}>Routine Score</div>
+          <div style={{fontSize:"0.92rem",fontWeight:"600",color:T.text,letterSpacing:"-0.01em"}}>
+            {analysis?.label || (routine.length === 0 ? "Add products to your routine" : "Loading…")}
+          </div>
+          {analysis?.overlaps?.length > 0 && (
+            <div style={{fontSize:"0.65rem",color:T.amber,marginTop:"3px"}}>
+              ⚠ {analysis.overlaps.slice(0,2).map(o=>o.name).join(", ")}{analysis.overlaps.length>2 ? ` +${analysis.overlaps.length-2}` : ""}
+            </div>
+          )}
+        </button>
+        {/* Right-side action buttons: info + share */}
+        <div style={{display:"flex",flexDirection:"column",gap:"0.4rem",alignItems:"center",flexShrink:0}}>
+          {/* Info — opens the explainer modal */}
+          <button onClick={()=>setShowExplainer(true)} title="How is this calculated?"
+            style={{background:"none",border:"none",cursor:"pointer",padding:"0.3rem",display:"flex",alignItems:"center",justifyContent:"center",borderRadius:"50%",transition:"background 0.15s",color:T.textLight}}
+            onMouseEnter={e=>{e.currentTarget.style.background=T.surfaceAlt;}}
+            onMouseLeave={e=>{e.currentTarget.style.background="none";}}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          </button>
+          {/* Share — opens native share sheet with score text */}
+          {analysis && (
+            <button onClick={handleShareScore} title="Share my routine score"
+              style={{background:"none",border:"none",cursor:"pointer",padding:"0.3rem",display:"flex",alignItems:"center",justifyContent:"center",borderRadius:"50%",transition:"background 0.15s",color:T.textLight}}
+              onMouseEnter={e=>{e.currentTarget.style.background=T.surfaceAlt;e.currentTarget.style.color=T.navy;}}
+              onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=T.textLight;}}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+            </button>
+          )}
+        </div>
+      </div>
       {showExplainer && <RoutineScoreExplainer analysis={analysis} routine={routine} onClose={()=>setShowExplainer(false)}/>}
       </>
     );
@@ -7477,13 +7575,24 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
     ]).then(([postsData, ratingsData]) => {
       const merged = [...postsData];
       ratingsData.forEach(r => {
-        if (!merged.some(p => p.productName===r.productName && Number(p.communityRating)===Number(r.communityRating))) {
-          // Tag rating items with postType="rated" so they render in the
-          // Activities tab with the star icon and rating-aware coloring.
-          merged.push({ ...r, postType: r.postType || "rated" });
+        const rRating = Number(r.communityRating);
+        if (!Number.isFinite(rRating) || rRating <= 0) return; // skip ratings with no actual score
+        // Dedupe: skip rating only if a post already exists with the SAME real rating value.
+        // We tighten the comparison so null/null doesn't falsely match.
+        const isDup = merged.some(p => {
+          const pRating = Number(p.communityRating);
+          return p.productName === r.productName
+              && Number.isFinite(pRating) && pRating > 0
+              && pRating === rRating;
+        });
+        if (!isDup) {
+          // Force postType="rated" — rating documents always render with the
+          // star icon and rating-aware coloring, regardless of any stale
+          // postType field that might have been written by old code paths.
+          merged.push({ ...r, postType: "rated" });
         }
       });
-      console.log("merged posts:", merged.length, "rated:", merged.filter(p=>Number(p.communityRating)>0).length);
+      console.log("[reloadPosts] merged:", merged.length, "rated:", merged.filter(p=>p.postType==="rated").length, "ratings input:", ratingsData.length);
       // Sort by createdAt desc so the most recent activity surfaces first.
       merged.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setPosts(merged);
@@ -7651,7 +7760,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       {userListModal&&ReactDOM.createPortal(
         <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(28,28,26,0.45)",zIndex:9000,display:"flex",flexDirection:"column",justifyContent:"flex-end",alignItems:"center"}} onClick={()=>setUserListModal(null)}>
           <div style={{width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.5rem 1.5rem 0 0",padding:"1.25rem 1rem 0",height:"70vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1rem",flexShrink:0}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.75rem",flexShrink:0}}>
               <span style={{fontSize:"1rem",fontWeight:"700",fontFamily:"'Inter',sans-serif",color:T.text,textTransform:"capitalize"}}>
                 {userListModal}
                 <span style={{fontSize:"0.72rem",fontWeight:"400",color:T.textLight,marginLeft:"0.5rem"}}>{userListData.length}</span>
@@ -7660,11 +7769,19 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
+            {/* Find People CTA — visible at the top of every followers/following list */}
+            <button onClick={()=>{setUserListModal(null); setActiveTab("people");}}
+              style={{display:"flex",alignItems:"center",justifyContent:"center",gap:"0.45rem",width:"100%",padding:"0.6rem",background:T.surfaceAlt,border:`1px dashed ${T.border}`,borderRadius:"0.7rem",fontSize:"0.78rem",fontWeight:"600",color:T.navy,cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem",flexShrink:0,transition:"all 0.15s"}}
+              onMouseEnter={e=>{e.currentTarget.style.background="#fff";e.currentTarget.style.borderColor=T.navy+"40";}}
+              onMouseLeave={e=>{e.currentTarget.style.background=T.surfaceAlt;e.currentTarget.style.borderColor=T.border;}}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11h-6"/><path d="M19 8v6"/></svg>
+              Find people to follow
+            </button>
             <div style={{overflowY:"auto",flex:1,paddingBottom:"calc(1.5rem + env(safe-area-inset-bottom))"}}>
               {userListLoading
                 ? <div style={{textAlign:"center",padding:"2rem",color:T.textLight}}>Loading…</div>
                 : userListData.length===0
-                  ? <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.85rem"}}>Nobody here yet</div>
+                  ? <div style={{textAlign:"center",padding:"1.5rem",color:T.textLight,fontSize:"0.85rem"}}>Nobody here yet</div>
                   : userListData
                       .filter(u => !isTestOrSeedAccount(u))
                       .map(u => {
@@ -7784,7 +7901,9 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
           </div>
         )}
 
-        {/* Edit Profile + Find People buttons */}
+        {/* Edit Profile — single full-width button. Find People moved to
+            Followers modal + Activities tab empty state. Invite Friends moved
+            to the share icon in the top app bar. */}
         <div style={{display:"flex",gap:"0.5rem"}}>
           <button onClick={()=>editing?saveProfile():setEditing(true)}
             style={{flex:1,padding:"0.5rem",
@@ -7796,20 +7915,6 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             }}>
             {editing ? "Save Profile" : "Edit Profile"}
           </button>
-          {!editing&&(
-            <button onClick={()=>setActiveTab("people")}
-              style={{flex:1,padding:"0.5rem",
-                color:T.navy,
-                border:`1.5px solid ${T.navy}22`,
-                borderRadius:"0.6rem",fontSize:"0.8rem",fontWeight:"700",cursor:"pointer",
-                fontFamily:"'Inter',sans-serif",letterSpacing:"-0.01em",
-                background:T.surfaceAlt,
-                display:"flex",alignItems:"center",justifyContent:"center",gap:"0.4rem",
-              }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11h-6"/><path d="M19 8v6"/></svg>
-              Find People
-            </button>
-          )}
         </div>
       </div>
 
@@ -7835,22 +7940,8 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       )}
 
 
-      {/* Invite friends — prominent banner above tabs */}
-      <button onClick={async()=>{
-        const txt = "I've been using Ralli by GoodSisters to decode my skincare — it checks every ingredient for pore-clogging risk. Come join me!";
-        const url = window.location.href;
-        if (navigator.share) { try { await navigator.share({title:"Ralli by GoodSisters",text:txt,url}); } catch(e){} }
-        else { await navigator.clipboard.writeText(url); alert("Link copied! Share it with your friends."); }
-      }} style={{width:"100%",marginBottom:"1rem",padding:"0.8rem 1rem",background:`linear-gradient(135deg,${T.iceBlue},#E8F4FF)`,color:T.navy,border:`1px solid ${T.iceBlue}`,borderRadius:"0.85rem",fontSize:"0.82rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",fontWeight:"600",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"0.75rem"}}>
-        <div style={{display:"flex",alignItems:"center",gap:"0.6rem"}}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-          <div style={{textAlign:"left"}}>
-            <div style={{fontWeight:"700",fontSize:"0.82rem",lineHeight:1.2}}>Invite friends to Ralli</div>
-            <div style={{fontWeight:"400",fontSize:"0.68rem",color:T.textMid,marginTop:"2px"}}>Skincare is better together</div>
-          </div>
-        </div>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.navy} strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
-      </button>
+      {/* Invite Friends banner removed in v94 — share moved to the top app bar.
+          The Routine Score hero above is now the visual focus of the profile. */}
 
       {/* Tab switcher — hidden when viewing People (Find Friends) */}
       {activeTab!=="people"&&(
@@ -7877,6 +7968,11 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
                 <div style={{fontSize:"1.6rem",marginBottom:"0.5rem",opacity:0.4}}>✨</div>
                 <div>No activity yet.</div>
                 <div style={{fontSize:"0.72rem",marginTop:"0.4rem",opacity:0.7}}>Scan a product, search for one, rate something, or react to start your activity.</div>
+                <button onClick={()=>setActiveTab("people")}
+                  style={{marginTop:"1.25rem",padding:"0.55rem 1.1rem",background:T.navy,color:"#fff",border:"none",borderRadius:"999px",fontSize:"0.78rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",display:"inline-flex",alignItems:"center",gap:"0.4rem"}}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11h-6"/><path d="M19 8v6"/></svg>
+                  Find people to follow
+                </button>
               </div>
             : <>{posts.map((p,i)=><CardReveal key={p.id} delay={i*40}><PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost}/></CardReveal>)}</>
       )}
@@ -7908,6 +8004,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             title="My Routine" icon="✦" color={T.sage}
             items={routine} isPrivate={!!privacy.routine}
             readOnly={false}
+            layout="grid"
             onTogglePrivacy={()=>togglePrivacy("routine")}
             onAdd={v=>addToList("routine",v)}
             onRemove={v=>removeFromList("routine",v)}
@@ -18621,6 +18718,25 @@ function AppInner() {
               <span style={{display:'block',fontFamily:"'Poppins',sans-serif",fontWeight:'900',fontSize:'1.2rem',letterSpacing:'-0.04em',lineHeight:1}}>Ralli</span>
               <span style={{display:'block',fontFamily:"'Inter',sans-serif",fontWeight:'300',fontSize:'0.55rem',letterSpacing:'0.18em',textTransform:'uppercase',color:T.textLight,marginTop:'2px'}}>by GoodSisters</span>
             </span>
+          <div style={{display:"flex",alignItems:"center",gap:"0.2rem"}}>
+            {/* Invite friends to Ralli — opens native share sheet */}
+            <button onClick={async ()=>{
+              const shareText = `Join me on Ralli — a skincare community where your friends help you find products that actually work for your skin.\n\nhttps://app.theralliapp.com`;
+              try {
+                if (navigator.share) {
+                  await navigator.share({ title: "Join me on Ralli", text: shareText });
+                } else if (navigator.clipboard) {
+                  await navigator.clipboard.writeText(shareText);
+                  // Optional: toast confirmation. Keep minimal for now.
+                }
+              } catch(e) {/* user cancelled — no-op */}
+            }}
+              title="Invite friends"
+              style={{background:"none",border:"none",cursor:"pointer",padding:"0.4rem",color:T.textMid,display:"flex",alignItems:"center",borderRadius:"50%",transition:"all 0.15s"}}
+              onMouseEnter={e=>{e.currentTarget.style.background=T.surfaceAlt;e.currentTarget.style.color=T.text;}}
+              onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=T.textMid;}}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+            </button>
           <div style={{position:"relative"}}>
             <button onClick={()=>{setShowNotifPanel(p=>!p);if(!showNotifPanel){setUnreadCount(0);markAllRead(user.uid);}}}
               style={{background:showNotifPanel?T.surfaceAlt:"none",border:"none",cursor:"pointer",padding:"0.4rem",position:"relative",color:showNotifPanel?T.text:T.textMid,display:"flex",alignItems:"center",borderRadius:"50%",transition:"all 0.15s"}}
@@ -18642,6 +18758,7 @@ function AppInner() {
                 </div>
               </>
             )}
+          </div>
           </div>
         </div>
       </div>
