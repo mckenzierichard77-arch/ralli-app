@@ -2338,12 +2338,23 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
     return { text: `${she} checked the ingredients` };
   })();
 
-  const typeAccent = post.postType==="brokeout" ? T.rose : post.postType==="wantToTry" ? T.amber : T.sage;
-  const typeIcon   = post.postType==="brokeout"
-    ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+  // typeAccent: brokeout = rose, wantToTry = amber, loved = sage,
+  // anything else (scan/search/checked) = neutral text color (not green)
+  const typeAccent =
+    post.postType==="brokeout"  ? T.rose :
+    post.postType==="wantToTry" ? T.amber :
+    post.postType==="loved"     ? T.sage :
+                                  T.textMid;
+  // typeIcon: each reaction gets a distinct icon. Scan/check uses a magnifying-glass
+  // so it visually reads as "looked it up" rather than "loved it" (heart).
+  const typeIcon =
+    post.postType==="brokeout"
+      ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
     : post.postType==="wantToTry"
-    ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-    : <svg width="12" height="12" viewBox="0 0 24 24" fill={typeAccent} stroke="none"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>;
+      ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    : post.postType==="loved"
+      ? <svg width="12" height="12" viewBox="0 0 24 24" fill={typeAccent} stroke="none"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+    : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
 
   return (
     <div style={{position:"relative"}}
@@ -4041,7 +4052,7 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
   const [loading, setLoading]   = useState(true);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showFollowList, setShowFollowList] = useState(null);
-  const [activeTab, setActiveTab] = useState("activity");
+  const [activeTab, setActiveTab] = useState("routine");
   const isMe = uid === currentUid;
   const isFollowing = (currentProfile?.following||[]).includes(uid);
 
@@ -4084,15 +4095,37 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
             <div style={{fontSize:"1.35rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif",letterSpacing:"-0.03em"}}>{profile.displayName}</div>
             {profile.bio&&<div style={{fontSize:"0.78rem",color:T.textMid,marginTop:"2px"}}>{profile.bio}</div>}
             <div style={{display:"flex",gap:"1rem",marginTop:"0.5rem"}}>
-              <span style={{fontSize:"0.75rem",color:T.textLight}}><b style={{color:T.text}}>{posts.length}</b> activity</span>
+              <span style={{fontSize:"0.75rem",color:T.textLight}}><b style={{color:T.text}}>{posts.length}</b> activities</span>
               <button onClick={()=>setShowFollowList("followers")} style={{fontSize:"0.75rem",color:T.textLight,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif"}}><b style={{color:T.text}}>{(profile.followers||[]).length}</b> followers</button>
               <button onClick={()=>setShowFollowList("following")} style={{fontSize:"0.75rem",color:T.textLight,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif"}}><b style={{color:T.text}}>{(profile.following||[]).length}</b> following</button>
             </div>
           </div>
         </div>
         {!isMe&&(
-          <button onClick={handleFollow} style={{width:"100%",padding:"0.65rem",background:isFollowing?T.surfaceAlt:T.accent,color:isFollowing?T.text:"#FFFFFF",border:`1px solid ${isFollowing?T.border:T.accent}`,borderRadius:"0.65rem",fontSize:"0.85rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif",marginBottom:"1.25rem"}}>
-            {isFollowing?"Following":"Follow"}
+          <button onClick={handleFollow}
+            style={{
+              width:"100%",
+              padding:"0.85rem 1rem",
+              background: isFollowing ? "#FFFFFF" : T.navy,
+              color: isFollowing ? T.text : "#FFFFFF",
+              border: `1.5px solid ${isFollowing ? T.border : T.navy}`,
+              borderRadius:"0.7rem",
+              fontSize:"0.92rem",
+              fontWeight:"700",
+              cursor:"pointer",
+              fontFamily:"'Inter',sans-serif",
+              marginBottom:"1.25rem",
+              display:"flex",
+              alignItems:"center",
+              justifyContent:"center",
+              gap:"0.5rem",
+              transition:"all 0.15s",
+              letterSpacing:"-0.01em",
+            }}>
+            {isFollowing
+              ? <><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Following</>
+              : <><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Follow</>
+            }
           </button>
         )}
 
@@ -4105,9 +4138,9 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
           const totalListItems = wantCount + brokeCount;
 
           const tabs = [
-            { id: "activity", label: "Activity", count: posts.length },
-            { id: "routine",  label: "Routine",  count: routineCount },
-            { id: "lists",    label: "Lists",    count: totalListItems },
+            { id: "routine",  label: "Routine",    count: routineCount },
+            { id: "lists",    label: "Lists",      count: totalListItems },
+            { id: "activity", label: "Activities", count: posts.length },
           ];
 
           return (
@@ -6998,7 +7031,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
   const [posts, setPosts]               = useState([]);
   const [shopProducts, setShopProducts] = useState([]);
   const [loading, setLoading]           = useState(true);
-  const [activeTab, setActiveTab]       = useState("scans");
+  const [activeTab, setActiveTab]       = useState("routine");
   const [editing, setEditing]           = useState(false);
   const [bio, setBio]                   = useState(profile?.bio||"");
   const [skinTypes2, setSkinTypes2]     = useState(
@@ -7301,8 +7334,9 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
   }
 
   const tabs = [
-    {id:"scans",   label:"Activity"},
-    {id:"lists",   label:"My Lists"},
+    {id:"routine", label:"Routine"},
+    {id:"lists",   label:"Lists"},
+    {id:"scans",   label:"Activities"},
     {id:"ratings", label:"Ratings"},
   ];
 
@@ -7402,7 +7436,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
           {/* Stats */}
           <div style={{flex:1,display:"flex",justifyContent:"space-around"}}>
             {[
-              {label:"Activity",  value:posts.filter(p=>!p._fromRatings).length,                   onClick:null},
+              {label:"Activities", value:posts.filter(p=>!p._fromRatings).length,                   onClick:null},
               {label:"Followers", value: realFollowerCount ?? (profile.followers||[]).length,  onClick:()=>openUserList("followers")},
               {label:"Following", value: realFollowingCount ?? (profile.following||[]).length,  onClick:()=>openUserList("following")},
             ].map(({label,value,onClick})=>(
@@ -7591,7 +7625,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
 
       {/* Lists tab */}
       {/* My Lists tab — Routine + Want to Try + Not Worth It, all in one place */}
-      {activeTab==="lists"&&(
+      {activeTab==="routine"&&(
         <div className="fu">
           {(()=>{
             const allProds = [...shopProducts, ...posts];
@@ -7622,6 +7656,33 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             allProducts={allProds}
             onItemTap={openListItem}
           />
+          <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate} onUserTap={onUserTap}/>
+            </>);
+          })()}
+        </div>
+      )}
+
+      {activeTab==="lists"&&(
+        <div className="fu">
+          {(()=>{
+            const allProds = [...shopProducts, ...posts];
+            function openListItem(name) {
+              const found = allProds.find(p=>(p.productName||p.name||"").toLowerCase()===name.toLowerCase());
+              setSelectedProduct({
+                id: found?.id || "",
+                productId: found?.id || "",
+                productName: name,
+                brand: found?.brand||"",
+                poreScore: found?.poreScore??0,
+                communityRating: found?.communityRating||null,
+                image: getProductImage(found),
+                adminImage: found?.adminImage||"",
+                ingredients: found?.ingredients||"",
+                flaggedIngredients: found?.flaggedIngredients||[],
+                buyUrl: found?.buyUrl||"",
+              });
+            }
+            return (<>
           <ListSection
             title="Want to Try" icon="→" color={T.amber}
             items={wantToTry} isPrivate={!!privacy.wantToTry}
