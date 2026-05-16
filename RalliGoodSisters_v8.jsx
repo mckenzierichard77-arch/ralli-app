@@ -2337,14 +2337,14 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
     ? `rated ${ratingVal}/10`
     : "rated this";
   const labelMap = {
-    brokeout:  isMe ? `you said this wasn't worth it`        : `${firstName} said this wasn't worth it`,
+    brokeout:  isMe ? `you said this wasn't for me`        : `${firstName} said this wasn't for them`,
     wantToTry: isMe ? `you want to try this`                : `${firstName} wants to try this`,
     loved:     isMe ? `you added this to your routine`      : `${firstName} added this to their routine`,
     commented: isMe ? `you commented on this`               : `${firstName} commented on this`,
     rated:     isMe ? `you ${ratingLabel}`                  : `${firstName} ${ratingLabel}`,
   };
   const captionMap = {
-    brokeout:  { icon: "⚠️", text: labelMap.brokeout,  verb: "didn't think was worth it" },
+    brokeout:  { icon: "⚠️", text: labelMap.brokeout,  verb: "didn't think was for them" },
     wantToTry: { icon: "👀", text: labelMap.wantToTry, verb: "wants to try" },
     loved:     { icon: "💖", text: labelMap.loved,     verb: "added to routine" },
     commented: { icon: "💬", text: labelMap.commented, verb: "commented on" },
@@ -2413,7 +2413,7 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
               <div style={{display:"flex",alignItems:"center",gap:"0.25rem",marginTop:"1px"}}>
                 <span style={{display:"flex",alignItems:"center"}}>{typeIcon}</span>
                 <span style={{fontSize:"0.68rem",fontWeight:"600",color:typeAccent,fontFamily:"'Inter',sans-serif"}}>
-                  {post.postType==="brokeout"?"not worth it":post.postType==="wantToTry"?"wants to try":post.postType==="loved"?"added to routine":post.postType==="rated"?ratingLabel:"checked this"}
+                  {post.postType==="brokeout"?"not for me":post.postType==="wantToTry"?"wants to try":post.postType==="loved"?"added to routine":post.postType==="rated"?ratingLabel:"checked this"}
                 </span>
               </div>
             </div>
@@ -3086,7 +3086,7 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
             {[
               {field:"routine",   active:inRoutine,   label:"Add to Routine", activeLabel:"In Routine ✓"},
               {field:"wantToTry", active:inWantToTry, label:"Want to Try",     activeLabel:"Want to Try ✓"},
-              {field:"brokeout",  active:inBrokeout,  label:"Not Worth It",    activeLabel:"Not Worth It ✓"},
+              {field:"brokeout",  active:inBrokeout,  label:"Not For Me",    activeLabel:"Not For Me ✓"},
             ].map(({field,active,label,activeLabel})=>(
               <button key={field} onClick={()=>toggleList(field,active)}
                 style={{flex:1,padding:"0.6rem 0.2rem",background:active?T.navy:"transparent",color:active?"#fff":T.textMid,border:`1px solid ${active?T.navy:T.border}`,borderRadius:"999px",fontSize:"0.7rem",fontWeight:active?"600":"400",cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"all 0.18s",minWidth:0,textAlign:"center",letterSpacing:active?"-0.01em":"0"}}>
@@ -4280,7 +4280,7 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
           const priv = profile.listPrivacy || {};
           const visibleLists = [
             { field:"wantToTry", title:"Want to Try",   color:T.amber },
-            { field:"brokeout",  title:"Not Worth It",  color:T.rose },
+            { field:"brokeout",  title:"Not For Me",  color:T.rose },
           ].filter(l => !priv[l.field] && (profile[l.field] || []).length > 0);
 
           if (visibleLists.length === 0) {
@@ -5363,7 +5363,7 @@ function NetworkGroupCard({productName, brand, productImage, poreScore, users, o
 
 
 // -- TrendingSection — extracted from FeedPage IIFE to fix Rules of Hooks --
-function TrendingSection({ openProductFromPost, trendingList }) {
+function TrendingSection({ openProductFromPost, trendingList, friendScans={}, totalCommunityCounts={} }) {
   const productCache = useProductCache();
   const [trendData, setTrendData] = React.useState([]);
   const [trendReady, setTrendReady] = React.useState(false);
@@ -5439,16 +5439,40 @@ return (
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.2rem",fontFamily:"'Inter',sans-serif"}}>{topBrand}</div>
         <div style={{fontSize:"0.92rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif",lineHeight:1.25,letterSpacing:"-0.01em",marginBottom:"0.4rem",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{getProductDisplayName({productName: topProduct.productName, brand: topBrand})}</div>
-        {/* Community signal — single line */}
-        {(topProduct.lovedCount > 0 || topProduct.avgCommunity || topProduct.scanCount > 1) && (
-          <div style={{fontSize:"0.66rem",color:T.textMid,fontFamily:"'Inter',sans-serif",fontWeight:"500"}}>
-            {topProduct.lovedCount > 0
-              ? `Loved by ${topProduct.lovedCount}`
-              : topProduct.avgCommunity
-                ? `Community ${(topProduct.avgCommunity/2).toFixed(1)}`
-                : `${topProduct.scanCount} checks this week`}
-          </div>
-        )}
+        {(() => {
+          // Friend count = how many people the user follows have this product in their routine.
+          // Community count = total users with this in their routine (fallback for users with no friends using it).
+          const productKey = (topProduct.productName||"").toLowerCase().trim();
+          const friends = friendScans[productKey] || [];
+          const friendCount = friends.length;
+          const communityCount = totalCommunityCounts[productKey] || 0;
+
+          // Display priority:
+          // 1. Friends who use it (most trusted signal)
+          // 2. Community count (fallback when no friends use it)
+          // 3. Community rating (fallback when no usage data)
+          // 4. Generic scan count (last resort)
+          let signal = null;
+          if (friendCount > 0) {
+            // Show first name if 1 friend, count if more
+            const first = friends[0]?.displayName?.split(" ")[0];
+            signal = friendCount === 1 && first
+              ? `${first} uses this`
+              : `Used by ${friendCount} friend${friendCount===1?"":"s"}`;
+          } else if (communityCount > 0) {
+            signal = `Used by ${communityCount} on Ralli`;
+          } else if (topProduct.avgCommunity) {
+            signal = `Community ${(topProduct.avgCommunity/2).toFixed(1)}`;
+          } else if (topProduct.scanCount > 1) {
+            signal = `${topProduct.scanCount} checks this week`;
+          }
+
+          return signal ? (
+            <div style={{fontSize:"0.66rem",color:T.textMid,fontFamily:"'Inter',sans-serif",fontWeight:"500"}}>
+              {signal}
+            </div>
+          ) : null;
+        })()}
       </div>
     </button>
 
@@ -5507,6 +5531,10 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
   const [refreshing, setRefreshing] = useState(false);
   const [notifs, setNotifs]         = useState([]);
   const [feedFriendScans, setFeedFriendScans] = useState({});
+  // Map of productName.toLowerCase() → count of users with this in their routine.
+  // Used as a fallback signal on Trending cards when the viewer follows nobody
+  // who uses the product. Populated from a one-shot query of ~50 recent users.
+  const [communityRoutineCounts, setCommunityRoutineCounts] = useState({});
   const [productImageMap, setProductImageMap] = useState({}); // name→image lookup
   // (Find Friends moved to Profile > People tab)
   const scrollRef   = React.useRef(null);
@@ -5599,6 +5627,31 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
       } catch(e) {}
     }
     loadFriendRoutines();
+
+    // Load community-wide routine counts as a fallback signal for trending
+    // products when the viewer follows nobody who uses the product. One-shot
+    // query of ~50 recent users; aggregate productName -> total user count.
+    async function loadCommunityRoutineCounts() {
+      try {
+        const snap = await getDocs(query(collection(db,"users"), limit(50)));
+        const counts = {};
+        snap.docs.forEach(d => {
+          const u = d.data();
+          if (!u || !Array.isArray(u.routine)) return;
+          // Dedupe so we count one product per user even if it's in their array twice
+          const seen = new Set();
+          u.routine.forEach(productName => {
+            if (!productName) return;
+            const key = productName.toLowerCase().trim();
+            if (seen.has(key)) return;
+            seen.add(key);
+            counts[key] = (counts[key] || 0) + 1;
+          });
+        });
+        setCommunityRoutineCounts(counts);
+      } catch(e) { console.warn("[loadCommunityRoutineCounts] failed:", e?.message); }
+    }
+    loadCommunityRoutineCounts();
     return () => { try { unsubFeed(); } catch {} };
   },[refreshKey,user?.uid,profile?.following?.length]);
 
@@ -6082,7 +6135,12 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
                   )}
 
                   {/* -- Trending This Week -- */}
-                  <TrendingSection openProductFromPost={openProductFromPost} trendingList={trendingList} />
+                  <TrendingSection
+                    openProductFromPost={openProductFromPost}
+                    trendingList={trendingList}
+                    friendScans={feedFriendScans}
+                    totalCommunityCounts={communityRoutineCounts}
+                  />
 
                   {/* Clean product feed */}
                   <div style={{display:"flex",flexDirection:"column",gap:"0.75rem",padding:"0 0.75rem"}}>
@@ -7471,7 +7529,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
   },[profile?._ratingsRefresh]);
 
   // Reload posts whenever the user's lists change. This is what makes a newly-
-  // created post (from tapping "Want to Try" / "Add to Routine" / "Not Worth It"
+  // created post (from tapping "Want to Try" / "Add to Routine" / "Not For Me"
   // on any product) appear in the Activity tab without requiring a page refresh.
   // toggleList writes the post to Firestore AND updates profile state; this
   // hook then triggers a re-fetch to pull the new post into local state.
@@ -7824,7 +7882,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       )}
 
       {/* Lists tab */}
-      {/* My Lists tab — Routine + Want to Try + Not Worth It, all in one place */}
+      {/* My Lists tab — Routine + Want to Try + Not For Me, all in one place */}
       {activeTab==="routine"&&(
         <div className="fu">
           {(()=>{
@@ -7894,7 +7952,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             onItemTap={openListItem}
           />
           <ListSection
-            title="Not Worth It" icon="!" color={T.rose}
+            title="Not For Me" icon="!" color={T.rose}
             items={brokeout} isPrivate={!!privacy.brokeout}
             readOnly={false}
             onTogglePrivacy={()=>togglePrivacy("brokeout")}
@@ -14026,7 +14084,7 @@ function BackfillActivityPostsCard() {
       <div>
         <div style={{ fontSize: "0.65rem", color: T.textLight, textTransform: "uppercase", letterSpacing: "0.07em", fontFamily: "'Inter',sans-serif", marginBottom: "0.3rem" }}>🔧 Backfill activity posts</div>
         <div style={{ fontSize: "0.7rem", color: T.textMid, lineHeight: 1.4 }}>
-          Creates missing feed posts for products in users' routine / want-to-try / not-worth-it lists. Run this once after upgrading to v78+ so pre-existing list items show up as activity.
+          Creates missing feed posts for products in users' routine / want-to-try / not-for-me lists. Run this once after upgrading to v78+ so pre-existing list items show up as activity.
         </div>
       </div>
 
