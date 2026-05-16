@@ -1144,6 +1144,25 @@ function displayNameOf(user) {
   return raw;
 }
 
+// Global filter: should this user be hidden from search, recommendations,
+// group chat pickers, and follower/following lists? Returns true if the
+// user is a pre-launch test/seed account that real users shouldn't see.
+// "Skincare Lover" and generic ghost names ARE filtered out here — they're
+// seed data, not real users. (`displayNameOf` is only for cases where
+// they're already going to be shown — e.g., comments they made.)
+function isTestOrSeedAccount(user) {
+  const name = (user?.displayName || "").trim();
+  if (!name) return true; // Unnamed accounts hidden everywhere
+  const lower = name.toLowerCase();
+  // Generic seed/placeholder names
+  if (lower === "skincare lover" || lower === "anonymous" || lower === "user" ||
+      lower === "undefined" || lower === "null" || lower === "new user" ||
+      lower === "rallier") return true;
+  // Test patterns
+  const TEST_PATTERNS = [/^test/i, /test\d/i, /^demo/i, /^user\d+$/i, /^placeholder/i];
+  return TEST_PATTERNS.some(p => p.test(name));
+}
+
 function timeAgo(ts) {
   if (!ts) return "";
   const diff = Date.now() - (ts.seconds ? ts.seconds*1000 : new Date(ts).getTime());
@@ -2338,20 +2357,20 @@ function PostCard({post, currentUid, currentUserName="", currentUserPhoto="", on
     return { text: `${she} checked the ingredients` };
   })();
 
-  // typeAccent: brokeout = rose, wantToTry = amber, loved = sage,
-  // anything else (scan/search/checked) = neutral text color (not green)
+  // typeAccent: brokeout = rose, wantToTry = soft neutral gray (bookmark-style),
+  // loved = sage, anything else (scan/search/checked) = neutral text color
   const typeAccent =
     post.postType==="brokeout"  ? T.rose :
-    post.postType==="wantToTry" ? T.amber :
+    post.postType==="wantToTry" ? T.textLight :
     post.postType==="loved"     ? T.sage :
                                   T.textMid;
-  // typeIcon: each reaction gets a distinct icon. Scan/check uses a magnifying-glass
-  // so it visually reads as "looked it up" rather than "loved it" (heart).
+  // typeIcon: each reaction gets a distinct icon. Want-to-try uses a bookmark
+  // (universal "save for later" pattern, neutral and non-committal).
   const typeIcon =
     post.postType==="brokeout"
       ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
     : post.postType==="wantToTry"
-      ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
     : post.postType==="loved"
       ? <svg width="12" height="12" viewBox="0 0 24 24" fill={typeAccent} stroke="none"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
     : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={typeAccent} strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
@@ -4307,6 +4326,25 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
             followerUids={profile.followers || []}
             onClose={() => setShowFollowList(null)}
             onUserTap={uid => { setShowFollowList(null); onUserTap?.(uid); }}
+            currentUid={currentUid}
+            currentProfile={currentProfile}
+            onFollowToggle={async (targetUid, currentlyFollowing) => {
+              try {
+                if (currentlyFollowing) {
+                  // Unfollow: remove from my following, remove me from their followers
+                  await updateDoc(doc(db,"users",currentUid), { following: arrayRemove(targetUid) });
+                  await updateDoc(doc(db,"users",targetUid),  { followers: arrayRemove(currentUid) }).catch(()=>{});
+                  onUpdateProfile?.(p => ({ ...p, following: (p.following||[]).filter(u => u !== targetUid) }));
+                } else {
+                  // Follow
+                  await updateDoc(doc(db,"users",currentUid), { following: arrayUnion(targetUid) });
+                  await updateDoc(doc(db,"users",targetUid),  { followers: arrayUnion(currentUid) }).catch(()=>{});
+                  onUpdateProfile?.(p => ({ ...p, following: [...(p.following||[]), targetUid] }));
+                }
+              } catch(e) {
+                console.warn("[FollowListSheet] follow toggle failed:", e);
+              }
+            }}
           />
         </div>
       </div>
@@ -4318,23 +4356,16 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
 // -- FollowListSheetContent — resolves UIDs to user docs, filters ghost accts,
 //    and falls back to a Firestore query for `followers` so a stale
 //    profile.followers array doesn't hide real followers.
-function FollowListSheetContent({ mode, profileUid, followingUids, followerUids, onClose, onUserTap }) {
+function FollowListSheetContent({ mode, profileUid, followingUids, followerUids, onClose, onUserTap, currentUid, currentProfile, onFollowToggle }) {
   const [users, setUsers] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
+  // Track which UIDs we have follow actions in flight for (prevent double-tap)
+  const [busyUids, setBusyUids] = React.useState(new Set());
 
   React.useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
-      // Test-account patterns we want to hide from follow lists entirely.
-      // We do NOT filter out generic-named users anymore — instead we rename
-      // them to "Rallier" at display time so they show up consistently in
-      // counts and lists. Only obvious test/debug accounts get hidden.
-      const TEST_PATTERNS = [/^test/i, /test\d/i, /^demo/i, /^user\d+$/i, /^new user$/i, /^anonymous$/i, /^placeholder/i];
-      const isTestAccount = (u) => {
-        const name = (u.displayName || "").trim();
-        return TEST_PATTERNS.some(p => p.test(name));
-      };
       let collected = [];
 
       if (mode === "following") {
@@ -4346,7 +4377,7 @@ function FollowListSheetContent({ mode, profileUid, followingUids, followerUids,
         collected = snaps
           .filter(s => s && s.exists())
           .map(s => ({ uid: s.id, ...s.data() }))
-          .filter(u => !isTestAccount(u));
+          .filter(u => !isTestOrSeedAccount(u));
       } else {
         // Followers: query Firestore for everyone who has profileUid in their
         // following array. This is the source of truth — independent of the
@@ -4354,7 +4385,7 @@ function FollowListSheetContent({ mode, profileUid, followingUids, followerUids,
         // security rules may block writes to other users' docs).
         if (profileUid) {
           const realFollowers = await queryFollowersOf(profileUid);
-          collected = realFollowers.filter(u => !isTestAccount(u));
+          collected = realFollowers.filter(u => !isTestOrSeedAccount(u));
         }
         // Fall back to the array if the query came up empty AND we have UIDs
         // listed (in case the user didn't have permission to query).
@@ -4365,7 +4396,7 @@ function FollowListSheetContent({ mode, profileUid, followingUids, followerUids,
           collected = snaps
             .filter(s => s && s.exists())
             .map(s => ({ uid: s.id, ...s.data() }))
-            .filter(u => !isTestAccount(u));
+            .filter(u => !isTestOrSeedAccount(u));
         }
       }
 
@@ -4398,17 +4429,58 @@ function FollowListSheetContent({ mode, profileUid, followingUids, followerUids,
         {!loading && users.length === 0 && (
           <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.82rem"}}>No {mode} yet</div>
         )}
-        {!loading && users.map(u => (
-          <button key={u.uid} onClick={() => onUserTap(u.uid)}
-            style={{width:"100%",display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.6rem 0.5rem",background:"none",border:"none",cursor:"pointer",borderBottom:`1px solid ${T.border}`,textAlign:"left"}}>
-            <Avatar photoURL={u.photoURL} name={displayNameOf(u)} size={38}/>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{displayNameOf(u)}</div>
-              <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>{(u.followers||[]).length} followers</div>
+        {!loading && users.map(u => {
+          const isMe = u.uid === currentUid;
+          const isFollowed = (currentProfile?.following || []).includes(u.uid);
+          const isBusy = busyUids.has(u.uid);
+          async function handleFollowTap(e) {
+            e.stopPropagation(); // Don't trigger row navigation
+            if (isMe || isBusy) return;
+            setBusyUids(prev => new Set([...prev, u.uid]));
+            try {
+              await onFollowToggle?.(u.uid, isFollowed);
+            } finally {
+              setBusyUids(prev => {
+                const next = new Set(prev);
+                next.delete(u.uid);
+                return next;
+              });
+            }
+          }
+          return (
+            <div key={u.uid}
+              style={{width:"100%",display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.6rem 0.5rem",borderBottom:`1px solid ${T.border}`}}>
+              <button onClick={() => onUserTap(u.uid)}
+                style={{display:"flex",alignItems:"center",gap:"0.75rem",flex:1,minWidth:0,background:"none",border:"none",cursor:"pointer",textAlign:"left",padding:0}}>
+                <Avatar photoURL={u.photoURL} name={displayNameOf(u)} size={38}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{displayNameOf(u)}</div>
+                  <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>{(u.followers||[]).length} followers</div>
+                </div>
+              </button>
+              {!isMe && onFollowToggle && (
+                <button onClick={handleFollowTap} disabled={isBusy}
+                  style={{
+                    padding:"0.4rem 0.85rem",
+                    background: isFollowed ? "transparent" : T.navy,
+                    color: isFollowed ? T.text : "#fff",
+                    border: `1px solid ${isFollowed ? T.border : T.navy}`,
+                    borderRadius: "999px",
+                    fontSize: "0.72rem",
+                    fontWeight: "700",
+                    cursor: isBusy ? "default" : "pointer",
+                    fontFamily: "'Inter',sans-serif",
+                    flexShrink: 0,
+                    opacity: isBusy ? 0.5 : 1,
+                    transition: "all 0.15s",
+                    letterSpacing: "-0.01em",
+                  }}>
+                  {isFollowed ? "Following" : "Follow"}
+                </button>
+              )}
             </div>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-          </button>
-        ))}
+          );
+        })}
       </div>
     </>
   );
@@ -6448,11 +6520,97 @@ function FounderByline({onUserTap}) {
   );
 }
 
+// -- RoutineScoreExplainer ──────────────────────────────────────────────
+// Modal that explains how the routine score was calculated, with the
+// specific math for the user's actual routine and any overlapping
+// high-risk ingredients. This is the "Why this score?" transparency layer.
+function RoutineScoreExplainer({ analysis, routine, onClose }) {
+  if (!analysis) return null;
+  return ReactDOM.createPortal(
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+      <div onClick={onClose} style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.4)",backdropFilter:"blur(4px)"}}/>
+      <div style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",padding:"1.25rem",maxHeight:"85vh",overflowY:"auto",zIndex:1,paddingBottom:"calc(1.5rem + env(safe-area-inset-bottom))"}}>
+        {/* Header */}
+        <div style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"1rem"}}>
+          <div style={{fontSize:"1.05rem",fontWeight:"800",color:T.text,fontFamily:"'Inter',sans-serif",flex:1,letterSpacing:"-0.02em"}}>How your score is calculated</div>
+          <button onClick={onClose} style={{background:T.surfaceAlt,border:"none",cursor:"pointer",width:"30px",height:"30px",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textMid} strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+
+        {/* Score breakdown */}
+        <div style={{background:T.surfaceAlt,borderRadius:"0.9rem",padding:"0.9rem",marginBottom:"1rem"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.75rem"}}>
+            <div style={{fontSize:"2rem",fontWeight:"800",color:analysis.gradeColor,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{analysis.grade}</div>
+            <div>
+              <div style={{fontSize:"1.15rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>{analysis.overall}/10</div>
+              <div style={{fontSize:"0.7rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{analysis.label}</div>
+            </div>
+          </div>
+          <div style={{fontSize:"0.78rem",color:T.textMid,fontFamily:"'Inter',sans-serif",lineHeight:1.6}}>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"0.35rem 0",borderBottom:`1px solid ${T.border}`}}>
+              <span>Base score (from average pore score across {analysis.withData} products)</span>
+              <span style={{fontWeight:"600",color:T.text,whiteSpace:"nowrap",marginLeft:"0.5rem"}}>{analysis.baseScore}/10</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"0.35rem 0",color: analysis.overlapPenalty > 0 ? T.rose : T.textMid}}>
+              <span>Overlap penalty (high-risk ingredients in multiple products)</span>
+              <span style={{fontWeight:"600",whiteSpace:"nowrap",marginLeft:"0.5rem"}}>{analysis.overlapPenalty > 0 ? `−${analysis.overlapPenalty}` : "0"}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"0.5rem 0 0",marginTop:"0.25rem",borderTop:`2px solid ${T.text}`,fontWeight:"700",color:T.text}}>
+              <span>Final score</span>
+              <span>{analysis.overall}/10</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Overlapping ingredients */}
+        {analysis.overlaps?.length > 0 && (
+          <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.9rem",padding:"0.9rem",marginBottom:"1rem"}}>
+            <div style={{fontSize:"0.72rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.6rem",fontFamily:"'Inter',sans-serif"}}>⚠ Overlapping high-risk ingredients</div>
+            {analysis.overlaps.map((o,i) => (
+              <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.5rem 0",borderBottom: i < analysis.overlaps.length-1 ? `1px solid ${T.border}` : "none",fontFamily:"'Inter',sans-serif"}}>
+                <div>
+                  <div style={{fontSize:"0.82rem",fontWeight:"600",color:T.text,textTransform:"capitalize"}}>{o.name}</div>
+                  <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"1px"}}>Appears in {o.count} of your products</div>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:"0.4rem",flexShrink:0,marginLeft:"0.5rem"}}>
+                  <div style={{fontSize:"0.68rem",color:T.textLight}}>comedogenic</div>
+                  <div style={{fontSize:"0.82rem",fontWeight:"700",color:o.score >= 4 ? T.rose : T.amber,fontFamily:"'Inter',sans-serif"}}>{o.score}/5</div>
+                </div>
+              </div>
+            ))}
+            <div style={{fontSize:"0.68rem",color:T.textLight,marginTop:"0.6rem",lineHeight:1.5,fontStyle:"italic"}}>
+              Only ingredients with comedogenic rating 3+ count toward the penalty. Common ingredients like water, glycerin, or niacinamide aren't penalized.
+            </div>
+          </div>
+        )}
+
+        {/* Methodology */}
+        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.9rem",padding:"0.9rem",marginBottom:"1rem"}}>
+          <div style={{fontSize:"0.72rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.6rem",fontFamily:"'Inter',sans-serif"}}>How it works</div>
+          <div style={{fontSize:"0.78rem",color:T.textMid,fontFamily:"'Inter',sans-serif",lineHeight:1.6}}>
+            <p style={{margin:"0 0 0.6rem"}}><strong style={{color:T.text}}>1. Pore Score per product (0–5)</strong><br/>Every product's ingredient list is parsed against a curated database of ~250 comedogenic ingredients. The product's Pore Score is the rounded average of matched ingredients' ratings.</p>
+            <p style={{margin:"0 0 0.6rem"}}><strong style={{color:T.text}}>2. Base Routine Score (0–10)</strong><br/>10 minus 2× the average Pore Score across all your routine products. Lower pore scores → higher routine score.</p>
+            <p style={{margin:"0 0 0.6rem"}}><strong style={{color:T.text}}>3. Overlap penalty</strong><br/>Subtracts up to 2.5 points when high-risk ingredients (comedogenic rating 3+) appear in multiple products. Common base ingredients aren't penalized.</p>
+            <p style={{margin:0,color:T.textLight,fontSize:"0.7rem",fontStyle:"italic"}}>This is a guide, not medical advice. Pore-clogging potential varies by skin type and formulation.</p>
+          </div>
+        </div>
+
+        <button onClick={onClose} style={{width:"100%",padding:"0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.7rem",fontSize:"0.88rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",letterSpacing:"-0.01em"}}>
+          Got it
+        </button>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 // -- RoutineScore -------------------------------------------------------------
 function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
   const [expanded, setExpanded] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showExplainer, setShowExplainer] = useState(false);
 
   // Use useMemo for instant recalculation — no async needed since shopProducts is already loaded
   const analysis = React.useMemo(() => {
@@ -6482,25 +6640,64 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
     const withData = results.filter(r => r.hasData);
     if (!withData.length) return { results, overall: null };
 
-    // Overall routine score: avg poreScore, penalized for overlap
+    // ── Routine score math (v86) ──────────────────────────────────────
+    // 1. Base score = 10 minus 2× average comedogenic rating across products.
+    //    Range: 0 (everything is rating 5) to 10 (everything is rating 0).
     const avg = withData.reduce((s,r) => s + (r.poreScore||0), 0) / withData.length;
-
-    // Find ingredients appearing in multiple products (double-exposure risk)
-    const allFlagged = withData.flatMap(r => r.flagged.map(f => f.name.toLowerCase()));
-    const counts = {};
-    allFlagged.forEach(n => counts[n] = (counts[n]||0) + 1);
-    const overlaps = Object.entries(counts).filter(([,c]) => c > 1).map(([n]) => n);
-
-    // Grade: invert poreScore (0-5 scale → 10-0), overlap penalty
     const baseScore = Math.max(0, 10 - avg * 2);
-    const overlapPenalty = Math.min(overlaps.length * 0.5, 2);
+
+    // 2. Overlap penalty — ONLY for HIGH-RISK ingredients (rating 3+).
+    //    Why: water/glycerin/niacinamide appearing in many products is normal
+    //    and shouldn't penalize. Only "real" comedogenic stacking matters.
+    //    We track each ingredient with its peak comedogenic score so we can
+    //    show the user which specific ingredients are overlapping.
+    const ingredientMap = new Map(); // name → { count, score }
+    withData.forEach(r => {
+      (r.flagged || []).forEach(f => {
+        const key = f.name.toLowerCase();
+        const prev = ingredientMap.get(key);
+        if (prev) {
+          prev.count += 1;
+          prev.score = Math.max(prev.score, f.score || 0);
+        } else {
+          ingredientMap.set(key, { name: f.name, count: 1, score: f.score || 0 });
+        }
+      });
+    });
+    // Only ingredients with score >= 3 AND appearing in 2+ products count
+    const highRiskOverlaps = [...ingredientMap.values()]
+      .filter(o => o.count >= 2 && o.score >= 3)
+      .sort((a, b) => b.score - a.score || b.count - a.count);
+    // 0.7 per overlapping high-risk ingredient, capped at 2.5
+    const overlapPenalty = Math.min(highRiskOverlaps.length * 0.7, 2.5);
+
     const overall = Math.max(0, Math.min(10, baseScore - overlapPenalty));
 
-    const grade = overall >= 9 ? "A+" : overall >= 8 ? "A" : overall >= 7 ? "B+" : overall >= 6 ? "B" : overall >= 5 ? "C+" : overall >= 4 ? "C" : overall >= 3 ? "D" : "F";
-    const gradeColor = overall >= 7 ? T.sage : overall >= 5 ? T.amber : T.rose;
-    const label = overall >= 8 ? "Skin-safe routine" : overall >= 6 ? "Mostly clear" : overall >= 4 ? "Some concern" : "High risk";
+    // 3. Grade bands recalibrated so a routine with low pore scores naturally
+    //    lands in A range. Was: 9/8/7/6/5/4/3 -> A+/A/B+/B/C+/C/D
+    //    Now: 8.5/7.5/6.5/5.5/4.5/3.5/2.5
+    const grade =
+      overall >= 8.5 ? "A+" :
+      overall >= 7.5 ? "A"  :
+      overall >= 6.5 ? "B+" :
+      overall >= 5.5 ? "B"  :
+      overall >= 4.5 ? "C+" :
+      overall >= 3.5 ? "C"  :
+      overall >= 2.5 ? "D"  : "F";
+    const gradeColor = overall >= 6.5 ? T.sage : overall >= 4.5 ? T.amber : T.rose;
+    const label = overall >= 7.5 ? "Skin-safe routine" : overall >= 5.5 ? "Mostly clear" : overall >= 3.5 ? "Some concern" : "High risk";
 
-    return { results, overall: Math.round(overall * 10) / 10, grade, gradeColor, label, overlaps, withData: withData.length };
+    return {
+      results,
+      overall: Math.round(overall * 10) / 10,
+      grade,
+      gradeColor,
+      label,
+      overlaps: highRiskOverlaps,  // now an array of { name, count, score }
+      withData: withData.length,
+      baseScore: Math.round(baseScore * 10) / 10,
+      overlapPenalty: Math.round(overlapPenalty * 10) / 10,
+    };
   }, [routine, shopProducts]);
 
   async function handleShare() {
@@ -6544,17 +6741,21 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
     const grade = analysis?.grade;
     const gradeColor = analysis?.gradeColor || T.sage;
     return (
-      <div style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.5rem 0.85rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"999px",marginBottom:"1rem",width:"fit-content"}}>
-        <div style={{fontSize:"0.65rem",fontWeight:"700",color:T.textLight,fontFamily:"'Inter',sans-serif",textTransform:"uppercase",letterSpacing:"0.06em"}}>Routine</div>
+      <>
+      <button onClick={()=>setShowExplainer(true)} style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.5rem 0.85rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"999px",marginBottom:"1rem",width:"fit-content",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+        <div style={{fontSize:"0.65rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em"}}>Routine</div>
         {grade
-          ? <div style={{fontSize:"0.95rem",fontWeight:"800",color:gradeColor,fontFamily:"'Inter',sans-serif",lineHeight:1}}>{grade}</div>
+          ? <div style={{fontSize:"0.95rem",fontWeight:"800",color:gradeColor,lineHeight:1}}>{grade}</div>
           : routine.length === 0
-            ? <div style={{fontSize:"0.75rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Add products</div>
-            : <div style={{fontSize:"0.75rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>—</div>
+            ? <div style={{fontSize:"0.75rem",color:T.textLight}}>Add products</div>
+            : <div style={{fontSize:"0.75rem",color:T.textLight}}>—</div>
         }
-        {analysis?.overall!=null&&<div style={{fontSize:"0.65rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{analysis.overall}/10</div>}
-        {analysis?.label&&<div style={{fontSize:"0.65rem",color:T.textMid,fontFamily:"'Inter',sans-serif",borderLeft:`1px solid ${T.border}`,paddingLeft:"0.5rem"}}>{analysis.label}</div>}
-      </div>
+        {analysis?.overall!=null&&<div style={{fontSize:"0.65rem",color:T.textLight}}>{analysis.overall}/10</div>}
+        {analysis?.label&&<div style={{fontSize:"0.65rem",color:T.textMid,borderLeft:`1px solid ${T.border}`,paddingLeft:"0.5rem"}}>{analysis.label}</div>}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" style={{flexShrink:0,opacity:0.6}}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      </button>
+      {showExplainer && <RoutineScoreExplainer analysis={analysis} routine={routine} onClose={()=>setShowExplainer(false)}/>}
+      </>
     );
   }
 
@@ -6568,9 +6769,14 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
             {analysis ? analysis.label : routine.length === 0 ? "Add products to your routine" : "Loading…"}
           </div>
           {analysis?.overlaps?.length > 0 && (
-            <div style={{fontSize:"0.72rem",color:T.amber,marginTop:"3px",fontFamily:"'Inter',sans-serif"}}>
-              ⚠ {analysis.overlaps.length} ingredient{analysis.overlaps.length>1?"s appear":"  appears"} in multiple products
-            </div>
+            <button onClick={()=>setShowExplainer(true)} style={{background:"none",border:"none",padding:0,marginTop:"3px",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
+              <div style={{fontSize:"0.72rem",color:T.amber}}>
+                ⚠ {analysis.overlaps.slice(0,2).map(o=>o.name).join(", ")}
+                {analysis.overlaps.length>2 ? ` +${analysis.overlaps.length-2} more` : ""}
+                {" "}in multiple products
+              </div>
+              <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"1px"}}>Tap to learn more →</div>
+            </button>
           )}
         </div>
         {analysis?.overall != null ? (
@@ -6636,6 +6842,7 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
           </button>
         </div>
       )}
+      {showExplainer && <RoutineScoreExplainer analysis={analysis} routine={routine} onClose={()=>setShowExplainer(false)}/>}
     </div>
   );
 }
@@ -6824,16 +7031,9 @@ function PeopleFinder({ user, profile, onUpdate, onUserTap }) {
           "morganrichard777@gmail.com",
         ];
 
-        // Patterns that mark an account as test/seed/junk content
-        const TEST_NAME_PATTERNS = [
-          /^test/i, /test\d/i, /^skincare lover$/i, /^demo/i,
-          /^user\d+$/i, /^new user$/i, /^anonymous$/i, /^placeholder/i,
-        ];
-        const isTestAccount = (u) => {
-          const name = (u.displayName || "").trim();
-          if (!name) return true; // Unnamed accounts hidden
-          return TEST_NAME_PATTERNS.some(p => p.test(name));
-        };
+        // Filter using the global helper so test/seed accounts (including
+        // "Skincare Lover") are hidden consistently everywhere.
+        const isTestAccount = isTestOrSeedAccount;
 
         // Step 1 — Fetch founders directly by UID so we get fresh photo + bio.
         // Don't rely on the generic getDocs returning them with valid data.
@@ -6897,16 +7097,10 @@ function PeopleFinder({ user, profile, onUpdate, onUserTap }) {
     if (!search.trim()) { setResults([]); return; }
     setLoading(true);
     const q = search.toLowerCase();
-    const TEST_PATTERNS = [/^test/i, /test\d/i, /^skincare lover$/i, /^demo/i, /^user\d+$/i, /^new user$/i, /^anonymous$/i, /^placeholder/i];
-    const isTest = (u) => {
-      const name = (u.displayName || "").trim();
-      if (!name) return true;
-      return TEST_PATTERNS.some(p => p.test(name));
-    };
     getDocs(query(collection(db,"users"), limit(50)))
       .then(snap => {
         const res = snap.docs.map(d=>({uid:d.id,...d.data()}))
-          .filter(u => u.uid!==user.uid && !isTest(u) && (
+          .filter(u => u.uid!==user.uid && !isTestOrSeedAccount(u) && (
             (u.displayName||"").toLowerCase().includes(q) ||
             (u.email||"").toLowerCase().includes(q)
           )).slice(0,15);
@@ -7084,7 +7278,6 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
   async function openUserList(type) {
     setUserListModal(type);
     setUserListLoading(true);
-    const GENERIC = ["skincare lover","anonymous","user","undefined","null",""];
     try {
       let users = [];
       if (type === "followers") {
@@ -7103,11 +7296,27 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
         const snaps = await Promise.all(ids.map(uid => getDoc(doc(db,"users",uid)).catch(()=>null)));
         users = snaps.filter(s => s && s.exists()).map(s => ({ uid: s.id, ...s.data() }));
       }
-      // Strip ghost / never-onboarded accounts.
-      users = users.filter(u => !GENERIC.includes((u.displayName || "").toLowerCase().trim()));
+      // Hide test/seed accounts globally
+      users = users.filter(u => !isTestOrSeedAccount(u));
       setUserListData(users);
     } catch(e) { console.warn("openUserList failed:", e); }
     setUserListLoading(false);
+  }
+
+  // Toggle follow from inside the userList modal
+  async function handleFollowToggleInList(targetUid) {
+    const currentlyFollowing = (profile?.following || []).includes(targetUid);
+    try {
+      if (currentlyFollowing) {
+        await updateDoc(doc(db,"users",user.uid), { following: arrayRemove(targetUid) });
+        await updateDoc(doc(db,"users",targetUid),  { followers: arrayRemove(user.uid) }).catch(()=>{});
+        onUpdate(p => ({ ...p, following: (p.following||[]).filter(u => u !== targetUid) }));
+      } else {
+        await updateDoc(doc(db,"users",user.uid), { following: arrayUnion(targetUid) });
+        await updateDoc(doc(db,"users",targetUid),  { followers: arrayUnion(user.uid) }).catch(()=>{});
+        onUpdate(p => ({ ...p, following: [...(p.following||[]), targetUid] }));
+      }
+    } catch(e) { console.warn("[handleFollowToggleInList] failed:", e); }
   }
 
   async function handlePhotoUpload(e) {
@@ -7369,23 +7578,42 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
                 : userListData.length===0
                   ? <div style={{textAlign:"center",padding:"2rem",color:T.textLight,fontSize:"0.85rem"}}>Nobody here yet</div>
                   : userListData
-                      .filter(u => {
-                        const GENERIC = ["skincare lover","anonymous","user","undefined","null",""];
-                        return !GENERIC.includes((u.displayName||"").toLowerCase().trim());
-                      })
-                      .map(u=>(
-                        <div key={u.uid} onClick={()=>{setUserListModal(null);onUserTap(u.uid);}}
-                          style={{display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.65rem 0.25rem",cursor:"pointer",borderBottom:`1px solid ${T.border}`}}
-                          onMouseEnter={e=>e.currentTarget.style.background=T.surfaceAlt}
-                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                          <Avatar photoURL={u.photoURL} name={u.displayName} size={40}/>
-                          <div style={{flex:1}}>
-                            <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{u.displayName}</div>
-                            <div style={{fontSize:"0.72rem",color:T.textLight}}>{(u.followers||[]).length} followers</div>
+                      .filter(u => !isTestOrSeedAccount(u))
+                      .map(u => {
+                        const isMe = u.uid === user.uid;
+                        const isFollowed = (profile?.following || []).includes(u.uid);
+                        return (
+                          <div key={u.uid}
+                            style={{display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.65rem 0.25rem",borderBottom:`1px solid ${T.border}`}}>
+                            <div onClick={()=>{setUserListModal(null);onUserTap(u.uid);}}
+                              style={{display:"flex",alignItems:"center",gap:"0.75rem",flex:1,minWidth:0,cursor:"pointer"}}>
+                              <Avatar photoURL={u.photoURL} name={displayNameOf(u)} size={40}/>
+                              <div style={{flex:1,minWidth:0}}>
+                                <div style={{fontSize:"0.88rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{displayNameOf(u)}</div>
+                                <div style={{fontSize:"0.72rem",color:T.textLight}}>{(u.followers||[]).length} followers</div>
+                              </div>
+                            </div>
+                            {!isMe && (
+                              <button onClick={async (e) => { e.stopPropagation(); await handleFollowToggleInList(u.uid); }}
+                                style={{
+                                  padding:"0.4rem 0.85rem",
+                                  background: isFollowed ? "transparent" : T.navy,
+                                  color: isFollowed ? T.text : "#fff",
+                                  border: `1px solid ${isFollowed ? T.border : T.navy}`,
+                                  borderRadius:"999px",
+                                  fontSize:"0.72rem",
+                                  fontWeight:"700",
+                                  cursor:"pointer",
+                                  fontFamily:"'Inter',sans-serif",
+                                  flexShrink:0,
+                                  letterSpacing:"-0.01em",
+                                }}>
+                                {isFollowed ? "Following" : "Follow"}
+                              </button>
+                            )}
                           </div>
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-                        </div>
-                      ))
+                        );
+                      })
               }
             </div>
           </div>
@@ -15412,13 +15640,6 @@ function AdminDashboard({user, afRunning, afLog, afDone, afProducts, setAfRunnin
             );
           })()}
 
-          {/* ── Backfill Activity Posts ─────────────────────────────────────
-              One-time fix: creates missing feed posts for products users
-              have in their routine/wantToTry/brokeout lists that don't have
-              a matching post in the posts collection. Fixes pre-v78 data
-              where addToList didn't create posts. */}
-          <BackfillActivityPostsCard />
-
           {/* Hourly activity heatmap */}
           {stats.hourly&&(
           <div style={{background:T.surface,borderRadius:"1rem",padding:"1rem",border:`1px solid ${T.border}`}}>
@@ -16699,12 +16920,20 @@ function NewGroupModal({ user, profile, connections, onClose, onCreated }) {
   // Default view (no search) shows your connections; while searching, merge
   // global Firestore matches with any local connections that also match.
   const candidates = (() => {
+    // Always hide test/seed accounts from the picker
     if (!search.trim()) {
-      return [...connections].sort((a, b) => (a.displayName||"").localeCompare(b.displayName||""));
+      return [...connections]
+        .filter(u => !isTestOrSeedAccount(u))
+        .sort((a, b) => (a.displayName||"").localeCompare(b.displayName||""));
     }
     const merged = new Map();
-    connections.filter(u => (u.displayName||"").toLowerCase().includes(search.toLowerCase())).forEach(u => merged.set(u.uid, u));
-    searchResults.forEach(u => { if (!merged.has(u.uid)) merged.set(u.uid, u); });
+    connections
+      .filter(u => !isTestOrSeedAccount(u))
+      .filter(u => (u.displayName||"").toLowerCase().includes(search.toLowerCase()))
+      .forEach(u => merged.set(u.uid, u));
+    searchResults
+      .filter(u => !isTestOrSeedAccount(u))
+      .forEach(u => { if (!merged.has(u.uid)) merged.set(u.uid, u); });
     return [...merged.values()].sort((a, b) => (a.displayName||"").localeCompare(b.displayName||""));
   })();
 
@@ -16814,7 +17043,7 @@ function NewGroupModal({ user, profile, connections, onClose, onCreated }) {
                 style={{width:"100%",display:"flex",alignItems:"center",gap:"0.7rem",padding:"0.65rem 0.4rem",background:isSel?T.accent+"12":"transparent",borderRadius:"0.6rem",border:"none",cursor:"pointer",textAlign:"left",marginBottom:"0.15rem"}}>
                 <Avatar photoURL={u.photoURL} name={u.displayName} size={38}/>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:"0.82rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{u.displayName}</div>
+                  <div style={{fontSize:"0.82rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>{displayNameOf(u)}</div>
                 </div>
                 <div style={{width:"22px",height:"22px",borderRadius:"50%",border:`2px solid ${isSel?T.accent:T.border}`,background:isSel?T.accent:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                   {isSel && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
@@ -16854,7 +17083,7 @@ function GroupConvoRow({ convo, unread, currentUid, onOpen, onDelete }) {
   const ts = convo.lastAt?.seconds ? timeAgo({ seconds: convo.lastAt.seconds }) : "";
   // Title: explicit name, otherwise derived from participant names.
   const title = (convo.name || "").trim() || (() => {
-    const names = members.map(m => m.displayName?.split(" ")[0] || "Someone");
+    const names = members.map(m => displayNameOf(m).split(" ")[0] || "Rallier");
     if (names.length === 0) return "Group chat";
     if (names.length <= 2) return names.join(" & ");
     return `${names[0]}, ${names[1]} & ${(convo.participants?.length || 0) - 3} more`;
