@@ -7197,6 +7197,29 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
     if (profile?._ratingsRefresh) reloadPosts();
   },[profile?._ratingsRefresh]);
 
+  // Reload posts whenever the user's lists change. This is what makes a newly-
+  // created post (from tapping "Want to Try" / "Add to Routine" / "Not Worth It"
+  // on any product) appear in the Activity tab without requiring a page refresh.
+  // toggleList writes the post to Firestore AND updates profile state; this
+  // hook then triggers a re-fetch to pull the new post into local state.
+  const routineKey  = (profile?.routine  || []).join("|");
+  const wantKey     = (profile?.wantToTry || []).join("|");
+  const brokeKey    = (profile?.brokeout || []).join("|");
+  const isFirstListRefresh = useRef(true);
+  useEffect(() => {
+    // Skip the very first render — initial mount already calls reloadPosts.
+    if (isFirstListRefresh.current) {
+      isFirstListRefresh.current = false;
+      return;
+    }
+    // Guard against missing user/profile during transitions
+    if (!user?.uid) return;
+    const t = setTimeout(() => {
+      try { reloadPosts(); } catch (e) { console.error("[auto-reload] failed:", e); }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [routineKey, wantKey, brokeKey, user?.uid]);
+
   async function saveProfile() {
     try {
       const phoneClean = phoneEdit.replace(/[^0-9]/g,"");
