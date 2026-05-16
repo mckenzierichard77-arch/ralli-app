@@ -4117,6 +4117,8 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showFollowList, setShowFollowList] = useState(null);
   const [activeTab, setActiveTab] = useState("routine");
+  const [shopProducts, setShopProducts] = useState([]);
+  const [showGradeExplainer, setShowGradeExplainer] = useState(false);
   const isMe = uid === currentUid;
   const isFollowing = (currentProfile?.following||[]).includes(uid);
 
@@ -4128,6 +4130,10 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
         if (snap.exists()) setProfile(snap.data());
         const p = await getUserPosts(uid);
         setPosts(p);
+        // Fetch shopProducts so we can compute the routine grade. Limit to 200
+        // — same approach as in FeedPage's product cache.
+        const psnap = await getDocs(query(collection(db,"products"), limit(200)));
+        setShopProducts(psnap.docs.map(d => ({id:d.id, ...d.data()})));
       } catch {}
       setLoading(false);
     }
@@ -4158,10 +4164,26 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
           <div style={{flex:1}}>
             <div style={{fontSize:"1.35rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif",letterSpacing:"-0.03em"}}>{profile.displayName}</div>
             {profile.bio&&<div style={{fontSize:"0.78rem",color:T.textMid,marginTop:"2px"}}>{profile.bio}</div>}
-            <div style={{display:"flex",gap:"1rem",marginTop:"0.5rem"}}>
+            <div style={{display:"flex",gap:"1rem",marginTop:"0.5rem",alignItems:"center",flexWrap:"wrap"}}>
               <span style={{fontSize:"0.75rem",color:T.textLight}}><b style={{color:T.text}}>{posts.length}</b> activities</span>
               <button onClick={()=>setShowFollowList("followers")} style={{fontSize:"0.75rem",color:T.textLight,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif"}}><b style={{color:T.text}}>{(profile.followers||[]).length}</b> followers</button>
               <button onClick={()=>setShowFollowList("following")} style={{fontSize:"0.75rem",color:T.textLight,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif"}}><b style={{color:T.text}}>{(profile.following||[]).length}</b> following</button>
+              {(() => {
+                // 4th stat — routine grade. Hidden when the user has no routine
+                // or when their routine is private (priv.routine is true).
+                const priv = profile.listPrivacy || {};
+                if (priv.routine) return null;
+                const userRoutine = profile.routine || [];
+                if (!userRoutine.length || !shopProducts.length) return null;
+                const a = analyzeRoutine(userRoutine, shopProducts);
+                if (!a?.grade) return null;
+                return (
+                  <button onClick={()=>setShowGradeExplainer(true)}
+                    style={{fontSize:"0.75rem",color:T.textLight,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",gap:"3px"}}>
+                    <b style={{color:a.gradeColor,fontSize:"0.85rem",letterSpacing:"-0.02em"}}>{a.grade}</b> routine
+                  </button>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -4395,6 +4417,11 @@ function UserPage({uid, currentUid, currentProfile, onUpdateProfile, onBack, onU
         </div>
       </div>
     , document.body)}
+    {/* Grade explainer modal — opened from the 4th stat in the header */}
+    {showGradeExplainer && profile?.routine?.length > 0 && shopProducts.length > 0 && (() => {
+      const a = analyzeRoutine(profile.routine, shopProducts);
+      return a ? <RoutineScoreExplainer analysis={a} routine={profile.routine} onClose={()=>setShowGradeExplainer(false)}/> : null;
+    })()}
     </>
   );
 }
@@ -6736,6 +6763,78 @@ function RoutineScoreExplainer({ analysis, routine, onClose }) {
   );
 }
 
+// -- analyzeRoutine — pure function so the routine analysis can be shared
+// between RoutineScore (the card) and the stats row (v96). Returns the
+// same shape as RoutineScore's internal useMemo previously did.
+function analyzeRoutine(routine, shopProducts) {
+  if (!routine || !routine.length) return null;
+  const results = routine.map(name => {
+    const nameLow = name.toLowerCase().trim();
+    const product = shopProducts.find(p => p.productName?.toLowerCase() === nameLow)
+      || shopProducts.find(p => (p.productName||"").toLowerCase().includes(nameLow))
+      || shopProducts.find(p => nameLow.includes((p.productName||"").toLowerCase()))
+      || shopProducts.find(p => {
+        const pWords = (p.productName||"").toLowerCase().split(" ").filter(w=>w.length>3);
+        const nWords = nameLow.split(" ").filter(w=>w.length>3);
+        return pWords.length > 0 && pWords.filter(w=>nWords.includes(w)).length >= Math.min(2,pWords.length);
+      });
+    if (!product?.ingredients) return { name, score: null, poreScore: null, flagged: [], irritants: [] };
+    const res = analyzeIngredients(product.ingredients);
+    return {
+      name,
+      poreScore: res.avgScore,
+      flagged: (res.poreCloggers||[]).sort((a,b)=>b.score-a.score).slice(0,3),
+      irritants: (res.irritants||[]).slice(0,3),
+      hasData: true,
+    };
+  });
+  const withData = results.filter(r => r.hasData);
+  if (!withData.length) return { results, overall: null };
+  const avg = withData.reduce((s,r) => s + (r.poreScore||0), 0) / withData.length;
+  const baseScore = Math.max(0, 10 - avg * 2);
+  const ingredientMap = new Map();
+  withData.forEach(r => {
+    (r.flagged || []).forEach(f => {
+      const key = f.name.toLowerCase();
+      const prev = ingredientMap.get(key);
+      if (prev) {
+        prev.count += 1;
+        prev.score = Math.max(prev.score, f.score || 0);
+      } else {
+        ingredientMap.set(key, { name: f.name, count: 1, score: f.score || 0 });
+      }
+    });
+  });
+  const highRiskOverlaps = [...ingredientMap.values()]
+    .filter(o => o.count >= 2 && o.score >= 3)
+    .sort((a, b) => b.score - a.score || b.count - a.count);
+  const overlapPenalty = Math.min(highRiskOverlaps.length * 0.7, 2.5);
+  const overall = Math.max(0, Math.min(10, baseScore - overlapPenalty));
+  const grade =
+    overall >= 9.0 ? "A" :
+    overall >= 8.0 ? "B" :
+    overall >= 7.0 ? "C" :
+    overall >= 6.0 ? "D" : "F";
+  const gradeColor = overall >= 8.0 ? T.sage : overall >= 7.0 ? T.amber : T.rose;
+  const label =
+    overall >= 9.0 ? "Skin-safe"        :
+    overall >= 8.0 ? "Strong routine"   :
+    overall >= 7.0 ? "Some concern"     :
+    overall >= 6.0 ? "Needs work"       :
+                     "High risk";
+  return {
+    results,
+    overall: Math.round(overall * 10) / 10,
+    grade,
+    gradeColor,
+    label,
+    overlaps: highRiskOverlaps,
+    withData: withData.length,
+    baseScore: Math.round(baseScore * 10) / 10,
+    overlapPenalty: Math.round(overlapPenalty * 10) / 10,
+  };
+}
+
 // -- RoutineScore -------------------------------------------------------------
 function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
   const [expanded, setExpanded] = useState(false);
@@ -6743,98 +6842,12 @@ function RoutineScore({routine, shopProducts, onShareRoutine, compact}) {
   const [copied, setCopied] = useState(false);
   const [showExplainer, setShowExplainer] = useState(false);
 
-  // Use useMemo for instant recalculation — no async needed since shopProducts is already loaded
-  const analysis = React.useMemo(() => {
-    if (!routine.length) return null;
-    // Look up each routine product's ingredients from shopProducts
-    const results = routine.map(name => {
-      const nameLow = name.toLowerCase().trim();
-      const product = shopProducts.find(p => p.productName?.toLowerCase() === nameLow)
-        || shopProducts.find(p => (p.productName||"").toLowerCase().includes(nameLow))
-        || shopProducts.find(p => nameLow.includes((p.productName||"").toLowerCase()))
-        || shopProducts.find(p => {
-          const pWords = (p.productName||"").toLowerCase().split(" ").filter(w=>w.length>3);
-          const nWords = nameLow.split(" ").filter(w=>w.length>3);
-          return pWords.length > 0 && pWords.filter(w=>nWords.includes(w)).length >= Math.min(2,pWords.length);
-        });
-      if (!product?.ingredients) return { name, score: null, poreScore: null, flagged: [], irritants: [] };
-      const res = analyzeIngredients(product.ingredients);
-      return {
-        name,
-        poreScore: res.avgScore,
-        flagged: (res.poreCloggers||[]).sort((a,b)=>b.score-a.score).slice(0,3),
-        irritants: (res.irritants||[]).slice(0,3),
-        hasData: true,
-      };
-    });
-
-    const withData = results.filter(r => r.hasData);
-    if (!withData.length) return { results, overall: null };
-
-    // ── Routine score math (v86) ──────────────────────────────────────
-    // 1. Base score = 10 minus 2× average comedogenic rating across products.
-    //    Range: 0 (everything is rating 5) to 10 (everything is rating 0).
-    const avg = withData.reduce((s,r) => s + (r.poreScore||0), 0) / withData.length;
-    const baseScore = Math.max(0, 10 - avg * 2);
-
-    // 2. Overlap penalty — ONLY for HIGH-RISK ingredients (rating 3+).
-    //    Why: water/glycerin/niacinamide appearing in many products is normal
-    //    and shouldn't penalize. Only "real" comedogenic stacking matters.
-    //    We track each ingredient with its peak comedogenic score so we can
-    //    show the user which specific ingredients are overlapping.
-    const ingredientMap = new Map(); // name → { count, score }
-    withData.forEach(r => {
-      (r.flagged || []).forEach(f => {
-        const key = f.name.toLowerCase();
-        const prev = ingredientMap.get(key);
-        if (prev) {
-          prev.count += 1;
-          prev.score = Math.max(prev.score, f.score || 0);
-        } else {
-          ingredientMap.set(key, { name: f.name, count: 1, score: f.score || 0 });
-        }
-      });
-    });
-    // Only ingredients with score >= 3 AND appearing in 2+ products count
-    const highRiskOverlaps = [...ingredientMap.values()]
-      .filter(o => o.count >= 2 && o.score >= 3)
-      .sort((a, b) => b.score - a.score || b.count - a.count);
-    // 0.7 per overlapping high-risk ingredient, capped at 2.5
-    const overlapPenalty = Math.min(highRiskOverlaps.length * 0.7, 2.5);
-
-    const overall = Math.max(0, Math.min(10, baseScore - overlapPenalty));
-
-    // 3. Grade bands — simplified 5-letter scale (v95). A=excellent,
-    //    B=good, C=okay, D=needs work, F=high risk. Cleaner share moment
-    //    ("I got a B" reads better than "B−") and removes arbitrary cliffs
-    //    where 8.69 → B+ and 8.70 → A−.
-    const grade =
-      overall >= 9.0 ? "A" :
-      overall >= 8.0 ? "B" :
-      overall >= 7.0 ? "C" :
-      overall >= 6.0 ? "D" : "F";
-    // Colors: A/B = sage (positive), C = amber (caution), D/F = rose (warning)
-    const gradeColor = overall >= 8.0 ? T.sage : overall >= 7.0 ? T.amber : T.rose;
-    // Labels — short, plain language
-    const label =
-      overall >= 9.0 ? "Skin-safe"        :
-      overall >= 8.0 ? "Strong routine"   :
-      overall >= 7.0 ? "Some concern"     :
-      overall >= 6.0 ? "Needs work"       :
-                       "High risk";
-
-    return {
-      results,
-      overall: Math.round(overall * 10) / 10,
-      grade,
-      gradeColor,
-      label,
-      overlaps: highRiskOverlaps,  // now an array of { name, count, score }
-      withData: withData.length,
-      baseScore: Math.round(baseScore * 10) / 10,
-      overlapPenalty: Math.round(overlapPenalty * 10) / 10,
-    };
-  }, [routine, shopProducts]);
+  // Routine analysis comes from the shared helper so the stats row
+  // can reuse the exact same math without duplicating it.
+  const analysis = React.useMemo(
+    () => analyzeRoutine(routine, shopProducts),
+    [routine, shopProducts]
+  );
 
   async function handleShare() {
     setSharing(true);
@@ -7454,6 +7467,13 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
   const brokeout   = profile.brokeout   || [];
   const wantToTry  = profile.wantToTry  || [];
   const privacy    = profile.listPrivacy || {};
+  // v96 — routine analysis available at the page level so the stats row
+  // can show the grade as the 4th stat instead of having a separate hero card.
+  const routineAnalysis = React.useMemo(
+    () => analyzeRoutine(routine, shopProducts),
+    [routine.join("|"), shopProducts.length]
+  );
+  const [showGradeExplainer, setShowGradeExplainer] = useState(false);
 
   async function openUserList(type) {
     setUserListModal(type);
@@ -7864,21 +7884,31 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             </label>
           </div>
 
-          {/* Stats */}
+          {/* Stats — 4 columns: Activities · Followers · Following · Routine grade */}
           <div style={{flex:1,display:"flex",justifyContent:"space-around"}}>
             {[
-              {label:"Activities", value:posts.length,                                              onClick:null},
-              {label:"Followers", value: realFollowerCount ?? (profile.followers||[]).length,  onClick:()=>openUserList("followers")},
-              {label:"Following", value: realFollowingCount ?? (profile.following||[]).length,  onClick:()=>openUserList("following")},
-            ].map(({label,value,onClick})=>(
+              {label:"Activities", value:posts.length,                                              onClick:null,                                       isGrade:false},
+              {label:"Followers",  value: realFollowerCount ?? (profile.followers||[]).length,      onClick:()=>openUserList("followers"),              isGrade:false},
+              {label:"Following",  value: realFollowingCount ?? (profile.following||[]).length,     onClick:()=>openUserList("following"),              isGrade:false},
+              {label:"Routine",    value: routineAnalysis?.grade || "—",                            onClick: routineAnalysis ? ()=>setShowGradeExplainer(true) : null, isGrade:true,
+               color: routineAnalysis?.gradeColor},
+            ].map(({label,value,onClick,isGrade,color})=>(
               <button key={label} onClick={onClick||undefined} disabled={!onClick}
                 style={{textAlign:"center",background:"none",border:"none",cursor:onClick?"pointer":"default",padding:"0.15rem 0.5rem",lineHeight:1}}>
-                <div style={{fontSize:"1.25rem",fontWeight:"800",color:T.navy,fontFamily:"'Inter',sans-serif",letterSpacing:"-0.03em"}}>{value}</div>
+                <div style={{fontSize:"1.25rem",fontWeight:"800",color: isGrade && color ? color : T.navy,fontFamily:"'Inter',sans-serif",letterSpacing:"-0.03em"}}>{value}</div>
                 <div style={{fontSize:"0.62rem",color:T.textLight,marginTop:"3px",fontFamily:"'Inter',sans-serif",letterSpacing:"0.02em"}}>{label}</div>
               </button>
             ))}
           </div>
         </div>
+        {/* Grade stat opens the explainer modal */}
+        {showGradeExplainer && routineAnalysis && (
+          <RoutineScoreExplainer
+            analysis={routineAnalysis}
+            routine={routine}
+            onClose={()=>setShowGradeExplainer(false)}
+          />
+        )}
 
         {/* Name + bio */}
         <div style={{marginBottom:"0.75rem"}}>
@@ -7916,10 +7946,9 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
         </div>
       </div>
 
-      {/* Compact Routine Score badge */}
-      {!editing&&routine.length>0&&(
-        <RoutineScore routine={routine} shopProducts={shopProducts} compact />
-      )}
+      {/* Hero RoutineScore card removed in v96. Grade now lives in the stats
+          row above. Tap the "Routine" stat to open the explainer modal;
+          share via the share icon in the top app bar. */}
 
       {/* Edit fields */}
       {editing&&(
