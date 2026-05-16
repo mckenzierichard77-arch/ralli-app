@@ -7528,7 +7528,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
                 <div>No activity yet.</div>
                 <div style={{fontSize:"0.72rem",marginTop:"0.4rem",opacity:0.7}}>Scan a product, search for one, or react to something to start your activity.</div>
               </div>
-            : <>{posts.filter(p=>!p._fromRatings).map((p,i)=><CardReveal key={p.id} delay={i*40}><PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/></CardReveal>)}</>
+            : <>{posts.filter(p=>!p._fromRatings).map((p,i)=><CardReveal key={p.id} delay={i*40}><PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost}/></CardReveal>)}</>
       )}
 
       {/* Ratings tab */}
