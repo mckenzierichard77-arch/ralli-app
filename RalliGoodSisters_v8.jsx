@@ -6677,84 +6677,78 @@ function FounderByline({onUserTap}) {
 // high-risk ingredients. This is the "Why this score?" transparency layer.
 function RoutineScoreExplainer({ analysis, routine, onClose }) {
   if (!analysis) return null;
+  // Progress ring fill — overall is 0-10, convert to 0-100 percent for the
+  // conic-gradient stop. The ring uses the grade color (sage/amber/rose).
+  const fillPct = Math.round((analysis.overall || 0) * 10);
+  const ringBg = `conic-gradient(${analysis.gradeColor} 0% ${fillPct}%, ${T.border} ${fillPct}% 100%)`;
+  // "Clean" count = total ingredients minus the ones to watch.
+  const cleanCount = Math.max(0, (analysis.totalIngredients || 0) - (analysis.toWatchCount || 0));
+  // Insight: only when there's something to flag. Use the top overlapping
+  // ingredient if available; otherwise the highest-rated single flagged
+  // ingredient. If nothing flagged, the insight card is hidden entirely.
+  const topOverlap = (analysis.overlaps || [])[0] || null;
+  const insightIngredient = topOverlap?.name;
+  const insightCount = topOverlap?.count;
   return ReactDOM.createPortal(
     <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
       <div onClick={onClose} style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.4)",backdropFilter:"blur(4px)"}}/>
-      <div style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",padding:"1.25rem",maxHeight:"85vh",overflowY:"auto",zIndex:1,paddingBottom:"calc(1.5rem + env(safe-area-inset-bottom))"}}>
-        {/* Header */}
-        <div style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"1rem"}}>
-          <div style={{fontSize:"1.05rem",fontWeight:"800",color:T.text,fontFamily:"'Inter',sans-serif",flex:1,letterSpacing:"-0.02em"}}>Your score</div>
-          <button onClick={onClose} style={{background:T.surfaceAlt,border:"none",cursor:"pointer",width:"30px",height:"30px",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center"}}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textMid} strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
+      <div style={{position:"relative",width:"100%",maxWidth:"480px",background:T.surface,borderRadius:"1.25rem 1.25rem 0 0",padding:"1.4rem 1.25rem",maxHeight:"85vh",overflowY:"auto",zIndex:1,paddingBottom:"calc(1.5rem + env(safe-area-inset-bottom))",fontFamily:"'Inter',sans-serif"}}>
+        {/* Drag handle for that bottom-sheet feel */}
+        <div style={{width:"36px",height:"4px",background:T.border,borderRadius:"2px",margin:"0 auto 1.2rem"}}/>
+        {/* Close button */}
+        <button onClick={onClose} style={{position:"absolute",top:"0.9rem",right:"0.9rem",background:T.surfaceAlt,border:"none",cursor:"pointer",width:"28px",height:"28px",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",color:T.textMid,padding:0}}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
 
-        {/* Score breakdown — the answer the user came here for */}
-        <div style={{background:T.surfaceAlt,borderRadius:"0.9rem",padding:"1rem",marginBottom:"1rem"}}>
-          <div style={{display:"flex",alignItems:"center",gap:"0.85rem",marginBottom:"0.85rem"}}>
-            <div style={{fontSize:"2.4rem",fontWeight:"800",color:analysis.gradeColor,fontFamily:"'Inter',sans-serif",lineHeight:1,letterSpacing:"-0.03em",minWidth:"38px",textAlign:"center"}}>{analysis.grade}</div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:"1.05rem",fontWeight:"700",color:T.text,fontFamily:"'Inter',sans-serif"}}>{analysis.overall}/10</div>
-              <div style={{fontSize:"0.75rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>{analysis.label}</div>
+        {/* Hero row: progress ring + identity */}
+        <div style={{display:"flex",alignItems:"center",gap:"1rem",marginBottom:"1.1rem"}}>
+          {/* Progress ring with grade inside */}
+          <div style={{width:"86px",height:"86px",borderRadius:"50%",background:ringBg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+            <div style={{width:"72px",height:"72px",borderRadius:"50%",background:T.surface,display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <div style={{fontSize:"2.2rem",fontWeight:"800",color:analysis.gradeColor,lineHeight:1,letterSpacing:"-0.04em"}}>{analysis.grade}</div>
             </div>
           </div>
-          <div style={{fontSize:"0.78rem",color:T.textMid,fontFamily:"'Inter',sans-serif",lineHeight:1.6}}>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"0.4rem 0",borderBottom:`1px solid ${T.border}`}}>
-              <span>Base score</span>
-              <span style={{fontWeight:"600",color:T.text}}>{analysis.baseScore}/10</span>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"0.4rem 0",color: analysis.overlapPenalty > 0 ? T.rose : T.textMid}}>
-              <span>Overlap penalty</span>
-              <span style={{fontWeight:"600"}}>{analysis.overlapPenalty > 0 ? `−${analysis.overlapPenalty}` : "0"}</span>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"0.55rem 0 0",marginTop:"0.25rem",borderTop:`2px solid ${T.text}`,fontWeight:"700",color:T.text,fontSize:"0.85rem"}}>
-              <span>Final</span>
-              <span>{analysis.overall}/10</span>
-            </div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:"0.65rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em"}}>Routine Score</div>
+            <div style={{fontSize:"1.15rem",fontWeight:"700",color:T.text,marginTop:"3px",letterSpacing:"-0.02em"}}>{analysis.label}</div>
+            <div style={{fontSize:"0.75rem",color:T.textLight,marginTop:"4px"}}>{analysis.productCount} product{analysis.productCount===1?"":"s"} · {analysis.totalIngredients} ingredient{analysis.totalIngredients===1?"":"s"} · {analysis.overall}/10</div>
           </div>
         </div>
 
-        {/* Overlapping ingredients — only shown when there's a penalty */}
-        {analysis.overlaps?.length > 0 && (
-          <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.9rem",padding:"0.9rem",marginBottom:"1rem"}}>
-            <div style={{fontSize:"0.7rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.5rem",fontFamily:"'Inter',sans-serif"}}>⚠ In multiple products</div>
-            {analysis.overlaps.map((o,i) => (
-              <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.4rem 0",borderBottom: i < analysis.overlaps.length-1 ? `1px solid ${T.border}` : "none",fontFamily:"'Inter',sans-serif"}}>
-                <div>
-                  <div style={{fontSize:"0.8rem",fontWeight:"600",color:T.text,textTransform:"capitalize"}}>{o.name}</div>
-                  <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>In {o.count} products</div>
-                </div>
-                <div style={{fontSize:"0.78rem",fontWeight:"700",color:o.score >= 4 ? T.rose : T.amber,whiteSpace:"nowrap",marginLeft:"0.5rem"}}>{o.score}/5 clog</div>
-              </div>
-            ))}
+        {/* Two insight cards: Clean vs To Watch */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.55rem",marginBottom:"0.85rem"}}>
+          {/* Clean ingredients — sage */}
+          <div style={{background:"#E7F3EC",borderRadius:"0.85rem",padding:"0.85rem"}}>
+            <div style={{color:T.sage,marginBottom:"0.3rem",lineHeight:0}}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div style={{fontSize:"1.3rem",fontWeight:"800",color:T.sage,lineHeight:1,letterSpacing:"-0.03em"}}>{cleanCount}</div>
+            <div style={{fontSize:"0.7rem",color:T.textMid,marginTop:"4px"}}>Clean ingredients</div>
+          </div>
+          {/* To watch — amber */}
+          <div style={{background:"#FBF1DE",borderRadius:"0.85rem",padding:"0.85rem"}}>
+            <div style={{color:T.amber,marginBottom:"0.3rem",lineHeight:0}}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </div>
+            <div style={{fontSize:"1.3rem",fontWeight:"800",color:T.amber,lineHeight:1,letterSpacing:"-0.03em"}}>{analysis.toWatchCount}</div>
+            <div style={{fontSize:"0.7rem",color:T.textMid,marginTop:"4px"}}>To watch</div>
+          </div>
+        </div>
+
+        {/* Insight callout — ONLY when there's a high-risk overlap worth flagging.
+            Clean routines get no callout (don't celebrate the absence of problems). */}
+        {insightIngredient && (
+          <div style={{background:"#FBF1DE",borderRadius:"0.85rem",padding:"0.85rem",marginBottom:"0.85rem",display:"flex",gap:"0.6rem",alignItems:"flex-start"}}>
+            <div style={{color:T.amber,flexShrink:0,marginTop:"1px",lineHeight:0}}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </div>
+            <div style={{fontSize:"0.78rem",color:T.text,lineHeight:1.5}}>
+              <span style={{fontWeight:"700",textTransform:"capitalize"}}>{insightIngredient}</span> appears in {insightCount} of your products — a common pore-clogger for acne-prone skin.
+            </div>
           </div>
         )}
 
-        {/* Grade bands — single row reference */}
-        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.9rem",padding:"0.85rem 0.9rem",marginBottom:"1rem"}}>
-          <div style={{fontSize:"0.7rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.5rem",fontFamily:"'Inter',sans-serif"}}>Grade bands</div>
-          <div style={{display:"flex",justifyContent:"space-between",gap:"0.4rem",fontFamily:"'Inter',sans-serif"}}>
-            {[
-              {g:"A", s:"9.0+", c:T.sage},
-              {g:"B", s:"8.0+", c:T.sage},
-              {g:"C", s:"7.0+", c:T.amber},
-              {g:"D", s:"6.0+", c:T.rose},
-              {g:"F", s:"<6.0", c:T.rose},
-            ].map((b,i) => (
-              <div key={i} style={{flex:1,textAlign:"center",padding:"0.4rem 0",background:b.g===analysis.grade?b.c+"15":"transparent",borderRadius:"0.5rem",border:`1px solid ${b.g===analysis.grade?b.c+"40":"transparent"}`}}>
-                <div style={{fontSize:"0.95rem",fontWeight:"800",color:b.c,letterSpacing:"-0.02em"}}>{b.g}</div>
-                <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"1px"}}>{b.s}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* One-line disclaimer */}
-        <div style={{fontSize:"0.65rem",color:T.textLight,fontStyle:"italic",fontFamily:"'Inter',sans-serif",textAlign:"center",marginBottom:"0.9rem"}}>
-          A guide, not medical advice.
-        </div>
-
-        <button onClick={onClose} style={{width:"100%",padding:"0.85rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.7rem",fontSize:"0.88rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif",letterSpacing:"-0.01em"}}>
+        <button onClick={onClose} style={{width:"100%",padding:"0.9rem",background:T.navy,color:"#fff",border:"none",borderRadius:"0.75rem",fontSize:"0.9rem",fontWeight:"700",cursor:"pointer",letterSpacing:"-0.01em",marginTop:"0.3rem"}}>
           Got it
         </button>
       </div>
@@ -6778,13 +6772,30 @@ function analyzeRoutine(routine, shopProducts) {
         const nWords = nameLow.split(" ").filter(w=>w.length>3);
         return pWords.length > 0 && pWords.filter(w=>nWords.includes(w)).length >= Math.min(2,pWords.length);
       });
-    if (!product?.ingredients) return { name, score: null, poreScore: null, flagged: [], irritants: [] };
+    if (!product?.ingredients) return { name, score: null, poreScore: null, flagged: [], irritants: [], totalIngredients: 0 };
     const res = analyzeIngredients(product.ingredients);
+    // Use the SAME pore score the user sees on the product card. The stored
+    // product.poreScore field is the integer the UI displays everywhere; if
+    // we recomputed via res.avgScore (which is position-weighted and returns
+    // decimals like 3.9 for the same ingredient list), the routine grade
+    // would silently disagree with what the user sees on their cards.
+    // See v97 fix — Morgan had 3 products showing "1/5, 0/5, 0/5" but the
+    // routine score was C because analyzeIngredients computed avgScore ~3
+    // for at least one of them via position-weighted math.
+    const displayPoreScore = (typeof product.poreScore === "number" && !isNaN(product.poreScore))
+      ? product.poreScore
+      : (res.avgScore ?? 0);
+    // Total ingredients in this product — used for the "ingredients checked"
+    // stat in the modal. Simple comma-split count.
+    const totalIngredients = (product.ingredients || "").split(",").filter(t => t.trim()).length;
     return {
       name,
-      poreScore: res.avgScore,
-      flagged: (res.poreCloggers||[]).sort((a,b)=>b.score-a.score).slice(0,3),
-      irritants: (res.irritants||[]).slice(0,3),
+      poreScore: displayPoreScore,
+      // For the modal's "to watch" count, we keep ALL flagged items here, not
+      // just top 3. The card display still uses top 3 elsewhere.
+      flagged: (res.poreCloggers||[]).sort((a,b)=>b.score-a.score),
+      irritants: (res.irritants||[]),
+      totalIngredients,
       hasData: true,
     };
   });
@@ -6822,6 +6833,19 @@ function analyzeRoutine(routine, shopProducts) {
     overall >= 7.0 ? "Some concern"     :
     overall >= 6.0 ? "Needs work"       :
                      "High risk";
+  // Aggregate stats for the modal: total ingredients across all products,
+  // total flagged (cloggers + irritants combined, deduped within each product
+  // so an ingredient that's both a clogger AND an irritant counts once per
+  // product). "To watch" is the user-facing label.
+  const totalIngredients = withData.reduce((s, r) => s + (r.totalIngredients || 0), 0);
+  const toWatchCount = withData.reduce((s, r) => {
+    const names = new Set([
+      ...(r.flagged || []).map(f => f.name.toLowerCase()),
+      ...(r.irritants || []).map(i => (i.name || "").toLowerCase()),
+    ]);
+    return s + names.size;
+  }, 0);
+
   return {
     results,
     overall: Math.round(overall * 10) / 10,
@@ -6832,6 +6856,10 @@ function analyzeRoutine(routine, shopProducts) {
     withData: withData.length,
     baseScore: Math.round(baseScore * 10) / 10,
     overlapPenalty: Math.round(overlapPenalty * 10) / 10,
+    // v98 — stats for the workout-summary modal
+    totalIngredients,
+    toWatchCount,
+    productCount: withData.length,
   };
 }
 
