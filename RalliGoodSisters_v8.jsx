@@ -930,8 +930,8 @@ function FriendRoutinePill({friends}) {
   };
   const realName = firstName(friends[0].displayName);
   const label = friends.length === 1
-    ? realName ? `${realName} has this` : "1 friend has this"
-    : `${friends.length} friends have this`;
+    ? realName ? `${realName} uses this` : "1 friend uses this"
+    : `${friends.length} friends use this`;
   return (
     <div style={{position:"absolute",bottom:"6px",left:"7px",display:"flex",alignItems:"center",gap:"4px",background:"rgba(17,24,39,0.62)",backdropFilter:"blur(4px)",borderRadius:"999px",padding:"3px 7px 3px 4px",pointerEvents:"none"}}>
       <div style={{display:"flex"}}>
@@ -6681,14 +6681,8 @@ function RoutineScoreExplainer({ analysis, routine, onClose }) {
   // conic-gradient stop. The ring uses the grade color (sage/amber/rose).
   const fillPct = Math.round((analysis.overall || 0) * 10);
   const ringBg = `conic-gradient(${analysis.gradeColor} 0% ${fillPct}%, ${T.border} ${fillPct}% 100%)`;
-  // "Clean" count = total ingredients minus the ones to watch.
+  // "Clean" count = total ingredients minus the ones to watch (deduped).
   const cleanCount = Math.max(0, (analysis.totalIngredients || 0) - (analysis.toWatchCount || 0));
-  // Insight: only when there's something to flag. Use the top overlapping
-  // ingredient if available; otherwise the highest-rated single flagged
-  // ingredient. If nothing flagged, the insight card is hidden entirely.
-  const topOverlap = (analysis.overlaps || [])[0] || null;
-  const insightIngredient = topOverlap?.name;
-  const insightCount = topOverlap?.count;
   return ReactDOM.createPortal(
     <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
       <div onClick={onClose} style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.4)",backdropFilter:"blur(4px)"}}/>
@@ -6735,16 +6729,35 @@ function RoutineScoreExplainer({ analysis, routine, onClose }) {
           </div>
         </div>
 
-        {/* Insight callout — ONLY when there's a high-risk overlap worth flagging.
-            Clean routines get no callout (don't celebrate the absence of problems). */}
-        {insightIngredient && (
-          <div style={{background:"#FBF1DE",borderRadius:"0.85rem",padding:"0.85rem",marginBottom:"0.85rem",display:"flex",gap:"0.6rem",alignItems:"flex-start"}}>
-            <div style={{color:T.amber,flexShrink:0,marginTop:"1px",lineHeight:0}}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            </div>
-            <div style={{fontSize:"0.78rem",color:T.text,lineHeight:1.5}}>
-              <span style={{fontWeight:"700",textTransform:"capitalize"}}>{insightIngredient}</span> appears in {insightCount} of your products — a common pore-clogger for acne-prone skin.
-            </div>
+        {/* Inline "To watch" list — replaces the old single-insight callout.
+            Shows every flagged ingredient across the routine (deduped across
+            products), highest risk first. Each row shows the ingredient,
+            how many products it's in (when > 1), and a small kind label.
+            Hidden entirely when nothing is flagged. */}
+        {analysis.toWatchList?.length > 0 && (
+          <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",padding:"0.35rem 0.85rem",marginBottom:"0.85rem"}}>
+            <div style={{fontSize:"0.62rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",padding:"0.7rem 0 0.5rem"}}>To watch</div>
+            {analysis.toWatchList.map((item, i) => {
+              const isLast = i === analysis.toWatchList.length - 1;
+              const kindColor = item.kind === "clog" ? T.rose : T.amber;
+              const kindLabel = item.kind === "clog" ? "may clog" : "may irritate";
+              return (
+                <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.55rem 0",borderTop:`1px solid ${T.border}`,gap:"0.5rem"}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:"0.82rem",fontWeight:"600",color:T.text,textTransform:"capitalize",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>
+                    {item.productCount > 1 && (
+                      <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"1px"}}>In {item.productCount} products</div>
+                    )}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:"0.5rem",flexShrink:0}}>
+                    <div style={{fontSize:"0.68rem",color:kindColor,fontWeight:"600"}}>{kindLabel}</div>
+                    {item.kind === "clog" && item.score > 0 && (
+                      <div style={{fontSize:"0.72rem",fontWeight:"700",color:kindColor}}>{item.score}/5</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -6834,17 +6847,41 @@ function analyzeRoutine(routine, shopProducts) {
     overall >= 6.0 ? "Needs work"       :
                      "High risk";
   // Aggregate stats for the modal: total ingredients across all products,
-  // total flagged (cloggers + irritants combined, deduped within each product
-  // so an ingredient that's both a clogger AND an irritant counts once per
-  // product). "To watch" is the user-facing label.
+  // total flagged across all products. "To watch" is the user-facing label.
+  // Cross-product dedupe lives in toWatchMap (built below) so we count
+  // "coconut oil in 2 products" once, not twice.
   const totalIngredients = withData.reduce((s, r) => s + (r.totalIngredients || 0), 0);
-  const toWatchCount = withData.reduce((s, r) => {
-    const names = new Set([
-      ...(r.flagged || []).map(f => f.name.toLowerCase()),
-      ...(r.irritants || []).map(i => (i.name || "").toLowerCase()),
-    ]);
-    return s + names.size;
-  }, 0);
+
+  // Build a deduped flat list of flagged ingredients for the modal's
+  // "to watch" inline list. Each entry: { name, kind ('clog'|'irritate'),
+  // score, productCount }. Sorted by score desc, then productCount desc,
+  // so the highest-risk ingredients surface first.
+  const toWatchMap = new Map();
+  withData.forEach(r => {
+    (r.flagged || []).forEach(f => {
+      const key = f.name.toLowerCase();
+      const prev = toWatchMap.get(key);
+      if (prev) {
+        prev.productCount += 1;
+        prev.score = Math.max(prev.score, f.score || 0);
+      } else {
+        toWatchMap.set(key, { name: f.name, kind: "clog", score: f.score || 0, productCount: 1 });
+      }
+    });
+    (r.irritants || []).forEach(i => {
+      const key = (i.name || "").toLowerCase();
+      if (!key) return;
+      const prev = toWatchMap.get(key);
+      if (prev) {
+        prev.productCount += 1;
+      } else {
+        toWatchMap.set(key, { name: i.name, kind: "irritate", score: 0, productCount: 1 });
+      }
+    });
+  });
+  const toWatchList = [...toWatchMap.values()]
+    .sort((a, b) => (b.score || 0) - (a.score || 0) || b.productCount - a.productCount);
+  const toWatchCount = toWatchList.length;
 
   return {
     results,
@@ -6856,9 +6893,9 @@ function analyzeRoutine(routine, shopProducts) {
     withData: withData.length,
     baseScore: Math.round(baseScore * 10) / 10,
     overlapPenalty: Math.round(overlapPenalty * 10) / 10,
-    // v98 — stats for the workout-summary modal
     totalIngredients,
     toWatchCount,
+    toWatchList,
     productCount: withData.length,
   };
 }
