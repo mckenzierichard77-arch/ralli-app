@@ -34,6 +34,11 @@ const gProvider = new GoogleAuthProvider();
 // Set this in your environment / deployment config, never commit it
 const ANTHROPIC_KEY = import.meta.env?.VITE_ANTHROPIC_KEY || "";
 
+// -- Photoroom API key — used to clean low-quality OBF product images --
+// Prefix the key with `sandbox_` in dev (free, watermarked) or use a live
+// key in production. Set VITE_PHOTOROOM_KEY in Vercel env vars.
+const PHOTOROOM_KEY = import.meta.env?.VITE_PHOTOROOM_KEY || "";
+
 // -- Design tokens ---------------------------------------------
 const T = {
   bg:        "#F8F9FB",   // Cloud White #F8F9FB
@@ -1187,6 +1192,99 @@ async function setCachedImage(key, url) {
 }
 function imgCacheKey(brand, name) {
   return `${(brand||"").toLowerCase().replace(/\s+/g,"_")}|${(name||"").toLowerCase().replace(/\s+/g,"_")}`.slice(0,200);
+}
+
+// -- Photoroom: clean a low-quality product image -------------------
+// What Photoroom DOES: removes the background, adds even white background,
+//   adds a soft realistic shadow, centers the subject with padding.
+// What Photoroom does NOT do: upscale, sharpen, or regenerate detail.
+// So a blurry OBF source = a clean-looking-but-still-blurry result.
+// Best for: OBF shots that are fine-resolution but have ugly lighting,
+//   cluttered backgrounds, or color casts.
+//
+// Returns a Blob (PNG) ready to upload to Firebase Storage. Throws on failure.
+//
+// Sandbox mode: prefix your key with `sandbox_` for free testing
+// (watermarked output, 100 calls/day, 1000 calls/month).
+// Live mode: each call to /v2/edit = 5 Remove-Background credits ($0.02 ea).
+async function cleanWithPhotoroom(imageUrl, opts = {}) {
+  if (!PHOTOROOM_KEY) throw new Error("Photoroom API key not configured (VITE_PHOTOROOM_KEY).");
+  if (!imageUrl) throw new Error("No image URL provided.");
+
+  // Fetch the source image. OBF URLs are CORS-friendly so this works directly;
+  // if it fails we fall back to allorigins proxy.
+  let blob;
+  try {
+    const r = await fetch(imageUrl, { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error(`source fetch ${r.status}`);
+    blob = await r.blob();
+  } catch {
+    const r = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(imageUrl)}`, { signal: AbortSignal.timeout(12000) });
+    if (!r.ok) throw new Error(`proxy fetch failed: ${r.status}`);
+    blob = await r.blob();
+  }
+  if (!blob || blob.size < 1500) throw new Error("Source image is empty or too small.");
+
+  // Build multipart form for /v2/edit (Image Editing API)
+  // Docs: https://docs.photoroom.com/api-reference-openapi
+  const form = new FormData();
+  // Photoroom accepts PNG/JPEG/WEBP/HEIC
+  const ext = (blob.type && blob.type.split("/")[1]) || "jpg";
+  form.append("imageFile", blob, `source.${ext}`);
+
+  // Output settings — clean square shot for a product catalog
+  form.append("padding", String(opts.padding ?? 0.08));      // 8% padding
+  form.append("referenceBox", "subjectBox");                  // crop tight to subject
+  form.append("outputSize", opts.outputSize || "1000x1000");  // square thumbnail
+  form.append("background.color", opts.bgColor || "FFFFFF");  // white background
+  form.append("export.format", "jpg");                        // smaller files than PNG
+
+  // Optional: realistic shadow for a polished look (off by default to keep
+  // things crisp — turn on via opts.shadow = true)
+  if (opts.shadow) form.append("shadow.mode", "ai.soft");
+
+  const headers = {
+    "x-api-key": PHOTOROOM_KEY,
+    "Accept": "image/jpeg, application/json",
+  };
+  // HD background removal — sharper edges on hair/labels/etc.
+  // Only available on Plus plan; safe to include for sandbox + Basic.
+  headers["pr-hd-background-removal"] = "auto";
+
+  const resp = await fetch("https://image-api.photoroom.com/v2/edit", {
+    method: "POST",
+    headers,
+    body: form,
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!resp.ok) {
+    let detail = "";
+    try { detail = (await resp.text()).slice(0, 200); } catch {}
+    throw new Error(`Photoroom ${resp.status}: ${detail || resp.statusText}`);
+  }
+  const out = await resp.blob();
+  if (!out || out.size < 1500) throw new Error("Photoroom returned an empty image.");
+  return out;
+}
+
+// Convenience: clean a product's OBF image and upload the result to its
+// Firebase Storage path, then write the resulting URL to adminImage + image.
+// Returns the new Firebase URL, or throws on any step failure.
+async function cleanAndSaveProductImage(productId, sourceUrl, opts = {}) {
+  if (!productId || productId.length < 10) throw new Error("Invalid product ID.");
+  const cleaned = await cleanWithPhotoroom(sourceUrl, opts);
+  const path = `products/${productId}/photoroom_clean.jpg`;
+  const ref = storageRef(storage, path);
+  await uploadBytes(ref, cleaned, { contentType: "image/jpeg" });
+  const url = await getDownloadURL(ref);
+  await setDoc(doc(db, "products", productId), {
+    adminImage: url,
+    image: url,
+    photoroomCleanedAt: Date.now(),
+    updatedAt: Date.now(),
+  }, { merge: true });
+  return url;
 }
 
 // -- Multi-source product image resolver ----------------------
@@ -13040,6 +13138,139 @@ function AdminProductHub({ user } = {}) {
   );
 }
 
+// Inline card shown in the admin edit form when a product has an OBF
+// reference image but no admin image yet. Offers a one-tap "Clean with
+// Photoroom" button that runs background removal + white background +
+// upload to Firebase Storage, then writes the result to adminImage.
+function PhotoroomCleanCard({ src, setSrc }) {
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState("");
+  const [preview, setPreview] = React.useState(null); // blob URL of cleaned result before save
+  const keyConfigured = !!PHOTOROOM_KEY;
+  const isSandbox = keyConfigured && PHOTOROOM_KEY.startsWith("sandbox_");
+
+  async function runClean() {
+    if (busy) return;
+    if (!keyConfigured) {
+      setErr("Set VITE_PHOTOROOM_KEY in Vercel env vars first.");
+      return;
+    }
+    if (!src.id || src.id.length < 10) {
+      setErr("Save the product first so it has a Firestore ID.");
+      return;
+    }
+    setBusy(true); setErr("");
+    try {
+      // Run the Photoroom call locally so we can preview before saving.
+      const blob = await cleanWithPhotoroom(src.obfImage, { shadow: false });
+      const previewUrl = URL.createObjectURL(blob);
+      setPreview({ blob, url: previewUrl });
+    } catch (e) {
+      setErr(e.message || "Clean failed.");
+    }
+    setBusy(false);
+  }
+
+  async function saveCleaned() {
+    if (!preview?.blob) return;
+    setBusy(true); setErr("");
+    try {
+      const path = `products/${src.id}/photoroom_clean.jpg`;
+      const ref = storageRef(storage, path);
+      await uploadBytes(ref, preview.blob, { contentType: "image/jpeg" });
+      const url = await getDownloadURL(ref);
+      await setDoc(doc(db, "products", src.id), {
+        adminImage: url,
+        image: url,
+        photoroomCleanedAt: Date.now(),
+        updatedAt: Date.now(),
+      }, { merge: true });
+      setSrc(s => ({ ...s, adminImage: url, image: url, photoroomCleanedAt: Date.now() }));
+      URL.revokeObjectURL(preview.url);
+      setPreview(null);
+    } catch (e) {
+      setErr("Save failed: " + (e.message || "unknown"));
+    }
+    setBusy(false);
+  }
+
+  function discardCleaned() {
+    if (preview) URL.revokeObjectURL(preview.url);
+    setPreview(null);
+    setErr("");
+  }
+
+  return (
+    <div style={{marginBottom:"0.6rem",padding:"0.6rem",background:T.surfaceAlt,border:`1px dashed ${T.border}`,borderRadius:"0.55rem",display:"flex",flexDirection:"column",gap:"0.55rem"}}>
+      <div style={{display:"flex",gap:"0.6rem",alignItems:"center"}}>
+        <img src={src.obfImage} alt="OBF reference"
+          style={{width:"56px",height:"56px",objectFit:"cover",borderRadius:"0.4rem",flexShrink:0,border:`1px solid ${T.border}`,background:"#fff"}}
+          onError={e=>{e.target.style.display="none";}}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:"0.62rem",fontWeight:"700",color:T.textMid,fontFamily:"'Inter',sans-serif",marginBottom:"0.1rem"}}>OBF reference image</div>
+          <div style={{fontSize:"0.56rem",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.4}}>
+            Low quality. Clean it with Photoroom for a white-background catalog shot, or upload your own below.
+          </div>
+        </div>
+      </div>
+
+      {/* Preview of cleaned image before saving */}
+      {preview && (
+        <div style={{display:"flex",gap:"0.6rem",alignItems:"center",padding:"0.55rem",background:"#fff",border:`1.5px solid ${T.sage}`,borderRadius:"0.5rem"}}>
+          <img src={preview.url} alt="Photoroom preview"
+            style={{width:"72px",height:"72px",objectFit:"contain",borderRadius:"0.35rem",background:"#fff",border:`1px solid ${T.border}`,flexShrink:0}}/>
+          <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:"0.35rem"}}>
+            <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.sage,fontFamily:"'Inter',sans-serif"}}>
+              ✨ Cleaned preview{isSandbox?" (sandbox — watermarked)":""}
+            </div>
+            <div style={{display:"flex",gap:"0.35rem"}}>
+              <button onClick={saveCleaned} disabled={busy}
+                style={{padding:"0.4rem 0.7rem",background:T.sage,color:"#fff",border:"none",borderRadius:"0.4rem",fontSize:"0.66rem",fontWeight:"700",cursor:busy?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
+                {busy?"Saving…":"Use this"}
+              </button>
+              <button onClick={discardCleaned} disabled={busy}
+                style={{padding:"0.4rem 0.7rem",background:"none",border:`1px solid ${T.border}`,color:T.textMid,borderRadius:"0.4rem",fontSize:"0.66rem",fontWeight:"600",cursor:busy?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
+                Discard
+              </button>
+              <button onClick={runClean} disabled={busy}
+                style={{padding:"0.4rem 0.7rem",background:"none",border:`1px solid ${T.border}`,color:T.textMid,borderRadius:"0.4rem",fontSize:"0.66rem",fontWeight:"600",cursor:busy?"default":"pointer",fontFamily:"'Inter',sans-serif"}}>
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Run button (only shown before a preview exists) */}
+      {!preview && (
+        <button onClick={runClean} disabled={busy||!keyConfigured}
+          style={{
+            padding:"0.55rem 0.8rem",
+            background: keyConfigured ? (busy ? "#ccc" : `linear-gradient(135deg, #6366F1, #8B5CF6)`) : T.surfaceAlt,
+            color: keyConfigured ? "#fff" : T.textLight,
+            border: keyConfigured ? "none" : `1px solid ${T.border}`,
+            borderRadius:"0.5rem",
+            fontSize:"0.72rem",
+            fontWeight:"700",
+            cursor:(busy||!keyConfigured)?"default":"pointer",
+            fontFamily:"'Inter',sans-serif",
+            display:"flex",
+            alignItems:"center",
+            justifyContent:"center",
+            gap:"0.35rem"
+          }}>
+          {busy ? "Cleaning with Photoroom…" : (keyConfigured ? `✨ Clean with Photoroom${isSandbox?" (sandbox)":""}` : "Photoroom not configured")}
+        </button>
+      )}
+      {err && (
+        <div style={{fontSize:"0.6rem",color:T.rose,fontFamily:"'Inter',sans-serif",padding:"0.35rem 0.5rem",background:T.rose+"12",border:`1px solid ${T.rose}40`,borderRadius:"0.4rem"}}>
+          {err}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Shared edit form renderer
 function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgRef,onSave,onCancel,onDelete,saving,saveLabel,cancelLabel,CATEGORIES,SKIN_TYPES,scoreColor,toggleSkin,prefilling=false}) {
   if (!src) return null;
@@ -13088,13 +13319,10 @@ function renderEditForm({src,setSrc,score,onIngChange,onImgUpload,uploading,imgR
           {src.pendingReview&&<div style={{fontSize:"0.55rem",color:T.amber,fontFamily:"'Inter',sans-serif",fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.08em",background:T.amber+"18",padding:"0.15rem 0.45rem",borderRadius:"999px"}}>🆕 Pending review · added via OBF scan</div>}
         </div>
         {src.obfImage&&!(src.adminImage||src.image)&&(
-          <div style={{marginBottom:"0.6rem",padding:"0.55rem",background:T.surfaceAlt,border:`1px dashed ${T.border}`,borderRadius:"0.5rem",display:"flex",gap:"0.6rem",alignItems:"center"}}>
-            <img src={src.obfImage} alt="OBF reference" style={{width:"48px",height:"48px",objectFit:"cover",borderRadius:"0.35rem",flexShrink:0,border:`1px solid ${T.border}`}} onError={e=>{e.target.style.display="none";}}/>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:"0.6rem",fontWeight:"700",color:T.textMid,fontFamily:"'Inter',sans-serif",marginBottom:"0.1rem"}}>OBF reference image</div>
-              <div style={{fontSize:"0.55rem",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.35}}>Low quality — use as a visual reference only. Upload a clean product shot below.</div>
-            </div>
-          </div>
+          <PhotoroomCleanCard
+            src={src}
+            setSrc={setSrc}
+          />
         )}
         <div style={{display:"flex",gap:"0.75rem",alignItems:"flex-start"}}>
           <div style={{width:"80px",height:"80px",borderRadius:"0.6rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -14176,6 +14404,286 @@ function AdminNuclearClean({ onBack }) {
 }
 
 
+// -- AdminPhotoroomBulk — bulk-clean OBF reference images with Photoroom ----
+// Finds every product whose only image source is an OBF URL (or has no
+// adminImage but does have an obfImage), then walks them through the
+// Photoroom /v2/edit pipeline: background removal → white background →
+// upload cleaned JPG to Firebase Storage → write adminImage + image.
+//
+// Important caveats (shown in the UI too):
+//   • Photoroom does NOT upscale or sharpen. A blurry source = a blurry
+//     (but cleaner-looking) output.
+//   • Each /v2/edit call = 5 credits ($0.10 each on the Plus plan). Use
+//     sandbox mode (prefix key with `sandbox_`) to test for free first.
+//   • Results may include occasional miscuts on busy package designs.
+//     Operator should still spot-check via Image Review afterwards.
+function AdminPhotoroomBulk({ onBack }) {
+  const [products, setProducts] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [running, setRunning] = React.useState(false);
+  const [paused, setPaused] = React.useState(false);
+  const pausedRef = React.useRef(false);
+  const stopRef = React.useRef(false);
+  const [log, setLog] = React.useState([]);
+  const [progress, setProgress] = React.useState({ current: 0, total: 0 });
+  const [stats, setStats] = React.useState({ ok: 0, fail: 0, skipped: 0 });
+  const [includeKnownObfImages, setIncludeKnownObfImages] = React.useState(false);
+  const [limit, setLimit] = React.useState(10);
+
+  const keyConfigured = !!PHOTOROOM_KEY;
+  const isSandbox = keyConfigured && PHOTOROOM_KEY.startsWith("sandbox_");
+
+  function addLog(type, msg) {
+    setLog(l => [...l.slice(-150), { type, msg, t: Date.now() }]);
+  }
+
+  React.useEffect(() => { loadCandidates(); }, [includeKnownObfImages]);
+
+  async function loadCandidates() {
+    setLoading(true);
+    try {
+      const snap = await getDocs(collection(db, "products"));
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.hidden);
+      const filtered = all.filter(p => {
+        if (p.id.length < 10) return false; // skip corrupted short IDs
+        if (p.photoroomCleanedAt) return false; // already cleaned
+        const img = (p.adminImage || p.image || "").trim();
+        const obf = (p.obfImage || "").trim();
+        const imgIsObf = img && img.includes("openbeautyfacts");
+        // Candidate if: has obfImage and no clean image, OR (opt-in) main image
+        // is itself an OBF URL.
+        if (obf && !img) return true;
+        if (obf && imgIsObf) return true;
+        if (includeKnownObfImages && imgIsObf) return true;
+        return false;
+      });
+      // Prioritize most-scanned products so high-traffic ones get fixed first
+      filtered.sort((a, b) => (b.scanCount || 0) - (a.scanCount || 0));
+      setProducts(filtered);
+    } catch (e) {
+      console.error(e);
+      addLog("error", "Failed to load candidates: " + e.message);
+    }
+    setLoading(false);
+  }
+
+  function togglePause() {
+    const next = !pausedRef.current;
+    pausedRef.current = next;
+    setPaused(next);
+  }
+
+  function stop() {
+    stopRef.current = true;
+    pausedRef.current = false;
+    setPaused(false);
+  }
+
+  async function runBatch() {
+    if (running || !products.length || !keyConfigured) return;
+    setRunning(true); setPaused(false); stopRef.current = false; pausedRef.current = false;
+    setStats({ ok: 0, fail: 0, skipped: 0 });
+    setLog([]);
+    const queue = products.slice(0, Math.max(1, Math.min(limit, products.length)));
+    setProgress({ current: 0, total: queue.length });
+    addLog("info", `Starting Photoroom clean on ${queue.length} product${queue.length===1?"":"s"}${isSandbox?" (sandbox mode — watermarked)":""}…`);
+
+    let ok = 0, fail = 0, skipped = 0;
+    for (let i = 0; i < queue.length; i++) {
+      if (stopRef.current) { addLog("warn", "Stopped by operator."); break; }
+      while (pausedRef.current && !stopRef.current) {
+        await new Promise(r => setTimeout(r, 400));
+      }
+      if (stopRef.current) { addLog("warn", "Stopped by operator."); break; }
+
+      const p = queue[i];
+      setProgress({ current: i + 1, total: queue.length });
+      const source = (p.obfImage || ((p.adminImage || p.image || "").includes("openbeautyfacts") ? (p.adminImage || p.image) : "")).trim();
+
+      if (!source) {
+        skipped++;
+        setStats(s => ({ ...s, skipped: s.skipped + 1 }));
+        addLog("warn", `${p.brand || ""} ${p.productName} — no OBF source, skipped`);
+        continue;
+      }
+      try {
+        addLog("info", `→ ${p.brand || ""} ${p.productName}`);
+        await cleanAndSaveProductImage(p.id, source, { shadow: false });
+        ok++;
+        setStats(s => ({ ...s, ok: s.ok + 1 }));
+        addLog("ok", `✓ ${p.brand || ""} ${p.productName}`);
+      } catch (e) {
+        fail++;
+        setStats(s => ({ ...s, fail: s.fail + 1 }));
+        addLog("error", `✗ ${p.brand || ""} ${p.productName} — ${e.message}`);
+      }
+
+      // Gentle rate limiting (Photoroom default = 60 req/min for new accounts)
+      if (i + 1 < queue.length) await new Promise(r => setTimeout(r, 1100));
+    }
+
+    addLog("info", `Done. ${ok} cleaned · ${fail} failed · ${skipped} skipped.`);
+    setRunning(false);
+    setProgress({ current: 0, total: 0 });
+    pausedRef.current = false; setPaused(false);
+    // Refresh the candidate list (cleaned products will drop out)
+    loadCandidates();
+  }
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:"0.85rem"}}>
+      <button onClick={onBack} style={{alignSelf:"flex-start",background:"none",border:"none",color:T.accent,fontSize:"0.72rem",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>← Back to Cleanup</button>
+
+      {/* Header */}
+      <div style={{background:"linear-gradient(135deg,#6366F1,#8B5CF6)",borderRadius:"1rem",padding:"1rem 1.1rem",color:"#fff",fontFamily:"'Inter',sans-serif"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.35rem"}}>
+          <span style={{fontSize:"1.1rem"}}>✨</span>
+          <div style={{fontSize:"0.95rem",fontWeight:"700"}}>Photoroom — Bulk Clean</div>
+        </div>
+        <div style={{fontSize:"0.7rem",color:"rgba(255,255,255,0.85)",lineHeight:1.45}}>
+          Turn cluttered OBF reference shots into clean white-background catalog images.
+          {isSandbox && <span style={{display:"block",marginTop:"0.3rem",fontWeight:"700",color:"#FDE68A"}}>⚠ Sandbox mode — output will be watermarked.</span>}
+          {!keyConfigured && <span style={{display:"block",marginTop:"0.3rem",fontWeight:"700",color:"#FCA5A5"}}>⚠ VITE_PHOTOROOM_KEY not set in Vercel env vars.</span>}
+        </div>
+      </div>
+
+      {/* What Photoroom can/can't do */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",padding:"0.85rem 1rem",fontFamily:"'Inter',sans-serif"}}>
+        <div style={{fontSize:"0.62rem",fontWeight:"700",color:T.text,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.5rem"}}>Honest limits</div>
+        <div style={{fontSize:"0.7rem",color:T.textMid,lineHeight:1.55}}>
+          <div>✓ Removes cluttered backgrounds (tables, hands, store shelves)</div>
+          <div>✓ Replaces with clean white</div>
+          <div>✓ Centers + pads to a square catalog crop</div>
+          <div style={{marginTop:"0.4rem",color:T.rose}}>✗ Does NOT upscale or sharpen blurry photos</div>
+          <div style={{color:T.rose}}>✗ Does NOT reconstruct missing detail</div>
+          <div style={{color:T.rose}}>✗ Cannot &ldquo;render an AI version&rdquo; of the product</div>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"0.4rem"}}>
+        {[
+          { label: "Candidates", val: loading ? "…" : products.length, color: T.text },
+          { label: "Cleaned",    val: stats.ok,                          color: T.sage },
+          { label: "Failed",     val: stats.fail,                        color: T.rose },
+          { label: "Skipped",    val: stats.skipped,                     color: T.textMid },
+        ].map(c => (
+          <div key={c.label} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.6rem",padding:"0.55rem",textAlign:"center",fontFamily:"'Inter',sans-serif"}}>
+            <div style={{fontSize:"1.05rem",fontWeight:"800",color:c.color,lineHeight:1}}>{c.val}</div>
+            <div style={{fontSize:"0.5rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.05em",marginTop:"3px"}}>{c.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Controls */}
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",padding:"0.9rem 1rem",display:"flex",flexDirection:"column",gap:"0.65rem",fontFamily:"'Inter',sans-serif"}}>
+        <label style={{display:"flex",alignItems:"center",gap:"0.55rem",fontSize:"0.7rem",color:T.text,cursor:"pointer"}}>
+          <input type="checkbox" checked={includeKnownObfImages} onChange={e=>setIncludeKnownObfImages(e.target.checked)} disabled={running}/>
+          <span>Also re-clean products whose main image is already an OBF URL</span>
+        </label>
+        <div style={{display:"flex",alignItems:"center",gap:"0.55rem"}}>
+          <label style={{fontSize:"0.7rem",color:T.text}}>Batch limit:</label>
+          <input
+            type="number" min={1} max={500} value={limit}
+            onChange={e=>setLimit(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
+            disabled={running}
+            style={{width:"70px",padding:"0.35rem 0.5rem",border:`1px solid ${T.border}`,borderRadius:"0.4rem",fontSize:"0.72rem",fontFamily:"'Inter',sans-serif",background:T.bg,color:T.text,outline:"none"}}
+          />
+          <span style={{fontSize:"0.6rem",color:T.textLight}}>
+            ≈ ${ (limit * 0.10).toFixed(2) } at live pricing · free in sandbox
+          </span>
+        </div>
+        <div style={{display:"flex",gap:"0.45rem",flexWrap:"wrap"}}>
+          {!running ? (
+            <button onClick={runBatch} disabled={!keyConfigured || !products.length || loading}
+              style={{
+                flex:1,minWidth:"160px",
+                padding:"0.7rem 1rem",
+                background: (!keyConfigured || !products.length) ? "#ccc" : "linear-gradient(135deg,#6366F1,#8B5CF6)",
+                color:"#fff",border:"none",borderRadius:"0.6rem",
+                fontSize:"0.78rem",fontWeight:"700",
+                cursor:(!keyConfigured || !products.length || loading)?"default":"pointer",
+                fontFamily:"'Inter',sans-serif"
+              }}>
+              {loading ? "Loading…" : products.length === 0 ? "Nothing to clean" : `✨ Clean ${Math.min(limit, products.length)} products`}
+            </button>
+          ) : (
+            <>
+              <button onClick={togglePause}
+                style={{flex:1,padding:"0.7rem 1rem",background:paused?T.sage:T.amber,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.74rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                {paused ? "▶ Resume" : "⏸ Pause"}
+              </button>
+              <button onClick={stop}
+                style={{padding:"0.7rem 1rem",background:T.rose,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.74rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
+                ⏹ Stop
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      {progress.total > 0 && (
+        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.7rem",padding:"0.7rem 0.85rem",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",fontSize:"0.66rem",color:T.textMid,marginBottom:"0.4rem"}}>
+            <span>{progress.current} / {progress.total}</span>
+            <span>{Math.round((progress.current / progress.total) * 100)}%</span>
+          </div>
+          <div style={{height:"6px",background:T.surfaceAlt,borderRadius:"999px",overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${(progress.current / progress.total) * 100}%`,background:"linear-gradient(90deg,#6366F1,#8B5CF6)",transition:"width 0.3s"}}/>
+          </div>
+        </div>
+      )}
+
+      {/* Log */}
+      {log.length > 0 && (
+        <div style={{background:"#0F172A",borderRadius:"0.7rem",padding:"0.7rem 0.85rem",fontFamily:"'JetBrains Mono', ui-monospace, Menlo, monospace",fontSize:"0.62rem",lineHeight:1.55,color:"#E2E8F0",maxHeight:"260px",overflowY:"auto"}}>
+          {log.slice().reverse().map((e, i) => (
+            <div key={log.length - i} style={{
+              color: e.type==="ok" ? "#86EFAC" : e.type==="error" ? "#FCA5A5" : e.type==="warn" ? "#FCD34D" : "#CBD5E1",
+              whiteSpace:"pre-wrap",wordBreak:"break-word"
+            }}>{e.msg}</div>
+          ))}
+        </div>
+      )}
+
+      {/* Candidate preview list (top 12) */}
+      {!loading && products.length > 0 && (
+        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",overflow:"hidden",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{padding:"0.6rem 0.85rem",borderBottom:`1px solid ${T.border}`,fontSize:"0.6rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.06em"}}>
+            Up next · sorted by scan count
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:"0.5rem",padding:"0.7rem"}}>
+            {products.slice(0, 12).map(p => (
+              <div key={p.id} style={{display:"flex",flexDirection:"column",gap:"0.35rem"}}>
+                <div style={{aspectRatio:"1",borderRadius:"0.5rem",overflow:"hidden",background:T.surfaceAlt,border:`1px solid ${T.border}`}}>
+                  <img src={p.obfImage || p.adminImage || p.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>{e.target.style.opacity="0.2";}}/>
+                </div>
+                <div style={{fontSize:"0.58rem",fontWeight:"700",color:T.text,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.productName}</div>
+                <div style={{fontSize:"0.52rem",color:T.textLight,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.brand} · {p.scanCount || 0} scans</div>
+              </div>
+            ))}
+          </div>
+          {products.length > 12 && (
+            <div style={{padding:"0.5rem 0.85rem",borderTop:`1px solid ${T.border}`,fontSize:"0.6rem",color:T.textLight,textAlign:"center"}}>
+              +{products.length - 12} more in queue
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && products.length === 0 && (
+        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",padding:"1.2rem",textAlign:"center",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"1.4rem",marginBottom:"0.3rem"}}>✨</div>
+          <div style={{fontSize:"0.78rem",fontWeight:"700",color:T.text}}>No OBF references to clean</div>
+          <div style={{fontSize:"0.65rem",color:T.textLight,marginTop:"0.2rem"}}>Every product with an OBF reference image has already been cleaned, or no products were imported from OBF.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // -- BackfillActivityPostsCard — one-time fix for users whose lists were
 //    built before v78. Scans every user's routine/wantToTry/brokeout arrays,
 //    finds list items without a matching `posts` document, and creates them.
@@ -14470,6 +14978,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
   if (section === "enrich") return <AdminEnrichPipeline onBack={()=>setSection(null)}/>;
   if (section === "bot") return <EnrichmentBot onBack={()=>setSection(null)}/>;
   if (section === "nuclear") return <AdminNuclearClean onBack={()=>setSection(null)}/>;
+  if (section === "photoroom") return <AdminPhotoroomBulk onBack={()=>{ setSection(null); loadProducts(); }}/>;
 
 
   return (
@@ -14582,6 +15091,11 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
           style={{padding:"0.7rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
           <div style={{fontSize:"0.75rem",fontWeight:"600",color:T.text}}>🖼 Image Review</div>
           <div style={{fontSize:"0.6rem",color:T.textLight,marginTop:"2px"}}>Check & replace manually</div>
+        </button>
+        <button onClick={()=>setSection("photoroom")}
+          style={{padding:"0.7rem",background:"linear-gradient(135deg,#6366F1,#8B5CF6)",border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"left",fontFamily:"'Inter',sans-serif"}}>
+          <div style={{fontSize:"0.75rem",fontWeight:"600",color:"#fff"}}>✨ Photoroom Clean</div>
+          <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,0.75)",marginTop:"2px"}}>Bulk-clean OBF reference images</div>
         </button>
       </div>
 
