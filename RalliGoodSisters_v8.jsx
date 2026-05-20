@@ -12526,6 +12526,10 @@ function AdminProductHub({ user } = {}) {
   // ─────────────────────────────────────────────────────────────────────────
   if (mode==="bot") return <EnrichmentBot onBack={()=>setMode("list")}/>;
 
+  // PHOTOROOM MODE — bulk-clean OBF reference images
+  // ─────────────────────────────────────────────────────────────────────────
+  if (mode==="photoroom") return <AdminPhotoroomBulk onBack={()=>{ setMode("list"); load(); }}/>;
+
   // ─────────────────────────────────────────────────────────────────────────
   // ADD PRODUCT MODE
   // ─────────────────────────────────────────────────────────────────────────
@@ -12745,6 +12749,15 @@ function AdminProductHub({ user } = {}) {
             title="Upload a CSV with product_name, brand, ingredients (or image_url) columns to bulk-update products"
             style={{flex:1,padding:"0.6rem 0.85rem",background:(csvImporting||csvApplying)?T.surfaceAlt:`linear-gradient(135deg, #6B5CA5, #8B7BC5)`,color:(csvImporting||csvApplying)?T.textMid:"#fff",border:`1px solid ${(csvImporting||csvApplying)?T.border:"#6B5CA5"}`,borderRadius:"0.6rem",fontSize:"0.7rem",fontWeight:"700",cursor:(csvImporting||csvApplying)?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
             {csvImporting ? "⏳ Parsing…" : "📥 Import CSV"}
+          </button>
+        </div>
+
+        {/* Photoroom bulk-clean — turns OBF reference images into clean catalog shots */}
+        <div style={{display:"flex",gap:"0.4rem"}}>
+          <button onClick={()=>setMode("photoroom")} disabled={bulkBusy||seeding||csvImporting||csvApplying}
+            title="Bulk-clean low-quality OBF reference images with Photoroom (white background, centered crop)"
+            style={{flex:1,padding:"0.6rem 0.85rem",background:(bulkBusy||seeding)?T.surfaceAlt:`linear-gradient(135deg, #6366F1, #8B5CF6)`,color:(bulkBusy||seeding)?T.textMid:"#fff",border:`1px solid ${(bulkBusy||seeding)?T.border:"#6366F1"}`,borderRadius:"0.6rem",fontSize:"0.7rem",fontWeight:"700",cursor:(bulkBusy||seeding||csvImporting||csvApplying)?"not-allowed":"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.35rem"}}>
+            ✨ Photoroom Clean
           </button>
         </div>
 
