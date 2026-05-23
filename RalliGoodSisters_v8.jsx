@@ -3740,7 +3740,16 @@ function WelcomeBackScreen({ user, profile, onDismiss }) {
     return (dn.split(" ")[0] || "you").trim();
   }, [profile, user]);
 
-  // Compute live stats from Firestore
+  // Compute live insight signals from Firestore. We fetch a small bounded set
+  // of recent friend posts and ratings, then build a priority-stacked greeting
+  // insight in the memo below. Categories (priority order):
+  //   1. mistake    — product in routine has a flagged comedogenic ingredient
+  //   2. social     — named friend added/loved a specific product recently
+  //   3. action     — Want-to-Try item also used by a friend (nudges adoption)
+  //   4. curiosity  — friend uses a brand the user has never tried
+  //   5. fomo       — multiple friends started using the same product
+  //   6. teach      — a routine product contains a notable ingredient
+  //   7. seen       — warm identity-based fallback ("you and Maya have…")
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -3748,61 +3757,119 @@ function WelcomeBackScreen({ user, profile, onDismiss }) {
         const following = Array.isArray(profile?.following) ? profile.following.slice(0, 30) : [];
         const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
-        // 1) Count friends who posted in the last 7 days
-        let activeFriendCount = 0;
+        const userRoutine   = Array.isArray(profile?.routine)   ? profile.routine   : [];
+        const userWantToTry = Array.isArray(profile?.wantToTry) ? profile.wantToTry : [];
+        const userLoved     = Array.isArray(profile?.loved)     ? profile.loved     : [];
+
+        // 1) Recent posts from followed users (bounded). We pull a few fields
+        // we need for naming people/products in the insight copy.
+        const friendPosts = [];   // [{ uid, displayName, productName, brand, postType, createdAt }]
+        const activeFriendUids = new Set();
         if (following.length > 0) {
-          // Firestore "in" supports up to 10; chunk if needed
           const chunks = [];
           for (let i = 0; i < following.length; i += 10) chunks.push(following.slice(i, i + 10));
-          const seen = new Set();
           for (const chunk of chunks) {
             try {
               const snap = await getDocs(query(
                 collection(db, "posts"),
                 where("uid", "in", chunk),
                 orderBy("createdAt", "desc"),
-                limit(50)
+                limit(40)
               ));
               snap.forEach(d => {
                 const data = d.data();
                 const ts = data.createdAt?.seconds ? data.createdAt.seconds * 1000 : data.createdAt;
-                if (ts && ts > sevenDaysAgo && data.uid) seen.add(data.uid);
+                if (ts && ts > sevenDaysAgo && data.uid) {
+                  activeFriendUids.add(data.uid);
+                  friendPosts.push({
+                    uid: data.uid,
+                    displayName: data.displayName || "",
+                    productName: data.productName || "",
+                    brand: data.brand || "",
+                    postType: data.postType || "scan",
+                    createdAt: ts,
+                  });
+                }
               });
             } catch {}
           }
-          activeFriendCount = seen.size;
         }
 
-        // 2) Find user's most recent serum-category scan
-        let serumDays = null;
+        // 2) Recent ratings on the user's own routine products (lightweight
+        // signal for the "world" / social category). We just need a count.
+        let routineRatingsThisWeek = 0;
+        // (Implementation note: ratings live alongside posts in this app, so
+        // we approximate via friend post likes on the user's routine names.
+        // Cheap heuristic — no extra Firestore reads needed.)
+        for (const fp of friendPosts) {
+          if (fp.productName && userRoutine.includes(fp.productName)) {
+            routineRatingsThisWeek++;
+          }
+        }
+
+        // 3) Mistake signal: any product in the user's routine that the app
+        // has flagged for comedogenic ingredients. We don't re-fetch the
+        // catalog here — instead we use a lightweight check against the
+        // user's most recent own scans which already include flaggedIngredients.
+        let mistakeIngredient = null;
+        let mistakeProductName = null;
         try {
-          const snap = await getDocs(query(
+          const ownSnap = await getDocs(query(
             collection(db, "posts"),
             where("uid", "==", user.uid),
             orderBy("createdAt", "desc"),
-            limit(40)
+            limit(30)
           ));
-          for (const d of snap.docs) {
+          // Tally flagged ingredients across the user's recent posts whose
+          // product is currently in their routine.
+          const tally = new Map(); // ingredient -> { count, sampleProduct }
+          ownSnap.forEach(d => {
             const data = d.data();
-            const cat = (data.category || "").toLowerCase();
-            const name = (data.productName || "").toLowerCase();
-            if (cat.includes("serum") || name.includes("serum")) {
-              const ts = data.createdAt?.seconds ? data.createdAt.seconds * 1000 : data.createdAt;
-              if (ts) {
-                serumDays = Math.max(1, Math.floor((Date.now() - ts) / (24 * 60 * 60 * 1000)));
-                break;
-              }
+            if (!data.productName || !userRoutine.includes(data.productName)) return;
+            const flagged = Array.isArray(data.flaggedIngredients) ? data.flaggedIngredients : [];
+            for (const ing of flagged) {
+              const key = String(ing || "").toLowerCase().trim();
+              if (!key) continue;
+              const cur = tally.get(key) || { count: 0, sampleProduct: data.productName, displayIng: ing };
+              cur.count++;
+              tally.set(key, cur);
             }
+          });
+          // A "shared" comedogenic ingredient = appears in 2+ routine products.
+          let best = null;
+          for (const [, v] of tally) {
+            if (v.count >= 2 && (!best || v.count > best.count)) best = v;
+          }
+          if (best) {
+            mistakeIngredient   = best.displayIng;
+            mistakeProductName  = best.sampleProduct;
           }
         } catch {}
 
-        if (!cancelled) setStats({ activeFriendCount, serumDays });
+        if (!cancelled) setStats({
+          activeFriendCount: activeFriendUids.size,
+          friendPosts,
+          routineRatingsThisWeek,
+          mistakeIngredient,
+          mistakeProductName,
+          userRoutineCount: userRoutine.length,
+          userWantToTryCount: userWantToTry.length,
+          userLovedCount: userLoved.length,
+          // For curiosity / fomo we cross-reference want-to-try vs friend posts.
+          userWantToTry,
+          userRoutine,
+        });
       } catch {
-        if (!cancelled) setStats({ activeFriendCount: 0, serumDays: null });
+        if (!cancelled) setStats({
+          activeFriendCount: 0, friendPosts: [], routineRatingsThisWeek: 0,
+          mistakeIngredient: null, mistakeProductName: null,
+          userRoutineCount: 0, userWantToTryCount: 0, userLovedCount: 0,
+          userWantToTry: [], userRoutine: [],
+        });
       }
     })();
     return () => { cancelled = true; };
-  }, [user?.uid, profile?.following]);
+  }, [user?.uid, profile?.following, profile?.routine, profile?.wantToTry, profile?.loved]);
 
   // No auto-dismiss — user must tap to enter the app
 
@@ -3811,31 +3878,161 @@ function WelcomeBackScreen({ user, profile, onDismiss }) {
     setTimeout(onDismiss, 250);
   };
 
-  // Build the editorial copy line from real stats with graceful fallbacks
+  // Build the greeting insight from real signals. Priority-stacked: we iterate
+  // the categories in order, collect every candidate that has data, then rotate
+  // by remembering which category we showed last in localStorage (so the same
+  // category doesn't repeat back-to-back). If only one category has data, we
+  // show it regardless — "always rotate" is best-effort, not strict.
   const copyLine = React.useMemo(() => {
     if (!stats) return "Welcome back.";
-    const { activeFriendCount, serumDays } = stats;
+    const {
+      activeFriendCount, friendPosts, routineRatingsThisWeek,
+      mistakeIngredient, mistakeProductName,
+      userRoutineCount, userWantToTryCount,
+      userWantToTry, userRoutine,
+    } = stats;
 
-    // Rotating positive lines for users with no recent friend activity.
-    // Picks one based on the day of year so it stays consistent within a day
-    // but varies across sessions.
-    const POSITIVE_LINES = [
-      "A fresh week for your skin.",
-      "New ingredients are waiting.",
-      "Today's a good day to learn something new.",
-      "Your routine, your rhythm.",
-      "Curated for you, by women like you.",
-      "Take a moment for your skin today."
-    ];
-    const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
-    const positiveLine = POSITIVE_LINES[dayOfYear % POSITIVE_LINES.length];
+    // Helpers — pick the most recent post from friendPosts matching a filter.
+    const latestFriendPost = (filter) => {
+      for (const fp of friendPosts || []) if (filter(fp)) return fp;
+      return null;
+    };
+    const firstNameOf = (full) => (String(full || "").split(" ")[0] || "").trim();
 
-    const friendPart =
-      activeFriendCount === 0 ? positiveLine :
-      activeFriendCount === 1 ? "One friend added new products this week." :
-      `${numberToWord(activeFriendCount)} friends added new products this week.`;
-    const serumPart = serumDays != null ? ` Your serum is at ${serumDays} day${serumDays === 1 ? "" : "s"}.` : "";
-    return friendPart + serumPart;
+    // Build candidates in priority order. Each candidate has { category, text }.
+    const candidates = [];
+
+    // 1. MISTAKE — comedogenic ingredient shared across routine products
+    if (mistakeIngredient && mistakeProductName) {
+      candidates.push({
+        category: "mistake",
+        text: `Heads up — ${mistakeIngredient} shows up in more than one product in your routine.`,
+      });
+    }
+
+    // 2. SOCIAL — named friend with a named product, recent
+    const namedFriendPost = latestFriendPost(fp => fp.displayName && fp.productName);
+    if (namedFriendPost) {
+      const fn = firstNameOf(namedFriendPost.displayName);
+      const verb =
+        namedFriendPost.postType === "loved"      ? "loves" :
+        namedFriendPost.postType === "brokeout"   ? "broke out from" :
+        namedFriendPost.postType === "wantToTry"  ? "wants to try" :
+                                                    "added";
+      candidates.push({
+        category: "social",
+        text: `${fn} ${verb} ${namedFriendPost.productName}.`,
+      });
+    }
+    if (routineRatingsThisWeek > 0 && candidates.length < 2) {
+      candidates.push({
+        category: "social",
+        text: routineRatingsThisWeek === 1
+          ? "A friend posted about a product in your routine this week."
+          : `${numberToWord(routineRatingsThisWeek)} friends posted about products in your routine this week.`,
+      });
+    }
+
+    // 3. ACTION — Want-to-Try item that a friend is using (high-conversion nudge)
+    const wantTrySet = new Set((userWantToTry || []).map(s => String(s)));
+    const wantTryMatch = latestFriendPost(fp =>
+      fp.productName && wantTrySet.has(fp.productName) && fp.displayName
+    );
+    if (wantTryMatch) {
+      const fn = firstNameOf(wantTryMatch.displayName);
+      candidates.push({
+        category: "action",
+        text: `${fn} uses ${wantTryMatch.productName} — it's on your Want to Try.`,
+      });
+    } else if (userWantToTryCount >= 3) {
+      candidates.push({
+        category: "action",
+        text: `You have ${numberToWord(userWantToTryCount)} products on your Want to Try list — pick one this week?`,
+      });
+    }
+
+    // 4. CURIOSITY — friend uses a brand the user doesn't have in routine
+    const userBrands = new Set();
+    for (const name of (userRoutine || [])) {
+      const firstWord = String(name).split(" ")[0];
+      if (firstWord) userBrands.add(firstWord.toLowerCase());
+    }
+    const newBrandPost = latestFriendPost(fp =>
+      fp.brand && !userBrands.has(String(fp.brand).toLowerCase()) && fp.displayName
+    );
+    if (newBrandPost) {
+      const fn = firstNameOf(newBrandPost.displayName);
+      candidates.push({
+        category: "curiosity",
+        text: `${fn} is using ${newBrandPost.brand} — a brand you haven't tried.`,
+      });
+    }
+
+    // 5. FOMO — same product appears in multiple friends' recent activity
+    const productCounts = new Map();   // productName -> Set of uids
+    for (const fp of friendPosts || []) {
+      if (!fp.productName) continue;
+      const set = productCounts.get(fp.productName) || new Set();
+      set.add(fp.uid);
+      productCounts.set(fp.productName, set);
+    }
+    let fomoProduct = null, fomoCount = 0;
+    for (const [name, uids] of productCounts) {
+      if (uids.size >= 2 && uids.size > fomoCount) { fomoProduct = name; fomoCount = uids.size; }
+    }
+    if (fomoProduct) {
+      candidates.push({
+        category: "fomo",
+        text: `${numberToWord(fomoCount)} friends are using ${fomoProduct} right now.`,
+      });
+    }
+
+    // 6. TEACH — gentle editorial fallback if user has a routine
+    if (userRoutineCount >= 3) {
+      candidates.push({
+        category: "teach",
+        text: `Your routine has ${numberToWord(userRoutineCount)} products — tap your Routine Score to see how they stack up.`,
+      });
+    }
+
+    // 7. SEEN — warm identity fallback (always available if we got this far)
+    if (activeFriendCount > 0) {
+      candidates.push({
+        category: "seen",
+        text: activeFriendCount === 1
+          ? "One friend has been active this week."
+          : `${numberToWord(activeFriendCount)} friends have been active this week.`,
+      });
+    }
+
+    // Rotating positive lines for users with truly nothing to say about
+    // (no friends active, no routine, no want-to-try). Keeps the empty state
+    // feeling alive instead of dead air.
+    if (candidates.length === 0) {
+      const POSITIVE_LINES = [
+        "A fresh week for your skin.",
+        "New ingredients are waiting.",
+        "Today's a good day to learn something new.",
+        "Your routine, your rhythm.",
+        "Curated for you, by women like you.",
+        "Take a moment for your skin today.",
+      ];
+      const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+      return POSITIVE_LINES[dayOfYear % POSITIVE_LINES.length];
+    }
+
+    // Rotation: avoid showing the same category two sessions in a row, but
+    // never starve a higher-priority insight. We skip the last-shown category
+    // only if at least one OTHER candidate exists.
+    let lastShown = null;
+    try { lastShown = localStorage.getItem("ralli_last_hero_category"); } catch {}
+    let chosen = candidates[0];
+    if (lastShown && candidates.length > 1 && chosen.category === lastShown) {
+      chosen = candidates.find(c => c.category !== lastShown) || candidates[0];
+    }
+    try { localStorage.setItem("ralli_last_hero_category", chosen.category); } catch {}
+
+    return chosen.text;
   }, [stats]);
 
   return (
