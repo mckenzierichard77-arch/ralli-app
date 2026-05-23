@@ -7675,8 +7675,163 @@ function PeopleFinder({ user, profile, onUpdate, onUserTap }) {
   );
 }
 
+// ContactModal — replaces broken mailto: links with a copy-friendly modal.
+// Why this exists: bare `mailto:` links silently fail on any device that
+// doesn't have a default mail app configured (which is most desktop users
+// these days — Gmail-in-browser is dominant). This modal:
+//   1. Shows the email address with a one-tap copy-to-clipboard button
+//      (works for 100% of users on every device)
+//   2. Offers direct one-tap deep-links to Gmail compose, Outlook compose,
+//      and the native mail client (mailto: fallback)
+//   3. Renders via createPortal so iOS Safari position:fixed works inside
+//      animated tab containers (this app's known gotcha)
+function ContactModal({ open, onClose, subject = "Ralli by GoodSisters Feedback" }) {
+  const [copied, setCopied] = React.useState(false);
+  const EMAIL = "theralliapp@gmail.com";
+  const encodedSubject = encodeURIComponent(subject);
+
+  // Reset the copied flag whenever the modal closes/reopens
+  React.useEffect(() => { if (!open) setCopied(false); }, [open]);
+
+  // Lock background scroll while open
+  React.useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [open]);
+
+  if (!open) return null;
+
+  async function copyEmail() {
+    try {
+      await navigator.clipboard.writeText(EMAIL);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Older browsers — fall back to selection
+      try {
+        const el = document.createElement("textarea");
+        el.value = EMAIL;
+        el.style.position = "fixed";
+        el.style.opacity = "0";
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand("copy");
+        document.body.removeChild(el);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch {}
+    }
+  }
+
+  const gmailUrl   = `https://mail.google.com/mail/?view=cm&fs=1&to=${EMAIL}&su=${encodedSubject}`;
+  const outlookUrl = `https://outlook.live.com/mail/0/deeplink/compose?to=${EMAIL}&subject=${encodedSubject}`;
+  const mailtoUrl  = `mailto:${EMAIL}?subject=${encodedSubject}`;
+
+  const modal = (
+    <div
+      onClick={onClose}
+      style={{
+        position:"fixed", top:0, left:0, right:0, bottom:0,
+        background:"rgba(17,24,39,0.55)",
+        zIndex:9999,
+        display:"flex", alignItems:"flex-end", justifyContent:"center",
+        padding:"0",
+        fontFamily:"'Inter',sans-serif",
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background:T.surface,
+          borderRadius:"1.25rem 1.25rem 0 0",
+          width:"100%",
+          maxWidth:"480px",
+          padding:"1.25rem 1.25rem 2rem",
+          boxShadow:"0 -8px 32px rgba(17,24,39,0.18)",
+        }}
+      >
+        {/* Drag handle */}
+        <div style={{width:"36px",height:"4px",background:T.border,borderRadius:"999px",margin:"0 auto 1rem"}}/>
+
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.85rem"}}>
+          <div style={{fontSize:"1.05rem",fontWeight:"700",color:T.text}}>Contact us</div>
+          <button onClick={onClose} aria-label="Close"
+            style={{background:"none",border:"none",cursor:"pointer",padding:"0.25rem",color:T.textMid,fontSize:"1.1rem",lineHeight:1}}>
+            ✕
+          </button>
+        </div>
+
+        <div style={{fontSize:"0.78rem",color:T.textMid,marginBottom:"1.1rem",lineHeight:1.5}}>
+          We read every email. Choose how you want to reach us:
+        </div>
+
+        {/* Email address with copy button — works on every device */}
+        <div style={{
+          background:T.surfaceAlt || "#F0F3F7",
+          border:`1px solid ${T.border}`,
+          borderRadius:"0.75rem",
+          padding:"0.85rem 1rem",
+          marginBottom:"0.85rem",
+          display:"flex", alignItems:"center", justifyContent:"space-between", gap:"0.75rem",
+        }}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:"0.6rem",color:T.textLight,fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.2rem"}}>Email</div>
+            <div style={{fontSize:"0.85rem",color:T.text,fontWeight:"500",overflow:"hidden",textOverflow:"ellipsis"}}>{EMAIL}</div>
+          </div>
+          <button onClick={copyEmail}
+            style={{
+              padding:"0.5rem 0.85rem",
+              background: copied ? T.sage : T.accent,
+              color:"#fff", border:"none", borderRadius:"999px",
+              fontSize:"0.72rem", fontWeight:"700", cursor:"pointer", flexShrink:0,
+              transition:"background 0.2s ease",
+            }}>
+            {copied ? "✓ Copied" : "Copy"}
+          </button>
+        </div>
+
+        {/* Open-in shortcuts */}
+        <div style={{fontSize:"0.6rem",color:T.textLight,fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.5rem"}}>Or open in</div>
+        <div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}>
+          <a href={gmailUrl} target="_blank" rel="noopener noreferrer"
+            style={{
+              display:"flex",alignItems:"center",justifyContent:"space-between",
+              padding:"0.85rem 1rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",
+              textDecoration:"none",color:T.text,fontSize:"0.85rem",fontWeight:"500",
+            }}>
+            <span>Gmail</span><span style={{color:T.textLight,fontSize:"0.7rem"}}>→</span>
+          </a>
+          <a href={outlookUrl} target="_blank" rel="noopener noreferrer"
+            style={{
+              display:"flex",alignItems:"center",justifyContent:"space-between",
+              padding:"0.85rem 1rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",
+              textDecoration:"none",color:T.text,fontSize:"0.85rem",fontWeight:"500",
+            }}>
+            <span>Outlook</span><span style={{color:T.textLight,fontSize:"0.7rem"}}>→</span>
+          </a>
+          <a href={mailtoUrl}
+            style={{
+              display:"flex",alignItems:"center",justifyContent:"space-between",
+              padding:"0.85rem 1rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",
+              textDecoration:"none",color:T.text,fontSize:"0.85rem",fontWeight:"500",
+            }}>
+            <span>Default mail app</span><span style={{color:T.textLight,fontSize:"0.7rem"}}>→</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Portal to document.body so position:fixed escapes any animated/transformed
+  // ancestor containers (an iOS Safari gotcha that's bitten this app before).
+  return ReactDOM.createPortal(modal, document.body);
+}
+
 function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) {
   const [showDeleteModal, setShowDeleteModal] = React.useState(false);
+  const [showContactModal, setShowContactModal] = React.useState(false);
   const [posts, setPosts]               = useState([]);
   const [shopProducts, setShopProducts] = useState([]);
   const [loading, setLoading]           = useState(true);
@@ -8378,10 +8533,10 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
           Terms of Service
         </a>
         <span style={{fontSize:"0.72rem",color:T.border}}>·</span>
-        <a href="mailto:theralliapp@gmail.com?subject=Ralli by GoodSisters Feedback"
-          style={{fontSize:"0.72rem",color:T.textLight,textDecoration:"underline",textDecorationColor:T.border,fontFamily:"'Inter',sans-serif",cursor:"pointer"}}>
+        <button onClick={()=>setShowContactModal(true)}
+          style={{fontSize:"0.72rem",color:T.textLight,textDecoration:"underline",textDecorationColor:T.border,fontFamily:"'Inter',sans-serif",cursor:"pointer",background:"none",border:"none",padding:0}}>
           Contact Us
-        </a>
+        </button>
       </div>
 
       {/* Feedback card */}
@@ -8392,10 +8547,10 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             <div style={{fontSize:"0.78rem",fontWeight:"600",color:T.navy,fontFamily:"'Inter',sans-serif",marginBottom:"2px"}}>Share feedback</div>
             <div style={{fontSize:"0.7rem",color:T.textMid,fontFamily:"'Inter',sans-serif"}}>Found a bug? Want a feature? We read everything.</div>
           </div>
-          <a href="mailto:theralliapp@gmail.com?subject=Ralli by GoodSisters Feedback"
-            style={{padding:"0.4rem 0.75rem",background:T.accent,color:"#fff",borderRadius:"999px",fontSize:"0.7rem",fontWeight:"600",fontFamily:"'Inter',sans-serif",textDecoration:"none",flexShrink:0}}>
+          <button onClick={()=>setShowContactModal(true)}
+            style={{padding:"0.4rem 0.75rem",background:T.accent,color:"#fff",borderRadius:"999px",fontSize:"0.7rem",fontWeight:"600",fontFamily:"'Inter',sans-serif",border:"none",cursor:"pointer",flexShrink:0}}>
             Email us
-          </a>
+          </button>
         </div>
       </div>
 
@@ -8413,6 +8568,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
           onDeleted={()=>{ signOut(auth); }}
         />
       )}
+      <ContactModal open={showContactModal} onClose={()=>setShowContactModal(false)} />
 
       {/* UID display — for adding to ADMIN_UIDS */}
       <div style={{marginTop:"0.75rem",padding:"0.6rem 0.75rem",background:T.surfaceAlt,borderRadius:"0.65rem",border:`1px solid ${T.border}`}}>
