@@ -18556,12 +18556,9 @@ class ErrorBoundary extends React.Component {
 // Set page title
 if (typeof document !== "undefined") {
   document.title = "Ralli by GoodSisters — Real people. Real skin. Real insights.";
-
-  // Remove any existing favicons and set the Ralli R icon
-  document.querySelectorAll("link[rel~='icon'], link[rel='apple-touch-icon']").forEach(el => el.remove());
-  const iconSvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23111827'/%3E%3Ctext y='82' x='8' font-family='Arial Black,sans-serif' font-weight='900' font-size='80' fill='%23CFE8FF'%3ER%3C/text%3E%3C/svg%3E";
-  const favLink = document.createElement('link'); favLink.rel = 'icon'; favLink.type = 'image/svg+xml'; favLink.href = iconSvg; document.head.appendChild(favLink);
-  const appleLink = document.createElement('link'); appleLink.rel = 'apple-touch-icon'; appleLink.href = iconSvg; document.head.appendChild(appleLink);
+  // Favicon links are now defined in index.html and serve real PNG/ICO files
+  // from /public. We don't inject a runtime favicon anymore — keeping file-based
+  // favicons keeps the browser tab icon consistent with theralliapp.com.
 }
 
 // -- Debug Panel — admin-only floating log viewer -------------
