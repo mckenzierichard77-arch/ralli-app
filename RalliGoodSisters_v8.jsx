@@ -6310,23 +6310,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile, embedd
       </div>
       )}
 
-      {/* -- Feed Tab Bar --------------------------------------- */}
-      {(()=>{
-        const FEED_TABS=[{id:"forYou",label:"For You"},{id:"following",label:"Following"}];
-        const tabIdx=FEED_TABS.findIndex(t=>t.id===tab);
-        return (
-          <div style={{position:"relative",display:"flex",marginBottom:"1rem",background:T.surfaceAlt,borderRadius:"0.85rem",padding:"0.25rem"}}>
-            {/* Sliding pill */}
-            <div style={{position:"absolute",top:"0.25rem",left:`calc(${tabIdx}/2*100% + 0.25rem)`,width:`calc(100%/2 - 0.17rem)`,height:"calc(100% - 0.5rem)",background:T.surface,borderRadius:"0.65rem",boxShadow:"0 1px 4px rgba(0,0,0,0.08)",transition:"left 0.22s cubic-bezier(0.34,1.3,0.64,1)",pointerEvents:"none"}}/>
-            {FEED_TABS.map(t=>(
-              <button key={t.id} onClick={()=>setTab(t.id)} className="tap-scale"
-                style={{flex:1,padding:"0.5rem 0",background:"transparent",border:"none",borderRadius:"0.65rem",fontSize:"0.75rem",fontWeight:tab===t.id?"700":"500",color:tab===t.id?T.text:T.textLight,cursor:"pointer",fontFamily:"'Inter',sans-serif",transition:"color 0.2s",position:"relative",zIndex:1}}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-        );
-      })()}
+      {/* Feed tab bar removed — single feed of people you follow (falls back to broader activity) */}
 
       <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdateProfile} onUserTap={onUserTap}/>
 
