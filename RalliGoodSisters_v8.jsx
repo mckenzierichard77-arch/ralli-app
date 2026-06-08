@@ -5307,48 +5307,30 @@ function ScanPage({user, profile, onPosted, onUpdateProfile, onUserTap=()=>{}}) 
             <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onPhoto} style={{display:"none"}}/>
             <input ref={photoRef} type="file" accept="image/*" onChange={onPhoto} style={{display:"none"}}/>
 
-            {/* Search bar — primary hero */}
-            <button onClick={()=>switchTab("search")}
-              style={{width:"100%",display:"flex",alignItems:"center",gap:"0.6rem",padding:"0.75rem 1rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",marginBottom:"1rem",transition:"border-color 0.15s"}}
-              onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
-              onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              <span style={{flex:1,fontSize:"0.9rem",color:T.textLight,fontFamily:"'Inter',sans-serif"}}>Search products or brands…</span>
-            </button>
-
-            {/* Camera section label */}
-            <div style={{fontSize:"0.6rem",fontWeight:"600",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"0.6rem",fontFamily:"'Inter',sans-serif"}}>Or use your camera</div>
-
-            {/* Camera + Paste row */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem",marginBottom:"0.5rem"}}>
-
-              {/* Single combined camera button — auto mode, AI figures out what it sees */}
+            {/* Single-row scan bar: search + camera */}
+            <div style={{display:"flex",gap:"0.5rem",alignItems:"stretch",marginBottom:"0.5rem"}}>
+              <button onClick={()=>switchTab("search")}
+                style={{flex:1,display:"flex",alignItems:"center",gap:"0.6rem",padding:"0.7rem 0.95rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",transition:"border-color 0.15s",minWidth:0}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <span style={{flex:1,fontSize:"0.88rem",color:T.textLight,fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Search or scan a product…</span>
+              </button>
               <button onClick={()=>{setCameraErr("");setPhotoMode("auto");camRef.current?.click();}}
-                style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"0.5rem",padding:"1rem 0.75rem",background:T.navy,border:"none",borderRadius:"0.75rem",cursor:"pointer",textAlign:"center"}}>
-                <div style={{width:36,height:36,borderRadius:"0.55rem",background:"rgba(255,255,255,0.12)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                </div>
-                <div>
-                  <div style={{fontSize:"0.82rem",fontWeight:"600",color:"#fff",fontFamily:"'Inter',sans-serif",lineHeight:1.2}}>Take a photo</div>
-                  <div style={{fontSize:"0.62rem",color:"rgba(255,255,255,0.55)",marginTop:"2px",fontFamily:"'Inter',sans-serif",lineHeight:1.3}}>Product or ingredient label</div>
-                </div>
+                aria-label="Take a photo"
+                style={{flexShrink:0,width:"48px",background:T.navy,border:"none",borderRadius:"0.85rem",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
               </button>
-
-              {/* Paste ingredient list */}
-              <button onClick={()=>switchTab("type")}
-                style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"0.5rem",padding:"1rem 0.75rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.75rem",cursor:"pointer",textAlign:"center"}}>
-                <div style={{width:36,height:36,borderRadius:"0.55rem",background:T.surfaceAlt,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.textMid} strokeWidth="2" strokeLinecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-                </div>
-                <div>
-                  <div style={{fontSize:"0.82rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.2}}>Paste list</div>
-                  <div style={{fontSize:"0.62rem",color:T.textLight,fontFamily:"'Inter',sans-serif",marginTop:"2px",lineHeight:1.3}}>Copy from label</div>
-                </div>
-              </button>
-
             </div>
 
-            {cameraErr&&<div style={{padding:"0.65rem",background:"#FBF0EE",border:`1px solid ${T.rose}44`,borderRadius:"0.5rem",fontSize:"0.78rem",color:T.rose,fontFamily:"'Inter',sans-serif",marginTop:"0.25rem"}}>{cameraErr}</div>}
+            {/* Paste ingredients — secondary text link */}
+            <button onClick={()=>switchTab("type")}
+              style={{background:"none",border:"none",padding:"0.15rem 0.1rem",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:"0.35rem",color:T.textMid,fontSize:"0.78rem",fontFamily:"'Inter',sans-serif"}}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.textMid} strokeWidth="2" strokeLinecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              Paste an ingredient list instead
+            </button>
+
+            {cameraErr&&<div style={{padding:"0.65rem",background:"#FBF0EE",border:`1px solid ${T.rose}44`,borderRadius:"0.5rem",fontSize:"0.78rem",color:T.rose,fontFamily:"'Inter',sans-serif",marginTop:"0.5rem"}}>{cameraErr}</div>}
           </div>
         )}
 
@@ -5552,23 +5534,8 @@ function ScanPage({user, profile, onPosted, onUpdateProfile, onUserTap=()=>{}}) 
         }}
       />}
 
-      {/* Ingredient Glossary — quick access, above the feed */}
-      <button onClick={()=>setShowGlossary(true)}
-        style={{width:"100%",marginTop:"1rem",padding:"0.7rem 0.9rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",display:"flex",alignItems:"center",gap:"0.75rem",transition:"all 0.15s"}}
-        onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;}}
-        onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;}}>
-        <div style={{width:"32px",height:"32px",borderRadius:"0.55rem",background:T.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-        </div>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:"0.82rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>Ingredient Glossary</div>
-          <div style={{fontSize:"0.68rem",color:T.textLight}}>Decode what's in your products</div>
-        </div>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-      </button>
-
       {/* Social feed — full For You / Following feed below the scan bar */}
-      <FeedPage user={user} profile={profile} refreshKey={0} onUserTap={onUserTap} onUpdateProfile={onUpdateProfile} />
+      <FeedPage user={user} profile={profile} refreshKey={0} onUserTap={onUserTap} onUpdateProfile={onUpdateProfile} embedded={true} />
 
       {/* Glossary slide-up sheet */}
       {showGlossary&&(
@@ -5808,7 +5775,7 @@ return (
 );
 }
 
-function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
+function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile, embedded=false}) {
   const [posts, setPosts]       = useState([]);
   const [loading, setLoading]   = useState(true);
   const [tab, setTab]           = useState("forYou");
@@ -6203,10 +6170,11 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
           </div>
         </div>
       )}
-      <PageHero pageTitle="Feed" pageIcon={RalliIcons.community(T.textLight, 16)} fixed="Real people. Real skin. Real insights."/>
+      {!embedded && <PageHero pageTitle="Feed" pageIcon={RalliIcons.community(T.textLight, 16)} fixed="Real people. Real skin. Real insights."/>}
       {/* Divider */}
       <div style={{padding:"0.85rem 1rem 0"}}>
-      {/* Unified search */}
+      {/* Unified search — hidden when embedded (the Explore scan bar is used instead) */}
+      {!embedded && (
       <div style={{marginBottom:"1rem",position:"relative"}}>
         <div style={{position:"relative"}}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" style={{position:"absolute",left:"0.85rem",top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -6340,6 +6308,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile}) {
           </div>
         )}
       </div>
+      )}
 
       {/* -- Feed Tab Bar --------------------------------------- */}
       {(()=>{
@@ -19018,6 +18987,7 @@ function AppInner() {
   const [showWelcomeBack, setShowWelcomeBack] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
+  const [showGlobalGlossary, setShowGlobalGlossary] = useState(false);
   const [msgBanner, setMsgBanner] = useState(null); // {senderName, senderPhoto, text, uid}
   const msgBannerTimer = React.useRef(null);
   const prevConvosRef = React.useRef({}); // convoId -> lastAt to detect new messages
@@ -19191,6 +19161,14 @@ function AppInner() {
               <span style={{display:'block',fontFamily:"'Inter',sans-serif",fontWeight:'300',fontSize:'0.55rem',letterSpacing:'0.18em',textTransform:'uppercase',color:T.textLight,marginTop:'2px'}}>by GoodSisters</span>
             </span>
           <div style={{display:"flex",alignItems:"center",gap:"0.2rem"}}>
+            {/* Ingredient Glossary */}
+            <button onClick={()=>setShowGlobalGlossary(true)}
+              title="Ingredient Glossary"
+              style={{background:"none",border:"none",cursor:"pointer",padding:"0.4rem",color:T.textMid,display:"flex",alignItems:"center",borderRadius:"50%",transition:"all 0.15s"}}
+              onMouseEnter={e=>{e.currentTarget.style.background=T.surfaceAlt;e.currentTarget.style.color=T.text;}}
+              onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color=T.textMid;}}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            </button>
             {/* Invite friends to Ralli — opens native share sheet */}
             <button onClick={async ()=>{
               const shareText = `Join me on Ralli — a skincare community where your friends help you find products that actually work for your skin.\n\nhttps://app.theralliapp.com`;
@@ -19296,6 +19274,22 @@ function AppInner() {
       }} unreadCount={unreadCount} msgUnread={msgUnread} currentUid={user?.uid||""} isAdmin={isAdmin(user)}/>
       {showOurStory&&!showOnboarding&&(
         <OurStoryPopup onClose={()=>setShowOurStory(false)} onUserTap={handleUserTap}/>
+      )}
+      {showGlobalGlossary&&(
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:100,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
+          <div onClick={()=>setShowGlobalGlossary(false)} style={{position:"absolute",top:0,left:0,right:0,bottom:0,background:"rgba(15,25,35,0.35)",backdropFilter:"blur(2px)"}}/>
+          <div style={{position:"relative",background:T.bg,borderRadius:"1.5rem 1.5rem 0 0",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 -8px 40px rgba(0,0,0,0.12)"}}>
+            <div style={{position:"sticky",top:0,background:T.bg,padding:"0.75rem 1.25rem 0.5rem",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:`1px solid ${T.border}`,zIndex:1}}>
+              <span style={{fontFamily:"'Inter',sans-serif",fontWeight:"700",fontSize:"1rem",color:T.text,letterSpacing:"-0.02em"}}>Ingredient Glossary</span>
+              <button onClick={()=>setShowGlobalGlossary(false)} style={{background:"none",border:"none",cursor:"pointer",padding:"0.25rem",color:T.textLight}}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div style={{padding:"0 0 2rem"}}>
+              <GlossaryPage/>
+            </div>
+          </div>
+        </div>
       )}
       {afRunning&&(
         <div style={{position:"fixed",bottom:"5.5rem",left:"50%",transform:"translateX(-50%)",zIndex:9999,background:T.text,color:"#fff",padding:"0.45rem 1rem",borderRadius:"999px",fontSize:"0.72rem",fontWeight:"700",fontFamily:"'Inter',sans-serif",boxShadow:"0 4px 20px rgba(0,0,0,0.25)",display:"flex",alignItems:"center",gap:"0.5rem",whiteSpace:"nowrap",pointerEvents:"none"}}>
