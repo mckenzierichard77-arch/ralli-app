@@ -5821,10 +5821,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile, embedd
         const FEED_TYPES = new Set(["brokeout","wantToTry","loved","commented","rated","scan","search"]);
         const realPosts = fetched.filter(post => FEED_TYPES.has(post.postType))
           .sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
-        // Seeds always append — real posts take priority if same product name
-        const realNames = new Set(realPosts.map(p => p.productName?.toLowerCase()));
-        const seedPosts = MOCK_POSTS.filter(m => !realNames.has(m.productName?.toLowerCase()));
-        setPosts([...realPosts, ...seedPosts]);
+        setPosts(realPosts);
         setLoading(false);
       }, err => { console.warn("feed subscription error:", err); setLoading(false); });
     } catch(e) { console.warn("feed subscribe failed:", e); setLoading(false); }
@@ -5963,10 +5960,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile, embedd
       const realPosts = p.filter(post => post.postType && post.uid)
         .sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
       console.log(`[loadFeed] ${p.length} fetched, ${realPosts.length} real posts after filter`);
-      // Seeds always append — real posts take priority if same product name
-      const realNames = new Set(realPosts.map(p => p.productName?.toLowerCase()));
-      const seedPosts = MOCK_POSTS.filter(m => !realNames.has(m.productName?.toLowerCase()));
-      setPosts([...realPosts, ...seedPosts]);
+      setPosts(realPosts);
       setNotifs(n);
     } catch(e) { console.error("loadFeed", e); }
     setLoading(false);
@@ -6314,9 +6308,7 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile, embedd
             // -- FOR YOU TAB ----------------------------------------
             if (tab==="forYou") {
               const seen = new Set();
-              const realDeduped = posts.filter(p=>{ const k=p.productName?.toLowerCase()||p.id; if(seen.has(k))return false; seen.add(k); return true; });
-              const seedDeduped = MOCK_POSTS.filter(m=>{ const k=m.productName?.toLowerCase()||m.id; if(seen.has(k))return false; seen.add(k); return true; });
-              const allPosts = [...realDeduped, ...seedDeduped]
+              const allPosts = posts.filter(p=>{ const k=p.productName?.toLowerCase()||p.id; if(seen.has(k))return false; seen.add(k); return true; })
                 .filter(p=>["loved","brokeout","wantToTry"].includes(p.postType))
                 .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
 
