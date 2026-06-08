@@ -44,12 +44,13 @@ import {
 // Firebase — project feb242026morg
 // -----------------------------------------------------------------------------
 const firebaseConfig = {
-  apiKey: "REPLACE_WITH_YOUR_WEB_API_KEY",
+  apiKey: "AIzaSyCPPl-cpHpA714AgE_mJI3MDj6nSVlSJRg",
   authDomain: "feb242026morg.firebaseapp.com",
   projectId: "feb242026morg",
-  storageBucket: "feb242026morg.appspot.com",
-  messagingSenderId: "REPLACE_WITH_SENDER_ID",
-  appId: "REPLACE_WITH_APP_ID",
+  storageBucket: "feb242026morg.firebasestorage.app",
+  messagingSenderId: "75912486030",
+  appId: "1:75912486030:web:ff8eebbc6f93fcf4307ddf",
+  measurementId: "G-T0HD8TRQKL",
 };
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
