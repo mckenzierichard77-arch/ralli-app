@@ -4873,7 +4873,8 @@ function AddProductModal({onClose, onAdded, user, prefillBarcode="", prefillName
           </button>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -4984,6 +4985,32 @@ const todayTip = SKIN_TIPS[Math.floor(Date.now()/86400000) % SKIN_TIPS.length];
 
 function ScanPage({user, profile, onPosted, onUpdateProfile, onUserTap=()=>{}}) {
   const [showGlossary, setShowGlossary] = useState(false);
+  // "What Ralliers are using" — recent activity from people the user follows.
+  const [ralliersUsing, setRalliersUsing] = useState(null); // null=loading, []=none
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const following = Array.isArray(profile?.following) ? profile.following : [];
+        const posts = await getFeed(following, user?.uid);
+        if (cancelled) return;
+        // Collapse to unique products (most recent first), keep a light set.
+        const seen = new Set();
+        const items = [];
+        for (const p of (posts || [])) {
+          const name = p.productName || "";
+          if (!name) continue;
+          const key = `${(p.brand||"").toLowerCase()}|${name.toLowerCase()}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          items.push(p);
+          if (items.length >= 8) break;
+        }
+        setRalliersUsing(items);
+      } catch { if (!cancelled) setRalliersUsing([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [profile?.following, user?.uid]);
   const [inputMode, setInputMode]       = useState("camera");
   const [ingredients, setIngredients]   = useState("");
   const [productName, setProductName]   = useState("");
@@ -5561,6 +5588,48 @@ function ScanPage({user, profile, onPosted, onUpdateProfile, onUserTap=()=>{}}) 
           setAddPrefillName("");
         }}
       />}
+
+      {/* What Ralliers are using — activity from people you follow */}
+      {ralliersUsing && ralliersUsing.length > 0 && (
+        <div style={{marginTop:"1.25rem"}}>
+          <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:"0.6rem",padding:"0 0.15rem"}}>
+            <div style={{fontSize:"0.92rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif"}}>What Ralliers are using</div>
+            <div style={{fontSize:"0.62rem",color:T.textLight,fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.08em"}}>From your circle</div>
+          </div>
+          <div style={{display:"flex",gap:"0.7rem",overflowX:"auto",paddingBottom:"0.5rem",WebkitOverflowScrolling:"touch"}}>
+            {ralliersUsing.map((post,i) => {
+              const ps = (post.poreScore!=null) ? poreStyle(post.poreScore) : null;
+              return (
+                <button key={post.id||i}
+                  onClick={()=>setSelectedProduct({
+                    productName: post.productName,
+                    brand: post.brand||"",
+                    image: post.productImage||post.image||null,
+                    ingredients: post.ingredients||"",
+                    poreScore: post.poreScore??null,
+                    flaggedIngredients: Array.isArray(post.flaggedIngredients)?post.flaggedIngredients:[],
+                    id: post.productId||post.productName,
+                    _productId: post.productId||"",
+                    communityRating: post.communityRating||null,
+                  })}
+                  style={{flexShrink:0,width:"118px",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",padding:0,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+                  <div style={{width:"100%",aspectRatio:"1/1",background:"#FFFFFF",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",position:"relative"}}>
+                    {(post.productImage||post.image)
+                      ? <img src={post.productImage||post.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>{e.currentTarget.style.display="none";}}/>
+                      : <div style={{fontSize:"1.4rem",fontWeight:"800",color:T.textLight,fontFamily:"'Poppins',sans-serif"}}>{initials(post.brand||post.productName)}</div>}
+                    {ps && <div style={{position:"absolute",top:"6px",right:"6px",width:"22px",height:"22px",borderRadius:"50%",background:ps.bg,color:ps.fg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.7rem",fontWeight:"800",fontFamily:"'Poppins',sans-serif"}}>{post.poreScore}</div>}
+                  </div>
+                  <div style={{padding:"0.5rem 0.6rem 0.6rem"}}>
+                    {post.brand && <div style={{fontSize:"0.58rem",color:T.textLight,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{post.brand}</div>}
+                    <div style={{fontSize:"0.72rem",fontWeight:"600",color:T.text,lineHeight:1.25,marginTop:"2px",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{post.productName}</div>
+                    {post.displayName && <div style={{fontSize:"0.6rem",color:T.sage,marginTop:"0.35rem",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{displayNameOf({displayName:post.displayName})}</div>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Glossary entry card */}
               <div style={{textAlign:"center",padding:"1rem 0.5rem 0.5rem",fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.6}}>
@@ -18518,7 +18587,6 @@ const RalliIcons = {
 function BottomNav({tab, onChange, unreadCount=0, msgUnread=0, currentUid="", isAdmin=false}) {
   const items = [
     {id:"check",    label:"Scan",     icon:(a) => RalliIcons.scan(a ? T.navy : T.textLight)},
-    {id:"feed",     label:"Feed",     icon:(a) => RalliIcons.community(a ? T.navy : T.textLight)},
     {id:"shop",     label:"Explore",  icon:(a) => RalliIcons.compass(a ? T.navy : T.textLight, 22, a)},
     {id:"messages", label:"Messages", icon:(a) => RalliIcons.chat(a ? T.navy : T.textLight)},
     {id:"profile",  label:"Profile",  icon:(a) => RalliIcons.person(a ? T.navy : T.textLight)},
@@ -19113,7 +19181,7 @@ function AppInner() {
 
   // Global user tap event — fired by ProductModal when onUserTap isn't passed
   React.useEffect(() => {
-    const handler = (e) => { if(e.detail) { setViewingUid(e.detail); switchTab("feed"); } };
+    const handler = (e) => { if(e.detail) { setViewingUid(e.detail); switchTab("check"); } };
     window.addEventListener("ralli_view_user", handler);
     return () => window.removeEventListener("ralli_view_user", handler);
   }, []);
@@ -19228,7 +19296,7 @@ function AppInner() {
               <>
                 <div onClick={()=>setShowNotifPanel(false)} style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:44}}/>
                 <div style={{position:"absolute",right:0,top:"calc(100% + 8px)",width:"min(340px,90vw)",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",boxShadow:"0 8px 32px rgba(17,24,39,0.12)",zIndex:45,overflow:"hidden",animation:"slideDown 0.18s ease"}}>
-                  <NotifDropdown user={user} onUserTap={uid=>{setShowNotifPanel(false);setViewingUid(uid);switchTab("feed");}}/>
+                  <NotifDropdown user={user} onUserTap={uid=>{setShowNotifPanel(false);setViewingUid(uid);switchTab("check");}}/>
                 </div>
               </>
             )}
@@ -19247,7 +19315,7 @@ function AppInner() {
               setProfile(updates);
             }}/>
           : tab==="check"
-            ? <ScanPage user={user} profile={profile} onPosted={()=>{setFeedRefresh(r=>r+1);switchTab("feed");}} onUpdateProfile={setProfile} onUserTap={handleUserTap}/>
+            ? <ScanPage user={user} profile={profile} onPosted={()=>{setFeedRefresh(r=>r+1);switchTab("check");}} onUpdateProfile={setProfile} onUserTap={handleUserTap}/>
             : tab==="messages"
               ? <MessagesPage user={user} profile={profile} onUserTap={handleUserTap} onUnreadChange={setMsgUnread} onChatOpen={setChatOpen} chatCloseRef={chatCloseRef}/>
             : tab==="shop"
@@ -19257,7 +19325,7 @@ function AppInner() {
               : tab==="glossary"
                 ? <GlossaryPage/>
                 : tab==="notifs"
-                  ? <NotificationsPage user={user} onUserTap={uid=>{setViewingUid(uid);switchTab("feed");}}/>
+                  ? <NotificationsPage user={user} onUserTap={uid=>{setViewingUid(uid);switchTab("check");}}/>
                     : profile
                       ? <MyProfilePage user={user} profile={profile} onUpdate={setProfile} onUserTap={handleUserTap} onAdminTap={()=>switchTab("admin")}/>
                       : <div style={{minHeight:"60vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:"0.75rem"}}>
