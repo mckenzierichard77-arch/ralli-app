@@ -227,12 +227,13 @@ const SCORE_META = {
 // =============================================================================
 // AI RESOLVE — the "AI searches for the ingredients" step
 // -----------------------------------------------------------------------------
-// Calls the Anthropic API with the web_search tool to find a product's INCI
-// ingredient list. Returns { productName, brand, ingredients[] } or throws.
+// Calls our OWN backend proxy (/api/resolve), which holds the Anthropic API key
+// server-side and forwards to the Anthropic API with the web_search tool. The
+// browser never sees the key. See api/resolve.js in the Vercel project.
 //
-// NOTE: In your deployed app this should route through your backend proxy so
-// the API key is never exposed (same pattern as your existing Claude usage).
-// The fetch below matches the in-app convention; do NOT pass an API key here.
+// NOTE: This only works when deployed to Vercel (or running `vercel dev`
+// locally). It will NOT work in StackBlitz's preview, which doesn't run
+// serverless functions — sign-in and the UI work there, but the scan does not.
 // =============================================================================
 async function resolveFromName(rawQuery) {
   const prompt = `You are an ingredient-lookup tool for a skincare app. The user typed this product: "${rawQuery}".
@@ -249,16 +250,22 @@ Respond with ONLY a JSON object, no preamble, no markdown fences:
 }
 If you cannot confidently find the ingredient list, respond: { "found": false }`;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1200,
-      messages: [{ role: "user", content: prompt }],
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-    }),
-  });
+  let res;
+  try {
+    res = await fetch("/api/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1200,
+        messages: [{ role: "user", content: prompt }],
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+      }),
+    });
+  } catch {
+    throw new Error("Couldn't reach the lookup service. (The AI scan only works on the deployed site, not the preview.)");
+  }
+  if (!res.ok) throw new Error("Lookup service error. Please try again.");
   const data = await res.json();
 
   const text = (data.content || [])
