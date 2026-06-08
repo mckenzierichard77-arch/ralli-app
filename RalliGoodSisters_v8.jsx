@@ -4949,7 +4949,7 @@ const SKIN_TIPS = [
   ];
 const todayTip = SKIN_TIPS[Math.floor(Date.now()/86400000) % SKIN_TIPS.length];
 
-function ScanPage({user, profile, onPosted, onUpdateProfile}) {
+function ScanPage({user, profile, onPosted, onUpdateProfile, onUserTap=()=>{}}) {
   const [showGlossary, setShowGlossary] = useState(false);
   const [inputMode, setInputMode]       = useState("camera");
   const [ingredients, setIngredients]   = useState("");
@@ -19217,7 +19217,7 @@ function AppInner() {
               setProfile(updates);
             }}/>
           : tab==="check"
-            ? <ScanPage user={user} profile={profile} onPosted={()=>{setFeedRefresh(r=>r+1);switchTab("feed");}} onUpdateProfile={setProfile}/>
+            ? <ScanPage user={user} profile={profile} onPosted={()=>{setFeedRefresh(r=>r+1);switchTab("feed");}} onUpdateProfile={setProfile} onUserTap={handleUserTap}/>
             : tab==="messages"
               ? <MessagesPage user={user} profile={profile} onUserTap={handleUserTap} onUnreadChange={setMsgUnread} onChatOpen={setChatOpen} chatCloseRef={chatCloseRef}/>
             : tab==="shop"
