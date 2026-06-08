@@ -1388,7 +1388,40 @@ async function searchProducts(searchTerm) {
   } catch(e) { console.error("OBF search error", e); }
 
   const qt = searchTerm.toLowerCase().trim();
-  return results
+
+  // -- Cross-source dedupe -----------------------------------------------
+  // The same product can appear as a cached/seed record AND an OBF record
+  // (and as a community add) with slightly different name/brand strings and
+  // different ingredient lists — which produced visible duplicates with
+  // different pore scores. Collapse on a HARD-normalized key (case,
+  // punctuation, and trailing size/volume like "16 oz"/"400ml" stripped),
+  // and when two records collapse, keep the richer one: prefer approved +
+  // image, then the longer ingredient list, then more scan activity.
+  function dedupeKey(r) {
+    const norm = s => (s || "")
+      .toLowerCase()
+      .replace(/\b\d+(\.\d+)?\s?(fl\s?oz|oz|ml|g| g|l|gram|grams|ounce|ounces)\b/g, " ") // size suffixes
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return `${norm(r.brand)}|${norm(r.name)}`;
+  }
+  function richness(r) {
+    const tier = r._cached && r._approved ? (r.image ? 4 : 3) : r._cached ? 2 : 1;
+    const ingLen = (r.ingredients || "").length;
+    const activity = (r.scanCount || 0) + (r.communityRating ? 10 : 0);
+    return tier * 100000 + ingLen + activity; // tier dominates, then ingredient richness
+  }
+  const bestByKey = new Map();
+  for (const r of results) {
+    const k = dedupeKey(r);
+    if (!k.replace(/[|\s]/g, "")) { bestByKey.set(Symbol(), r); continue; } // empty key: keep as-is
+    const existing = bestByKey.get(k);
+    if (!existing || richness(r) > richness(existing)) bestByKey.set(k, r);
+  }
+  const deduped = Array.from(bestByKey.values());
+
+  return deduped
     .sort((a, b) => {
       // Tier: 0=approved+image, 1=approved, 2=pending DB, 3=OBF
       const tierA = a._cached && a._approved ? (a.image ? 0 : 1) : a._cached ? 2 : 3;
@@ -18484,8 +18517,8 @@ const RalliIcons = {
 
 function BottomNav({tab, onChange, unreadCount=0, msgUnread=0, currentUid="", isAdmin=false}) {
   const items = [
-    {id:"feed",     label:"Feed",     icon:(a) => RalliIcons.community(a ? T.navy : T.textLight)},
     {id:"check",    label:"Scan",     icon:(a) => RalliIcons.scan(a ? T.navy : T.textLight)},
+    {id:"feed",     label:"Feed",     icon:(a) => RalliIcons.community(a ? T.navy : T.textLight)},
     {id:"shop",     label:"Explore",  icon:(a) => RalliIcons.compass(a ? T.navy : T.textLight, 22, a)},
     {id:"messages", label:"Messages", icon:(a) => RalliIcons.chat(a ? T.navy : T.textLight)},
     {id:"profile",  label:"Profile",  icon:(a) => RalliIcons.person(a ? T.navy : T.textLight)},
@@ -18553,9 +18586,9 @@ class ErrorBoundary extends React.Component {
             style={{padding:"0.75rem 2rem",background:"#111827",color:"#fff",border:"none",borderRadius:"0.65rem",fontSize:"0.85rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
             Try again
           </button>
-          {process.env.NODE_ENV==="development"&&(
+          {(process.env.NODE_ENV==="development" || true)&&(
             <pre style={{marginTop:"1.5rem",fontSize:"0.6rem",color:"#9AACBC",maxWidth:"360px",whiteSpace:"pre-wrap",wordBreak:"break-all",background:"#F0F3F7",padding:"0.75rem",borderRadius:"0.5rem"}}>
-              {this.state.error?.message}\n{this.state.error?.stack?.slice(0,400)}
+              {this.state.error?.message}{"\n"}{this.state.error?.stack?.slice(0,400)}
             </pre>
           )}
         </div>
@@ -18958,15 +18991,12 @@ function AppInner() {
   const [profile, setProfile]   = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [tab, setTab]           = useState(()=>{
-    try { 
-      const saved = sessionStorage.getItem('ralli_tab');
-      // Never restore to profile on fresh load — always start on feed
-      return (saved && saved !== 'profile') ? saved : 'feed';
-    } catch { return 'feed'; }
+    // Always open on the Scan (check) tab — it's the primary action.
+    return 'check';
   });
   const [tabDir, setTabDir]     = useState("tab-fade");
   const prevTabRef              = React.useRef("feed");
-  const TAB_ORDER               = ["feed","check","messages","shop","notifs","profile","admin","glossary"];
+  const TAB_ORDER               = ["check","feed","shop","messages","notifs","profile","admin","glossary"];
   function switchTab(t) {
     const prev = prevTabRef.current;
     const prevIdx = TAB_ORDER.indexOf(prev);
