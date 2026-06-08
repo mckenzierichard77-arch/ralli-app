@@ -16,12 +16,12 @@ import {
 } from "firebase/storage";
 
 const firebaseApp = initializeApp({
-  apiKey:            import.meta.env?.VITE_FIREBASE_API_KEY            || "AIzaSyCPPl-cpHpA714AgE_mJI3MDj6nSVlSJRg",
-  authDomain:        import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN        || "feb242026morg.firebaseapp.com",
-  projectId:         import.meta.env?.VITE_FIREBASE_PROJECT_ID         || "feb242026morg",
-  storageBucket:     import.meta.env?.VITE_FIREBASE_STORAGE_BUCKET     || "feb242026morg.firebasestorage.app",
-  messagingSenderId: import.meta.env?.VITE_FIREBASE_MESSAGING_SENDER_ID|| "75912486030",
-  appId:             import.meta.env?.VITE_FIREBASE_APP_ID             || "1:75912486030:web:ff8eebbc6f93fcf4307ddf",
+  apiKey:            import.meta.env?.VITE_FIREBASE_API_KEY            || "",
+  authDomain:        import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN        || "",
+  projectId:         import.meta.env?.VITE_FIREBASE_PROJECT_ID         || "",
+  storageBucket:     import.meta.env?.VITE_FIREBASE_STORAGE_BUCKET     || "",
+  messagingSenderId: import.meta.env?.VITE_FIREBASE_MESSAGING_SENDER_ID|| "",
+  appId:             import.meta.env?.VITE_FIREBASE_APP_ID             || "",
 });
 const auth      = getAuth(firebaseApp);
 const db        = getFirestore(firebaseApp);
