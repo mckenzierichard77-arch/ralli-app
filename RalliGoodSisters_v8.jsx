@@ -2823,28 +2823,7 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
     return () => { cancelled = true; };
   }, [productName, user?.uid, profile?.skinTypes?.join("|")]);
 
-  // Seed + real friends
-  const SEED_FRIENDS = [
-    {uid:"seed_01",displayName:"Cassidy Monroe",  photoURL:"https://i.pravatar.cc/150?img=47"},
-    {uid:"seed_02",displayName:"Jenna Caldwell",  photoURL:"https://i.pravatar.cc/150?img=49"},
-    {uid:"seed_03",displayName:"Leila Ramos",     photoURL:"https://i.pravatar.cc/150?img=32"},
-    {uid:"seed_04",displayName:"Priya Nair",      photoURL:"https://i.pravatar.cc/150?img=44"},
-    {uid:"seed_05",displayName:"Brooke Sullivan", photoURL:"https://i.pravatar.cc/150?img=39"},
-    {uid:"seed_06",displayName:"Danielle Park",   photoURL:"https://i.pravatar.cc/150?img=45"},
-    {uid:"seed_07",displayName:"Alexis Turner",   photoURL:"https://i.pravatar.cc/150?img=38"},
-    {uid:"seed_08",displayName:"Megan Foster",    photoURL:"https://i.pravatar.cc/150?img=26"},
-    {uid:"seed_09",displayName:"Simone Okafor",   photoURL:"https://i.pravatar.cc/150?img=29"},
-    {uid:"seed_10",displayName:"Taylor Nguyen",   photoURL:"https://i.pravatar.cc/150?img=43"},
-    {uid:"seed_11",displayName:"Camille Petit",   photoURL:"https://i.pravatar.cc/150?img=35"},
-    {uid:"seed_12",displayName:"Naomi Whitfield", photoURL:"https://i.pravatar.cc/150?img=25"},
-    {uid:"seed_13",displayName:"Kavya Sharma",    photoURL:"https://i.pravatar.cc/150?img=31"},
-    {uid:"seed_14",displayName:"Riley Andrews",   photoURL:"https://i.pravatar.cc/150?img=27"},
-    {uid:"seed_15",displayName:"Ava Chen",        photoURL:"https://i.pravatar.cc/150?img=48"},
-  ];
-  const _seedHash = (productName||"x").split("").reduce((a,c,i)=>a + c.charCodeAt(0)*(i+1), 0);
-  const _seedCount = 2 + (_seedHash % 4);
-  const _seededFriends = [...SEED_FRIENDS].sort((a,b)=>((parseInt(a.uid.slice(-2))*_seedHash)%97)-((parseInt(b.uid.slice(-2))*_seedHash)%97)).slice(0,_seedCount);
-  const [followersWhoUse, setFollowersWhoUse] = useState(_seededFriends);
+  const [followersWhoUse, setFollowersWhoUse] = useState([]);
 
   useEffect(()=>{
     const following = profile?.following || [];
@@ -6411,13 +6390,8 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile, embedd
                 <div style={{padding:"0 1rem 0.5rem",fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"'Inter',sans-serif"}}>What the community is using</div>
                 <div style={{display:"flex",flexDirection:"column",gap:"0.75rem",padding:"0 0.75rem"}}>
                   {(() => {
-                    // Real posts first (anyone using the app — McKenzie, Morgan,
-                    // other real users), then mock posts as filler if we don't
-                    // have enough real activity yet.
                     const realCommunityPosts = posts.filter(p => !p.uid?.startsWith("seed_") && p.uid && p.postType);
-                    const mocksToFill = MOCK_POSTS.slice(0, Math.max(0, 6 - realCommunityPosts.length));
-                    const combined = [...realCommunityPosts, ...mocksToFill].slice(0, 6);
-                    return combined.map((p, i) => (
+                    return realCommunityPosts.slice(0, 6).map((p, i) => (
                       <CardReveal key={p.id || p.uid+i} delay={i*40}>
                         <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>
                       </CardReveal>
@@ -6429,9 +6403,6 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile, embedd
 
             // -- Has real friend posts ------------------------------
             const allFollowingPosts = realPosts.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
-            const seedPad = allFollowingPosts.length < 4
-              ? MOCK_POSTS.filter(m=>!allFollowingPosts.some(p=>p.productName?.toLowerCase()===m.productName?.toLowerCase())).slice(0, 5-allFollowingPosts.length)
-              : [];
 
             return (
               <div style={{paddingBottom:"1rem"}}>
@@ -6441,14 +6412,6 @@ function FeedPage({user, profile, refreshKey, onUserTap, onUpdateProfile, embedd
                       <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>
                     </CardReveal>
                   ))}
-                  {seedPad.length > 0 && <>
-                    <div style={{padding:"0.5rem 0 0.25rem",fontSize:"0.58rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"'Inter',sans-serif"}}>Also in the community</div>
-                    {seedPad.map((p,i)=>(
-                      <CardReveal key={p.id} delay={i*40}>
-                        <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName||""} currentUserPhoto={profile?.photoURL||""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap}/>
-                      </CardReveal>
-                    ))}
-                  </>}
                 </div>
                 {friendCount < 8 && (
                   <div style={{margin:"1.25rem 0.75rem 0",padding:"0.85rem 1rem",background:T.surfaceAlt,borderRadius:"0.85rem",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"0.75rem"}}>
