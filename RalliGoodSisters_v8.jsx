@@ -5307,15 +5307,20 @@ function ScanPage({user, profile, onPosted, onUpdateProfile, onUserTap=()=>{}}) 
             <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onPhoto} style={{display:"none"}}/>
             <input ref={photoRef} type="file" accept="image/*" onChange={onPhoto} style={{display:"none"}}/>
 
-            {/* Single-row scan bar: search + camera */}
+            {/* Single-row scan bar: live search input + camera */}
             <div style={{display:"flex",gap:"0.5rem",alignItems:"stretch",marginBottom:"0.5rem"}}>
-              <button onClick={()=>switchTab("search")}
-                style={{flex:1,display:"flex",alignItems:"center",gap:"0.6rem",padding:"0.7rem 0.95rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",transition:"border-color 0.15s",minWidth:0}}
-                onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
-                onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <span style={{flex:1,fontSize:"0.88rem",color:T.textLight,fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Search or scan a product…</span>
-              </button>
+              <div style={{flex:1,position:"relative",minWidth:0}}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" strokeLinecap="round" style={{position:"absolute",left:"0.85rem",top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" value={searchQ}
+                  onFocus={e=>{ if(inputMode!=="search") setInputMode("search"); e.target.style.borderColor=T.accent; }}
+                  onBlur={e=>e.target.style.borderColor=T.border}
+                  onChange={e=>{ setSearchQ(e.target.value); if(!e.target.value.trim()){setSearchRes([]);setHasSearched(false);setSearchErr("");} else { setSearchLoading(true); clearTimeout(window._scanSearchTimer); window._scanSearchTimer=setTimeout(async()=>{ try{ const res=await searchProducts(e.target.value); setSearchRes(res); setHasSearched(true); if(!res.length)setSearchErr("no_results"); else setSearchErr(""); }catch{setSearchErr("Search failed.");} setSearchLoading(false); },350); } }}
+                  onKeyDown={e=>e.key==="Enter"&&doSearch()}
+                  placeholder="Search or scan a product…"
+                  style={{width:"100%",boxSizing:"border-box",padding:"0.7rem 0.95rem 0.7rem 2.4rem",background:T.surfaceAlt,border:`1px solid ${T.border}`,borderRadius:"0.85rem",fontSize:"0.88rem",color:T.text,fontFamily:"'Inter',sans-serif",outline:"none"}}
+                />
+                {searchQ&&<button onClick={()=>{setSearchQ("");setSearchRes([]);setHasSearched(false);setSearchErr("");}} style={{position:"absolute",right:"0.75rem",top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:T.textLight,padding:"2px",display:"flex"}}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>}
+              </div>
               <button onClick={()=>{setCameraErr("");setPhotoMode("auto");camRef.current?.click();}}
                 aria-label="Take a photo"
                 style={{flexShrink:0,width:"48px",background:T.navy,border:"none",borderRadius:"0.85rem",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -5351,19 +5356,6 @@ function ScanPage({user, profile, onPosted, onUpdateProfile, onUserTap=()=>{}}) 
         {/* Search tab */}
         {inputMode==="search"&&(
           <div className="fu">
-            <div style={{position:"relative",marginBottom:"0.75rem"}}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2" style={{position:"absolute",left:"0.85rem",top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              <input type="text" value={searchQ}
-                onChange={e=>{ setSearchQ(e.target.value); if(!e.target.value.trim()){setSearchRes([]);setHasSearched(false);setSearchErr("");} else { setSearchLoading(true); clearTimeout(window._scanSearchTimer); window._scanSearchTimer=setTimeout(async()=>{ try{ const res=await searchProducts(e.target.value); setSearchRes(res); setHasSearched(true); if(!res.length)setSearchErr("no_results"); else setSearchErr(""); }catch{setSearchErr("Search failed.");} setSearchLoading(false); },350); } }}
-                onKeyDown={e=>e.key==="Enter"&&doSearch()}
-                placeholder="Search products or brands…"
-                style={{...inp, paddingLeft:"2.25rem", paddingRight:searchQ?"2.25rem":"0.85rem"}}
-                onFocus={e=>e.target.style.borderColor=T.accent}
-                onBlur={e=>e.target.style.borderColor=T.border}
-                autoFocus
-              />
-              {searchQ&&<button onClick={()=>{setSearchQ("");setSearchRes([]);setHasSearched(false);setSearchErr("");}} style={{position:"absolute",right:"0.75rem",top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:T.textLight,padding:"2px",display:"flex"}}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>}
-            </div>
             {searchErr&&searchErr!=="no_results"&&<div style={{padding:"0.65rem",background:"#FBF0EE",border:`1px solid ${T.rose}44`,borderRadius:"0.5rem",fontSize:"0.78rem",color:T.rose,marginBottom:"0.75rem"}}>{searchErr}</div>}
             {searchErr==="no_results"&&(
               <div style={{textAlign:"center",padding:"1.25rem 0.5rem"}}>
