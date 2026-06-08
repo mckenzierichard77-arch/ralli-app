@@ -12872,103 +12872,12 @@ function AdminProductHub({ user } = {}) {
   // The "Mine" counter shows how many products this editor has saved — gives
   // the VA a sense of progress.
   // (myTag and myEditCount are declared above, before `filtered`.)
-  // Today's Queue logic — what to surface as "the thing to do today."
-  // Priority: anything missing any required field (image, ingredients, skin type,
-  // category, or buy URL) is the queue. If everything is complete, fall through
-  // to "never reviewed" for verification work.
-  const todaySuggestion = (() => {
-    if (counts.needswork > 0) {
-      // Build a friendly label that names what's most commonly missing.
-      const breakdown = [];
-      if (counts.noimage > 0)       breakdown.push(`${counts.noimage} no image`);
-      if (counts.noingredients > 0) breakdown.push(`${counts.noingredients} no ingredients`);
-      if (counts.noskin > 0)        breakdown.push(`${counts.noskin} no skin type`);
-      if (counts.nocategory > 0)    breakdown.push(`${counts.nocategory} no category`);
-      if (counts.nobuy > 0)         breakdown.push(`${counts.nobuy} no buy link`);
-      const subline = breakdown.slice(0, 3).join(" · ");
-      return {
-        filter: "needswork",
-        label: `${counts.needswork} product${counts.needswork===1?"":"s"} need${counts.needswork===1?"s":""} work`,
-        sublabel: subline,
-        swipe: "needswork",
-        color: "#7C3AED",
-      };
-    }
-    if (counts.unchecked > 0) return { filter:"unchecked", label:`${counts.unchecked} not yet reviewed — verify them`, sublabel:"", swipe:null, color:"#EC4899" };
-    return null;
-  })();
+  // Today's Queue card removed — List view is the default landing for the Products tab.
 
   return (
     <div style={{display:"flex",flexDirection:"column",gap:"0.75rem"}}>
 
-      {/* Today's Queue — daily landing card */}
-      {todaySuggestion ? (
-        <div style={{background:`linear-gradient(135deg, ${todaySuggestion.color}10, ${todaySuggestion.color}22)`,border:`1.5px solid ${todaySuggestion.color}66`,borderRadius:"0.85rem",padding:"0.95rem 1rem",fontFamily:"'Inter',sans-serif"}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"0.35rem"}}>
-            <div style={{fontSize:"0.6rem",fontWeight:"700",color:todaySuggestion.color,textTransform:"uppercase",letterSpacing:"0.08em"}}>📋 Today's Queue</div>
-            <div style={{fontSize:"0.58rem",color:T.textLight}}>signed in as <strong style={{color:T.textMid}}>{myTag}</strong></div>
-          </div>
-          <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.text,marginBottom:todaySuggestion.sublabel?"0.2rem":"0.65rem",lineHeight:1.35}}>{todaySuggestion.label}</div>
-          {todaySuggestion.sublabel && (
-            <div style={{fontSize:"0.65rem",color:T.textMid,marginBottom:"0.65rem",lineHeight:1.35}}>{todaySuggestion.sublabel}</div>
-          )}
-
-          {/* Daily progress strip — today's saves vs all-time saves */}
-          <div style={{display:"flex",gap:"0.4rem",marginBottom:"0.65rem"}}>
-            <div style={{flex:1,background:T.surface,borderRadius:"0.55rem",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`}}>
-              <div style={{fontSize:"0.55rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.05em",fontWeight:"600"}}>Today</div>
-              <div style={{fontSize:"1.15rem",fontWeight:"800",color:myEditCountToday>0?T.sage:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.1,marginTop:"0.15rem"}}>{myEditCountToday}</div>
-            </div>
-            <div style={{flex:1,background:T.surface,borderRadius:"0.55rem",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`}}>
-              <div style={{fontSize:"0.55rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.05em",fontWeight:"600"}}>All time</div>
-              <div style={{fontSize:"1.15rem",fontWeight:"800",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.1,marginTop:"0.15rem"}}>{myEditCount}</div>
-            </div>
-            <div style={{flex:1,background:T.surface,borderRadius:"0.55rem",padding:"0.5rem 0.6rem",border:`1px solid ${T.border}`}}>
-              <div style={{fontSize:"0.55rem",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.05em",fontWeight:"600"}}>In queue</div>
-              <div style={{fontSize:"1.15rem",fontWeight:"800",color:counts.needswork>0?T.amber:T.sage,fontFamily:"'Inter',sans-serif",lineHeight:1.1,marginTop:"0.15rem"}}>{counts.needswork}</div>
-            </div>
-          </div>
-
-          <div style={{display:"flex",gap:"0.4rem"}}>
-            {todaySuggestion.swipe ? (
-              <button onClick={()=>{setSwipeFilter(todaySuggestion.swipe); startSwipe();}}
-                style={{flex:2,padding:"0.7rem",background:todaySuggestion.color,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.78rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                👆 Start swiping
-              </button>
-            ) : (
-              <button onClick={()=>setFilter(todaySuggestion.filter)}
-                style={{flex:2,padding:"0.7rem",background:todaySuggestion.color,color:"#fff",border:"none",borderRadius:"0.6rem",fontSize:"0.78rem",fontWeight:"700",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-                📋 View list
-              </button>
-            )}
-            <button onClick={()=>setMode("add")}
-              style={{flex:1,padding:"0.7rem",background:T.surface,color:T.textMid,border:`1px solid ${T.border}`,borderRadius:"0.6rem",fontSize:"0.72rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
-              ＋ Add new
-            </button>
-          </div>
-
-          {/* Enrichment Bot — batch search + review queue */}
-          <button onClick={()=>setMode("bot")}
-            style={{marginTop:"0.5rem",width:"100%",padding:"0.7rem 0.85rem",background:`linear-gradient(135deg, ${T.iceBlue}, ${T.iceBlue}cc)`,border:`1.5px solid ${T.navy}`,borderRadius:"0.6rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",gap:"0.6rem"}}>
-            <div style={{fontSize:"1.15rem",flexShrink:0}}>🤖</div>
-            <div style={{flex:1,textAlign:"left"}}>
-              <div style={{fontSize:"0.78rem",fontWeight:"700",color:T.text}}>Enrichment Bot</div>
-              <div style={{fontSize:"0.6rem",color:T.textMid,marginTop:"1px"}}>Batch search ingredient lists. You approve.</div>
-            </div>
-            <div style={{fontSize:"0.7rem",color:T.navy,fontWeight:"700"}}>Open →</div>
-          </button>
-        </div>
-      ) : (
-        <div style={{background:T.sage+"15",border:`1.5px solid ${T.sage}55`,borderRadius:"0.85rem",padding:"0.95rem 1rem",fontFamily:"'Inter',sans-serif",textAlign:"center"}}>
-          <div style={{fontSize:"1.5rem",marginBottom:"0.25rem"}}>🎉</div>
-          <div style={{fontSize:"0.85rem",fontWeight:"700",color:T.sage}}>All caught up!</div>
-          <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"0.25rem"}}>
-            Every product has an image and ingredients.{myEditCount > 0 && <> You contributed to {myEditCount}.</>}
-          </div>
-        </div>
-      )}
-
-      {/* Mode switcher removed — Today's Queue card has Start Swiping + Add New, and List view is the default. */}
+      {/* Mode switcher removed — List view is the default. Add New available via advanced tools. */}
 
       {/* Power tools (Top 100, CSV import) — hidden by default. Toggle the Advanced expander below to show them. */}
       {showAdvanced && (
@@ -14839,16 +14748,7 @@ function AdminCleanup({afRunning, afLog, afDone, afProducts, setAfRunning, setAf
         ))}
       </div>
 
-      {/* -- Enrichment Bot — batch search + review queue -- */}
-      <button onClick={()=>setSection("bot")}
-        style={{padding:"0.85rem 1rem",background:`linear-gradient(135deg, ${T.iceBlue}, ${T.iceBlue}cc)`,border:`1.5px solid ${T.navy}`,borderRadius:"0.75rem",cursor:"pointer",fontFamily:"'Inter',sans-serif",textAlign:"left",display:"flex",alignItems:"center",gap:"0.75rem"}}>
-        <div style={{fontSize:"1.5rem",flexShrink:0}}>🤖</div>
-        <div style={{flex:1}}>
-          <div style={{fontSize:"0.82rem",fontWeight:"700",color:T.text}}>Enrichment Bot</div>
-          <div style={{fontSize:"0.65rem",color:T.textMid,marginTop:"1px"}}>Batch search ingredient lists. You approve.</div>
-        </div>
-        <div style={{fontSize:"0.7rem",color:T.navy,fontWeight:"700"}}>Open →</div>
-      </button>
+      {/* Enrichment Bot card removed */}
 
       {/* -- Manual image triage button -- */}
       {noImg > 0 && (
