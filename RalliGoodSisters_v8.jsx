@@ -4985,32 +4985,6 @@ const todayTip = SKIN_TIPS[Math.floor(Date.now()/86400000) % SKIN_TIPS.length];
 
 function ScanPage({user, profile, onPosted, onUpdateProfile, onUserTap=()=>{}}) {
   const [showGlossary, setShowGlossary] = useState(false);
-  // "What Ralliers are using" — recent activity from people the user follows.
-  const [ralliersUsing, setRalliersUsing] = useState(null); // null=loading, []=none
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const following = Array.isArray(profile?.following) ? profile.following : [];
-        const posts = await getFeed(following, user?.uid);
-        if (cancelled) return;
-        // Collapse to unique products (most recent first), keep a light set.
-        const seen = new Set();
-        const items = [];
-        for (const p of (posts || [])) {
-          const name = p.productName || "";
-          if (!name) continue;
-          const key = `${(p.brand||"").toLowerCase()}|${name.toLowerCase()}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          items.push(p);
-          if (items.length >= 8) break;
-        }
-        setRalliersUsing(items);
-      } catch { if (!cancelled) setRalliersUsing([]); }
-    })();
-    return () => { cancelled = true; };
-  }, [profile?.following, user?.uid]);
   const [inputMode, setInputMode]       = useState("camera");
   const [ingredients, setIngredients]   = useState("");
   const [productName, setProductName]   = useState("");
@@ -5308,18 +5282,7 @@ function ScanPage({user, profile, onPosted, onUpdateProfile, onUserTap=()=>{}}) 
     <div style={{maxWidth:"480px",margin:"0 auto",paddingBottom:"6rem"}}>
       <div style={{padding:"1rem"}}>
 
-      {/* Tip of the day */}
-      <div style={{marginBottom:"1rem",padding:"1rem 1.1rem",background:`linear-gradient(135deg,${T.iceBlue}60,${T.surface})`,borderRadius:"1.25rem",border:`1px solid ${T.blush}CC`,display:"flex",gap:"0.85rem",alignItems:"flex-start"}}>
-        <div style={{width:"34px",height:"34px",borderRadius:"0.6rem",background:"rgba(255,255,255,0.7)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.rose} strokeWidth="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-        </div>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:"0.58rem",fontWeight:"600",color:T.navy,textTransform:"uppercase",letterSpacing:"0.14em",marginBottom:"0.3rem",fontFamily:"'Inter',sans-serif"}}>Tip of the day</div>
-          <div style={{fontSize:"0.83rem",color:T.text,lineHeight:1.55,fontFamily:"'Inter',sans-serif",fontWeight:"400"}}>{todayTip.tip}</div>
-        </div>
-      </div>
-
-      <div style={{background:T.surface,borderRadius:"1.25rem",border:`1px solid ${T.border}`,padding:"1.25rem",boxShadow:"0 4px 24px rgba(28,23,20,0.06),0 1px 4px rgba(28,23,20,0.04)"}}>
+      <div style={{background:T.surface,borderRadius:"1rem",border:`1px solid ${T.border}`,padding:"0.85rem",boxShadow:"0 2px 12px rgba(28,23,20,0.05)"}}>
 
         {/* -- Four check options -- */}
         {cameraMode==="processing" ? (
@@ -5589,65 +5552,23 @@ function ScanPage({user, profile, onPosted, onUpdateProfile, onUserTap=()=>{}}) 
         }}
       />}
 
-      {/* What Ralliers are using — activity from people you follow */}
-      {ralliersUsing && ralliersUsing.length > 0 && (
-        <div style={{marginTop:"1.25rem"}}>
-          <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:"0.6rem",padding:"0 0.15rem"}}>
-            <div style={{fontSize:"0.92rem",fontWeight:"700",color:T.navy,fontFamily:"'Inter',sans-serif"}}>What Ralliers are using</div>
-            <div style={{fontSize:"0.62rem",color:T.textLight,fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.08em"}}>From your circle</div>
-          </div>
-          <div style={{display:"flex",gap:"0.7rem",overflowX:"auto",paddingBottom:"0.5rem",WebkitOverflowScrolling:"touch"}}>
-            {ralliersUsing.map((post,i) => {
-              const ps = (post.poreScore!=null) ? poreStyle(post.poreScore) : null;
-              return (
-                <button key={post.id||i}
-                  onClick={()=>setSelectedProduct({
-                    productName: post.productName,
-                    brand: post.brand||"",
-                    image: post.productImage||post.image||null,
-                    ingredients: post.ingredients||"",
-                    poreScore: post.poreScore??null,
-                    flaggedIngredients: Array.isArray(post.flaggedIngredients)?post.flaggedIngredients:[],
-                    id: post.productId||post.productName,
-                    _productId: post.productId||"",
-                    communityRating: post.communityRating||null,
-                  })}
-                  style={{flexShrink:0,width:"118px",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",padding:0,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-                  <div style={{width:"100%",aspectRatio:"1/1",background:"#FFFFFF",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",position:"relative"}}>
-                    {(post.productImage||post.image)
-                      ? <img src={post.productImage||post.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",mixBlendMode:"multiply",filter:"brightness(1.05) contrast(1.05)"}} onError={e=>{e.currentTarget.style.display="none";}}/>
-                      : <div style={{fontSize:"1.4rem",fontWeight:"800",color:T.textLight,fontFamily:"'Poppins',sans-serif"}}>{initials(post.brand||post.productName)}</div>}
-                    {ps && <div style={{position:"absolute",top:"6px",right:"6px",width:"22px",height:"22px",borderRadius:"50%",background:ps.bg,color:ps.fg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.7rem",fontWeight:"800",fontFamily:"'Poppins',sans-serif"}}>{post.poreScore}</div>}
-                  </div>
-                  <div style={{padding:"0.5rem 0.6rem 0.6rem"}}>
-                    {post.brand && <div style={{fontSize:"0.58rem",color:T.textLight,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{post.brand}</div>}
-                    <div style={{fontSize:"0.72rem",fontWeight:"600",color:T.text,lineHeight:1.25,marginTop:"2px",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{post.productName}</div>
-                    {post.displayName && <div style={{fontSize:"0.6rem",color:T.sage,marginTop:"0.35rem",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{displayNameOf({displayName:post.displayName})}</div>}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Glossary entry card */}
-              <div style={{textAlign:"center",padding:"1rem 0.5rem 0.5rem",fontSize:"0.58rem",color:T.textLight,fontFamily:"'Inter',sans-serif",lineHeight:1.6}}>
-          Ralli is for informational purposes only and is not a substitute for professional dermatological advice.
-        </div>
-        <button onClick={()=>setShowGlossary(true)}
-        style={{width:"100%",marginTop:"1rem",padding:"0.85rem 1rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"1rem",cursor:"pointer",textAlign:"left",display:"flex",alignItems:"center",gap:"0.85rem",transition:"all 0.15s",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}
-        onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.transform="translateY(-1px)";}}
-        onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.transform="none";}}>
-        <div style={{width:"38px",height:"38px",borderRadius:"0.65rem",background:T.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+      {/* Ingredient Glossary — quick access, above the feed */}
+      <button onClick={()=>setShowGlossary(true)}
+        style={{width:"100%",marginTop:"1rem",padding:"0.7rem 0.9rem",background:T.surface,border:`1px solid ${T.border}`,borderRadius:"0.85rem",cursor:"pointer",textAlign:"left",display:"flex",alignItems:"center",gap:"0.75rem",transition:"all 0.15s"}}
+        onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;}}
+        onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;}}>
+        <div style={{width:"32px",height:"32px",borderRadius:"0.55rem",background:T.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         </div>
         <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:"0.85rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",marginBottom:"0.1rem"}}>Ingredient Glossary</div>
-          <div style={{fontSize:"0.7rem",color:T.textLight}}>Decode what's in your products</div>
+          <div style={{fontSize:"0.82rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif"}}>Ingredient Glossary</div>
+          <div style={{fontSize:"0.68rem",color:T.textLight}}>Decode what's in your products</div>
         </div>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.textLight} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
+
+      {/* Social feed — full For You / Following feed below the scan bar */}
+      <FeedPage user={user} profile={profile} refreshKey={0} onUserTap={onUserTap} onUpdateProfile={onUpdateProfile} />
 
       {/* Glossary slide-up sheet */}
       {showGlossary&&(
@@ -6748,7 +6669,15 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
             const prod = productCache.get(item)
               || allProducts.find(p=>(p.productName||"").toLowerCase()===item.toLowerCase())
               || allProducts.find(p=>(p.productName||"").toLowerCase().includes(item.toLowerCase().split(" ").slice(0,2).join(" ")));
-            const ps = prod?.poreScore!=null ? poreStyle(prod.poreScore) : null;
+            // Recompute the pore score LIVE from ingredients (rounded, matching
+            // the product modal) so cards never show a stale stored value that
+            // disagrees with the modal. Fall back to stored poreScore only when
+            // there are no ingredients to score.
+            const _cardIng = prod?.ingredients || "";
+            const _cardScore = _cardIng.trim()
+              ? Math.round(analyzeIngredients(_cardIng).avgScore ?? 0)
+              : (prod?.poreScore ?? null);
+            const ps = _cardScore != null ? poreStyle(_cardScore) : null;
             const imgSrc = getProductImage(prod);
             const hasImg = imgSrc.startsWith("http");
             // Card sizing differs by layout:
@@ -6795,7 +6724,7 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
                   <div style={{fontSize:"0.7rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{getProductDisplayName({productName: item, brand: prod?.brand||""})}</div>
                   {ps&&(
                     <div style={{marginTop:"auto",display:"inline-flex",alignItems:"center",gap:"2px",background:ps.color+"15",borderRadius:"999px",padding:"0.12rem 0.4rem",alignSelf:"flex-start"}}>
-                      <span style={{fontSize:"0.6rem",fontWeight:"800",color:ps.color}}>{prod.poreScore}/5</span>
+                      <span style={{fontSize:"0.6rem",fontWeight:"800",color:ps.color}}>{_cardScore}/5</span>
                     </div>
                   )}
                 </div>
@@ -7097,17 +7026,14 @@ function analyzeRoutine(routine, shopProducts) {
       });
     if (!product?.ingredients) return { name, score: null, poreScore: null, flagged: [], irritants: [], totalIngredients: 0 };
     const res = analyzeIngredients(product.ingredients);
-    // Use the SAME pore score the user sees on the product card. The stored
-    // product.poreScore field is the integer the UI displays everywhere; if
-    // we recomputed via res.avgScore (which is position-weighted and returns
-    // decimals like 3.9 for the same ingredient list), the routine grade
-    // would silently disagree with what the user sees on their cards.
-    // See v97 fix — Morgan had 3 products showing "1/5, 0/5, 0/5" but the
-    // routine score was C because analyzeIngredients computed avgScore ~3
-    // for at least one of them via position-weighted math.
-    const displayPoreScore = (typeof product.poreScore === "number" && !isNaN(product.poreScore))
-      ? product.poreScore
-      : (res.avgScore ?? 0);
+    // Always recompute the pore score LIVE from the ingredient list, rounded
+    // the same way the product modal displays it (Math.round of avgScore).
+    // Previously this trusted the stored product.poreScore, which could be a
+    // stale value saved under an older formula — causing the routine grade and
+    // the product cards to disagree (e.g. a product showing 1/5 in the modal
+    // but 2/5 on the routine card). Live recompute is the single source of
+    // truth; stored poreScore is no longer trusted for display or grading.
+    const displayPoreScore = Math.round(res.avgScore ?? 0);
     // Total ingredients in this product — used for the "ingredients checked"
     // stat in the modal. Simple comma-split count.
     const totalIngredients = (product.ingredients || "").split(",").filter(t => t.trim()).length;
@@ -7123,7 +7049,11 @@ function analyzeRoutine(routine, shopProducts) {
     };
   });
   const withData = results.filter(r => r.hasData);
-  if (!withData.length) return { results, overall: null };
+  // If no routine products resolved to real ingredient data, we cannot
+  // honestly grade the routine. Return a neutral "no grade yet" state so the
+  // UI shows "—" instead of a misleading low grade (e.g. a "D" on a routine
+  // whose products simply have no ingredient data loaded).
+  if (!withData.length) return { results, overall: null, grade: null, gradeColor: T.textLight, label: "Add products with ingredients", withData: 0, productCount: 0, toWatchCount: 0, toWatchList: [], totalIngredients: 0, overlaps: [] };
   const avg = withData.reduce((s,r) => s + (r.poreScore||0), 0) / withData.length;
   const baseScore = Math.max(0, 10 - avg * 2);
   const ingredientMap = new Map();
@@ -18586,8 +18516,8 @@ const RalliIcons = {
 
 function BottomNav({tab, onChange, unreadCount=0, msgUnread=0, currentUid="", isAdmin=false}) {
   const items = [
-    {id:"check",    label:"Scan",     icon:(a) => RalliIcons.scan(a ? T.navy : T.textLight)},
-    {id:"shop",     label:"Explore",  icon:(a) => RalliIcons.compass(a ? T.navy : T.textLight, 22, a)},
+    {id:"check",    label:"Explore",  icon:(a) => RalliIcons.scan(a ? T.navy : T.textLight)},
+    {id:"shop",     label:"Shop",     icon:(a) => RalliIcons.compass(a ? T.navy : T.textLight, 22, a)},
     {id:"messages", label:"Messages", icon:(a) => RalliIcons.chat(a ? T.navy : T.textLight)},
     {id:"profile",  label:"Profile",  icon:(a) => RalliIcons.person(a ? T.navy : T.textLight)},
     ...(isAdmin ? [{id:"admin", label:"Admin", icon:(a) => (
