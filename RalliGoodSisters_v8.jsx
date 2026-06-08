@@ -2820,7 +2820,10 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
       try {
         const snaps = await Promise.all(following.slice(0,15).map(uid=>getDoc(doc(db,"users",uid))));
         const users = snaps.filter(s=>s.exists()).map(s=>({uid:s.id,...s.data()}));
-        const using = users.filter(u=>(u.routine||[]).some(r=>r.toLowerCase()===productName.toLowerCase()));
+        const using = users.filter(u=>(u.routine||[]).some(r=>{
+          const rn = typeof r === "object" ? (r?.productName || r?.name || "") : String(r||"");
+          return rn.toLowerCase()===productName.toLowerCase();
+        }));
         if (using.length > 0) setFollowersWhoUse(using);
       } catch {}
     })();
@@ -2921,7 +2924,15 @@ function ProductModalInner({product: incomingProduct, onClose, user, profile, on
   const {poreCloggers: modalCloggers, irritants: modalIrritants} = (() => {
     if (_ingAnalysis) return { poreCloggers:(_ingAnalysis.poreCloggers||[]).sort((a,b)=>b.score-a.score).slice(0,6), irritants:(_ingAnalysis.irritants||[]).slice(0,6) };
     if (product.flaggedIngredients?.length) {
-      const mapped = product.flaggedIngredients.map(rawName => {
+      const mapped = product.flaggedIngredients.map(raw => {
+        // Callers may pass either a string ingredient name or an already-analyzed
+        // object ({name, score, note, irritant}) — e.g. the scan search result
+        // handler passes objects. Normalize both so we never call string methods
+        // on an object.
+        if (raw && typeof raw === "object") {
+          return { name: raw.name || "", score: raw.score ?? 3, note: raw.note ?? "Potential pore-clogger", irritant: raw.irritant };
+        }
+        const rawName = String(raw || "");
         const key = rawName.toLowerCase().replace(/\s*\(.*?\)/g,"").trim();
         const dbEntry = INGDB[key] || Object.entries(INGDB).find(([k,v])=>k===key||(v.aliases||[]).some(a=>a===key))?.[1];
         return { name:rawName, score:dbEntry?.score??3, note:dbEntry?.note??"Potential pore-clogger", irritant:dbEntry?.irritant };
