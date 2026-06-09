@@ -1873,10 +1873,10 @@ async function extractFromPhoto(b64, mime, mode="auto") {
     ingredients: "You are reading a skincare ingredient list from a photo of product packaging.\nExtract every ingredient exactly as written and respond in ONLY this format:\nINGREDIENTS:<comma-separated INCI ingredient names exactly as written>\n\nIf you cannot read the ingredient list clearly, respond: UNCLEAR\nNo explanations. No markdown. Just the format above.",
     auto: "You are analysing a skincare product image. Look carefully and respond with ONLY one of these formats:\n1. If you see an ingredient list: INGREDIENTS:<comma-separated INCI ingredient names exactly as written>\n2. If you see the front of a product: PRODUCT:\nNAME:<product name>\nBRAND:<brand name>\n3. If you see both: NAME:<product name>\nBRAND:<brand name>\nINGREDIENTS:<comma-separated ingredients>\n4. If unclear: UNCLEAR\nNo explanations. No markdown. Just the format above."
   };
-  const res = await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST", headers:{"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+  const res = await fetch("/api/anthropic",{
+    method:"POST", headers:{"Content-Type":"application/json"},
     body:JSON.stringify({
-      model:"claude-haiku-4-5-20251001", max_tokens:1200,
+      model:"claude-haiku-4-5", max_tokens:1200,
       messages:[{role:"user",content:[
         {type:"image",source:{type:"base64",media_type:mime,data:b64}},
         {type:"text",text:prompts[mode]||prompts.auto}
@@ -18471,10 +18471,10 @@ function DebugPanel({ user, hidden = false }) {
   async function testAnthropicKey() {
     setTestStatus("Testing…");
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/anthropic", {
         method:"POST",
-        headers:{"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-        body: JSON.stringify({ model:"claude-haiku-4-5-20251001", max_tokens:10, messages:[{role:"user",content:"hi"}] })
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ model:"claude-haiku-4-5", max_tokens:10, messages:[{role:"user",content:"hi"}] })
       });
       const d = await res.json();
       if (d.error) { setTestStatus("❌ " + d.error.message); debugLog("error", "API key test failed: " + d.error.message); }

@@ -3,9 +3,15 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const apiKey = process.env.VITE_ANTHROPIC_KEY || process.env.ANTHROPIC_KEY;
+  // Prefer server-side secret; fall back to Vite-prefixed key for local dev
+  const apiKey = process.env.ANTHROPIC_KEY || process.env.VITE_ANTHROPIC_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: "No API key configured" });
+    return res.status(500).json({ error: "Anthropic API key not configured on server." });
+  }
+
+  const { model, max_tokens, messages } = req.body || {};
+  if (!model || !max_tokens || !Array.isArray(messages) || !messages.length) {
+    return res.status(400).json({ error: "Missing required fields: model, max_tokens, messages." });
   }
 
   try {
@@ -16,7 +22,7 @@ export default async function handler(req, res) {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify({ model, max_tokens, messages }),
     });
 
     const data = await response.json();
