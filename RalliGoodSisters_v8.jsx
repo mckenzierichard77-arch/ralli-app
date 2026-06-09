@@ -1867,7 +1867,7 @@ async function lookupBarcode(barcode) {
 }
 
 async function extractFromPhoto(b64, mime, mode="auto") {
-  if (!ANTHROPIC_KEY) throw new Error("No API key — photo scanning requires VITE_ANTHROPIC_KEY to be set in Vercel.");
+  if (!ANTHROPIC_KEY) throw new Error("No API key — photo scanning requires ANTHROPIC_KEY to be set in Vercel.");
   const prompts = {
     product: "You are identifying a skincare product from a photo of its packaging (front of bottle, tube, or box).\nIdentify the brand and product name and respond in ONLY this format:\nPRODUCT:\nNAME:<exact product name>\nBRAND:<exact brand name>\n\nIf you cannot identify the product clearly, respond: UNCLEAR\nNo explanations. No markdown. Just the format above.",
     ingredients: "You are reading a skincare ingredient list from a photo of product packaging.\nExtract every ingredient exactly as written and respond in ONLY this format:\nINGREDIENTS:<comma-separated INCI ingredient names exactly as written>\n\nIf you cannot read the ingredient list clearly, respond: UNCLEAR\nNo explanations. No markdown. Just the format above.",
@@ -11702,7 +11702,7 @@ function AutoFixDatabase({ products, onRefresh, onOpenTriage, afRunning, afLog, 
       {/* API key warning */}
       {!ANTHROPIC_KEY && (
         <div style={{padding:"0.65rem 0.85rem",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:"0.6rem",marginBottom:"0.85rem",fontSize:"0.72rem",color:"#dc2626",fontWeight:"600"}}>
-          ⚠️ No Anthropic API key found. Set VITE_ANTHROPIC_KEY in your environment — Claude web search won't work without it.
+          ⚠️ No Anthropic API key found. Set ANTHROPIC_KEY in your environment — Claude web search won't work without it.
         </div>
       )}
 
@@ -14178,7 +14178,7 @@ function AdminEnrichPipeline({ onBack }) {
   }
 
   async function runPipeline() {
-    if (!queue.length||!ANTHROPIC_KEY) { if(!ANTHROPIC_KEY) alert("No API key — set VITE_ANTHROPIC_KEY"); return; }
+    if (!queue.length||!ANTHROPIC_KEY) { if(!ANTHROPIC_KEY) alert("No API key — set ANTHROPIC_KEY"); return; }
     setRunning(true); setDone(false); stopRef.current=false;
     let completed=0;
     for (let i=0;i<queue.length;i++) {
