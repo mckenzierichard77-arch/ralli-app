@@ -1,7 +1,7 @@
 // v2.4 - compact feed cards, barcode scan icon, navy rank badges
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import ReactDOM from "react-dom";
-import {  initializeApp } from "firebase/app";
+import { initializeApp } from "firebase/app";
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
   createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, sendPasswordResetEmail
@@ -3391,7 +3391,7 @@ function OnboardingFlow({user, profile, onComplete}) {
         "rNOrHLZzbXOAh58uB1tv6OXoWEq2", // Morgan
         "jXGCJEHLl8c0CGPBlU9963qFvb83",  // McKenzie
       ];
-      const FOUNDER_EMAILS = ["mckenzie@theralliapp.com","morgan@theralliapp.com","angela@thralliapp.com"];
+      const FOUNDER_EMAILS = ["mckenzierichard77@gmail.com","morganrichard777@gmail.com"];
 
       // Fetch all users
       const snap = await getDocs(collection(db,"users"));
@@ -6665,8 +6665,8 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
 }
 
 const FOUNDERS = [
-  {email:"mckenzie@theralliapp.com", name:"McKenzie Richard", initial:"Mk"},
-  {email:"morgan@theralliapp.com",  name:"Morgan Richard",   initial:"Mo"},
+  {email:"mckenzierichard77@gmail.com", name:"McKenzie Richard", initial:"Mk"},
+  {email:"morganrichard777@gmail.com",  name:"Morgan Richard",   initial:"Mo"},
 ];
 
 // -- Avatar Crop / Position Modal -----------------------------
@@ -7425,8 +7425,8 @@ function PeopleFinder({ user, profile, onUpdate, onUserTap }) {
           "jXGCJEHLl8c0CGPBlU9963qFvb83", // McKenzie
         ];
         const FOUNDER_EMAILS = [
-          "mckenzie@theralliapp.com",
-          "morgan@theralliapp.com",
+          "mckenzierichard77@gmail.com",
+          "morganrichard777@gmail.com",
         ];
 
         // Filter using the global helper so test/seed accounts (including
@@ -9611,8 +9611,8 @@ const FOUNDER_AVATARS = {
 };
 
 const FOUNDER_EMAILS = {
-  McKenzie: "mckenzie@theralliapp.com",
-  Morgan: "morgan@theralliapp.com",
+  McKenzie: "mckenzierichard77@gmail.com",
+  Morgan: "morganrichard777@gmail.com",
 };
 
 function useFounderAvatars() {
@@ -11057,10 +11057,12 @@ function NotificationsPage({user, onUserTap}) {
 // -- Admin Dashboard -------------------------------------------
 // Set your Firebase UID here to enable the admin tab
 const ADMIN_UIDS = []; // add your UID here once you see it in Profile
-const ADMIN_EMAILS = ["mckenzie@theralliapp.com", "morgan@theralliapp.com"];
+const ADMIN_EMAILS = ["mckenzierichard77@gmail.com", "morganrichard777@gmail.com"];
 // VA / contractor emails — get full admin access but the dashboard defaults
 // them into "VA Mode" (focused queue, power tools tucked away).
 // Add the VA's email here once you've hired her.
+const VA_EMAILS = [
+  "banilaroselyn0628@gmail.com",
 ];
 function isAdmin(user) {
   return ADMIN_UIDS.includes(user?.uid) || ADMIN_EMAILS.includes(user?.email) || VA_EMAILS.includes(user?.email);
