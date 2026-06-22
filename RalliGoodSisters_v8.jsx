@@ -3391,7 +3391,7 @@ function OnboardingFlow({user, profile, onComplete}) {
         "rNOrHLZzbXOAh58uB1tv6OXoWEq2", // Morgan
         "jXGCJEHLl8c0CGPBlU9963qFvb83",  // McKenzie
       ];
-      const FOUNDER_EMAILS = ["mckenzierichard77@gmail.com","morganrichard777@gmail.com"];
+      const FOUNDER_EMAILS = ["mckenzie@theralliapp.com","morgan@theralliapp.com","angela@thralliapp.com"];
 
       // Fetch all users
       const snap = await getDocs(collection(db,"users"));
