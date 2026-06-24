@@ -7,38 +7,21 @@ import { AMZN, SHOP_CATEGORIES, CLEAN_BRANDS_SEED, CAT_EMOJI, CAT_LABEL, CAT_ORD
 import { AMAZON_AFFILIATE_TAG, SKIN_TIPS, FOUNDERS, ADMIN_UIDS, ADMIN_EMAILS, VA_EMAILS, DAILY_MESSAGES, BRAND_BLURBS, BRAND_PALETTE } from "./src/data/constants.js";
 import { RalliIcons } from "./src/data/icons.jsx";
 import ReactDOM from "react-dom";
-import { initializeApp } from "firebase/app";
+import { auth, db, storage, gProvider, ANTHROPIC_KEY } from "./src/lib/firebase.js";
+import { getProductImage, hasValidImage, getCachedImage, setCachedImage, imgCacheKey, resolveProductImage } from "./src/lib/imageUtils.js";
+import { analyzeIngredients, matchIngredientPattern } from "./src/lib/ingredientUtils.js";
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
+  signInWithPopup, signOut, onAuthStateChanged,
   createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, sendPasswordResetEmail
 } from "firebase/auth";
 import {
-  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, writeBatch, arrayUnion, arrayRemove, increment,
+  doc, getDoc, setDoc, updateDoc, deleteDoc, writeBatch, arrayUnion, arrayRemove, increment,
   collection, query, where, orderBy, limit, getDocs, addDoc, serverTimestamp,
   onSnapshot, getCountFromServer
 } from "firebase/firestore";
 import {
-  getStorage, ref as storageRef, uploadBytes, getDownloadURL
+  ref as storageRef, uploadBytes, getDownloadURL
 } from "firebase/storage";
-
-const firebaseApp = initializeApp({
-  apiKey:            import.meta.env?.VITE_FIREBASE_API_KEY            || "",
-  authDomain:        import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN        || "",
-  projectId:         import.meta.env?.VITE_FIREBASE_PROJECT_ID         || "",
-  storageBucket:     import.meta.env?.VITE_FIREBASE_STORAGE_BUCKET     || "",
-  messagingSenderId: import.meta.env?.VITE_FIREBASE_MESSAGING_SENDER_ID|| "",
-  appId:             import.meta.env?.VITE_FIREBASE_APP_ID             || "",
-});
-const auth      = getAuth(firebaseApp);
-const db        = getFirestore(firebaseApp);
-const storage   = getStorage(firebaseApp);
-const gProvider = new GoogleAuthProvider();
-
-// -- Product images now live in Firestore (adminImage field on each product doc) --
-
-// -- Anthropic API key — used for photo ingredient scanning only --
-// Set this in your environment / deployment config, never commit it
-const ANTHROPIC_KEY = import.meta.env?.VITE_ANTHROPIC_KEY || "";
 
 // -- Design tokens ---------------------------------------------
 // -- Curated recs — loaded from Firestore (featured:true products) ----------
@@ -67,36 +50,6 @@ async function fetchCuratedRecs() {
 // Run Admin → Products → "Migrate to Firestore" to seed initial data.
 // Use Admin → Products → Auto-fix to fill in any missing images automatically.
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Canonical product-image resolver. Use this EVERYWHERE instead of inlining
-// `p.adminImage || p.image || …` chains.
-//
-// Why: different code paths historically read different field combinations,
-// so the same product would render an image in one place and a placeholder
-// in another. This function is the single source of truth.
-//
-// Priority order:
-//   1. adminImage  — manually curated by McKenzie / VA (highest quality)
-//   2. image       — auto-fetched / OBF / scan upload
-//   3. productImage — denormalized snapshot stored on posts/comments/ratings
-//
-// Filters out garbage: empty strings, blob URLs (browser-local, won't load
-// across sessions), known-bad OBF URLs.
-//
-// Usage: getProductImage(productOrPostObject)  →  string URL or empty string
-// ─────────────────────────────────────────────────────────────────────────────
-function getProductImage(p) {
-  if (!p) return "";
-  const candidates = [p.adminImage, p.image, p.productImage];
-  for (const raw of candidates) {
-    const url = (raw || "").trim();
-    if (!url) continue;
-    if (!url.startsWith("http")) continue;     // blob: / data: / relative paths
-    if (url.includes("openbeautyfacts")) continue; // OBF images are too low-quality
-    return url;
-  }
-  return "";
-}
 
 // Returns the product name stripped of its brand prefix, for display.
 // Many products were saved historically with the brand baked into the name
@@ -332,25 +285,6 @@ function communityColor(r) {
 }
 
 // -- Image URL validator — must point to a real image host, not just any URL --
-// Rejects placeholders, camera emojis, and non-image URLs.
-// -- Image validation ------------------------------------------
-// Tests if an image URL actually loads rather than checking URL format.
-// Uses a cache to avoid re-testing the same URL repeatedly.
-const _imgValidCache = {};
-function hasValidImage(p) {
-  const url = ((p.adminImage || p.image) || "").trim();
-  if (!url || !url.startsWith("http")) return false;
-  // Reject known non-image URLs
-  if (url.includes("media-amazon.com")) return false;
-  if (url.includes("amazon.com/s?k=")) return false;
-  if (url.includes("amazon.com/dp/")) return false;
-  // Allow known good image CDNs and domains
-  const goodDomains = ["sephora.com","ulta.com","openbeautyfacts.org","clearstem.com","cdn.shopify","images.ctfassets","cloudinary","imgix","akamaized","fastly","squarespace","wixstatic","theordinary.com","cerave.com","neutrogena.com","laroche-posay","skinstore.com","dermstore.com"];
-  if (goodDomains.some(d => url.includes(d))) return true;
-  // For other domains, require a proper image file extension
-  if (/\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(url)) return true;
-  return false;
-}
 // For admin display, use actual image load test
 function AdminImageStatus({ p }) {
   const url = ((p.adminImage || p.image) || "").trim();
@@ -409,100 +343,6 @@ function shareProduct(productName, brand) {
   }
 }
 
-// Shared ingredient-pattern matcher. Used by analyzeIngredients (the score
-// computation pipeline) AND by the product-modal pill renderer, so both
-// systems agree on what's flagged.
-//
-// Matching rules:
-//   - Long patterns (>=5 chars): plain substring match. Distinctive enough
-//     that false positives are unlikely. Example: "camellia sinensis leaf
-//     extract" matches inside any token that contains those words contiguously.
-//   - Short patterns (<=4 chars, typically INCI abbreviations like TEA, PG,
-//     BHA, MAP): match only when the token IS the pattern, OR the pattern
-//     appears as a hyphen-bounded chemical-notation prefix/suffix
-//     (TEA-stearate, sodium-PG, cocoyl-TEA-glutamate, etc.).
-//
-// The short-pattern rule prevents bugs like "green tea" being flagged because
-// "tea" is an alias for triethanolamine, or "propylene glycol" being flagged
-// because "pg" is its own abbreviation alias.
-function matchIngredientPattern(token, pattern) {
-  if (!token || !pattern) return false;
-  const t = token.toLowerCase();
-  const p = pattern.toLowerCase();
-  if (p.length >= 5) {
-    return t.includes(p);
-  }
-  if (t === p) return true;
-  // Escape regex special chars in the pattern, then match as a hyphen-bounded segment.
-  const escaped = p.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
-  const re = new RegExp("(^" + escaped + "-)|(-" + escaped + "$)|(-" + escaped + "-)", "i");
-  return re.test(t);
-}
-
-function analyzeIngredients(text) {
-  const lower = (text || "").toLowerCase();
-  // Split the INCI list into ordered tokens so we can use position as a concentration proxy.
-  // INCI lists are required to be in descending concentration order down to ~1%, so position
-  // is a good (if imperfect) signal: the first few ingredients are the bulk of the formula,
-  // anything past position ~12 is typically <1% and has minimal real-skin impact.
-  const tokens = lower.split(/[,;]\s*/).map(t => t.trim()).filter(Boolean);
-
-  // Pre-build a flat lookup of every ingredient name + alias → its INGDB entry
-  const lookup = []; // [{ pattern, canonical, data }]
-  for (const [name, data] of Object.entries(INGDB)) {
-    const allNames = [name, ...(data.aliases || [])];
-    for (const n of allNames) {
-      if (n) lookup.push({ pattern: n.toLowerCase(), canonical: name, data });
-    }
-  }
-  // Sort longest-first so "polyglyceryl-2 stearate" matches before "stearate"
-  lookup.sort((a, b) => b.pattern.length - a.pattern.length);
-
-  // Walk tokens IN ORDER, recording position. Each canonical INGDB entry can only be added once.
-  const found = [];
-  const seenCanonical = new Set();
-  tokens.forEach((token, idx) => {
-    for (const entry of lookup) {
-      if (seenCanonical.has(entry.canonical)) continue;
-      if (matchIngredientPattern(token, entry.pattern)) {
-        seenCanonical.add(entry.canonical);
-        const display = token === entry.pattern ? entry.canonical : `${entry.canonical} (${token})`;
-        found.push({ name: display, position: idx + 1, ...entry.data });
-        break; // one INGDB entry per token
-      }
-    }
-  });
-
-  // Position weight: how much real-world impact does an ingredient at position N have?
-  // First 3 = full weight (bulk of formula). 4-7 = ~70% (likely 1-5%).
-  // 8-12 = ~40% (sub-1% but real). 13+ = ~15% (trace amount).
-  function positionWeight(pos) {
-    if (pos <= 3) return 1.0;
-    if (pos <= 7) return 0.7;
-    if (pos <= 12) return 0.4;
-    return 0.15;
-  }
-
-  // Flagged = pore-clogging score >= 1 OR irritant flag
-  const flagged = found.filter(i => i.score >= 1 || i.irritant);
-  const poreCloggers = flagged.filter(i => i.score >= 1);
-  const irritants = flagged.filter(i => i.irritant && i.score < 1);
-
-  // Position-weighted pore clog score.
-  // Each ingredient contributes (score × position_weight). The final score is 70% from the
-  // max-weighted ingredient (the worst real offender) and 30% from the average weighted score
-  // (so a list full of small concerns still adds up appropriately).
-  const avgScore = (() => {
-    if (!poreCloggers.length) return found.length > 0 ? 0 : null;
-    const weighted = poreCloggers.map(i => i.score * positionWeight(i.position || 99));
-    const wMax = Math.max(...weighted);
-    const wAvg = weighted.reduce((s, v) => s + v, 0) / weighted.length;
-    const raw = (wMax * 0.7) + (wAvg * 0.3);
-    return Math.round(Math.min(Math.max(raw, 0), 5) * 10) / 10;
-  })();
-
-  return { found, flagged, poreCloggers, irritants, avgScore };
-}
 
 function initials(name="") {
   return name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() || "?";
@@ -551,70 +391,6 @@ function timeAgo(ts) {
   return `${Math.floor(h/24)}d ago`;
 }
 
-// -- Firebase helpers ------------------------------------------
-// -- Firestore image cache — saves found images for all users forever --
-async function getCachedImage(key) {
-  try {
-    const snap = await getDoc(doc(db, "productImages", key));
-    return snap.exists() ? snap.data().url : null;
-  } catch { return null; }
-}
-async function setCachedImage(key, url) {
-  try { await setDoc(doc(db, "productImages", key), { url, updatedAt: serverTimestamp() }); } catch {}
-}
-function imgCacheKey(brand, name) {
-  return `${(brand||"").toLowerCase().replace(/\s+/g,"_")}|${(name||"").toLowerCase().replace(/\s+/g,"_")}`.slice(0,200);
-}
-
-// -- Multi-source product image resolver ----------------------
-// Tries: Firestore cache → Sephora API → Ulta API → OBF → null
-async function resolveProductImage(brand, name, barcode) {
-  const key = imgCacheKey(brand, name);
-
-  // 1. Firestore permanent cache — instant for repeat lookups
-  const cached = await getCachedImage(key);
-  if (cached) return cached;
-
-  const q = `${brand||""} ${name||""}`.trim();
-
-  // 2. Sephora — via Cloudflare Worker
-  try {
-    const workerUrl = `https://raspy-math-6c02ralli-image-proxy.mckenzierichard77.workers.dev?q=${encodeURIComponent(q)}&brand=${encodeURIComponent(brand||"")}`;
-    const r = await fetch(workerUrl, {signal:AbortSignal.timeout(8000)});
-    const d = await r.json();
-    if (d?.url && d.source === "sephora") { await setCachedImage(key, d.url); return d.url; }
-  } catch {}
-
-  // 3. ULTA — via Cloudflare Worker
-  try {
-    const workerUrl = `https://raspy-math-6c02ralli-image-proxy.mckenzierichard77.workers.dev?q=${encodeURIComponent(q)}&brand=${encodeURIComponent(brand||"")}`;
-    const r = await fetch(workerUrl, {signal:AbortSignal.timeout(8000)});
-    const d = await r.json();
-    if (d?.url && d.source === "ulta") { await setCachedImage(key, d.url); return d.url; }
-  } catch {}
-
-  // 4. Open Beauty Facts — reliable for barcoded products, no CORS issues
-  if (barcode && !/^seed_/.test(barcode)) {
-    try {
-      const r = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${barcode}.json`, { signal: AbortSignal.timeout(5000) });
-      const d = await r.json();
-      const img = d?.product?.image_front_url || d?.product?.image_url || null;
-      if (img) { await setCachedImage(key, img); return img; }
-    } catch {}
-    // OBF CDN direct — try revision numbers without an API call
-    const b = barcode.replace(/\D/g,"");
-    const path = b.length === 13 ? `${b.slice(0,3)}/${b.slice(3,6)}/${b.slice(6,9)}/${b.slice(9)}` : b;
-    for (const rev of ["3","2","1"]) {
-      const candidate = `https://images.openbeautyfacts.org/images/products/${path}/front_en.${rev}.full.jpg`;
-      try {
-        const probe = await fetch(candidate, { method: "HEAD", signal: AbortSignal.timeout(3000) });
-        if (probe.ok) { await setCachedImage(key, candidate); return candidate; }
-      } catch {}
-    }
-  }
-
-  return null;
-}
 
 // In-memory product cache so searches after the first are instant
 let _productCache = null;
