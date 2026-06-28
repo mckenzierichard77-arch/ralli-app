@@ -82,7 +82,8 @@ export function PostCard({ post, currentUid, currentUserName="", currentUserPhot
   const mappedImage = productImageMap[(post.productName||"").toLowerCase().trim()] || "";
   const liveImage = (canonicalProduct ? getProductImage(canonicalProduct) : "") || post.productImage || post.image || mappedImage;
 
-  const liveIngredients = canonicalProduct?.ingredients || post.ingredients || "";
+  const rawIng = canonicalProduct?.ingredients || post.ingredients || "";
+  const liveIngredients = Array.isArray(rawIng) ? rawIng.map(i => i.label_name || i.name || "").join(", ") : rawIng;
   const livePostScore = (liveIngredients && liveIngredients.trim().length > 10)
     ? (() => { const r = analyzeIngredients(liveIngredients); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })()
     : null;

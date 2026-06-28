@@ -458,7 +458,8 @@ function TrendingSection({ openProductFromPost, trendingList, friendScans = {}, 
           const key = (p.productName || "").toLowerCase().trim();
           if (!key) return;
           if (!map[key]) {
-            const ing = (p.ingredients || "").trim();
+            const rawIng = p.ingredients || "";
+          const ing = (Array.isArray(rawIng) ? rawIng.map(i => i.label_name || i.name || "").join(", ") : rawIng).trim();
             const computedScore = ing.length > 10
               ? (() => { const r = analyzeIngredients(ing); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })()
               : (p.poreScore ?? 0);
@@ -480,10 +481,12 @@ function TrendingSection({ openProductFromPost, trendingList, friendScans = {}, 
 
   const topProduct = trendData[0];
   const rest = trendData.slice(1);
-  const topLive = productCache.get(topProduct?.id) || productCache.get(topProduct?.productName) || topProduct;
+  const topLive = productCache.get(topProduct?.productId) || productCache.get(topProduct?.productName) || topProduct;
   const topImage = getProductImage(topLive) || topProduct.productImage || topProduct.image || "";
   const topBrand = topLive?.brand || topProduct?.brand || "";
   const topScore = topLive?.poreScore ?? topProduct?.poreScore ?? 0;
+  const _topRawIng = topProduct.ingredients || "";
+  const topIngStr = Array.isArray(_topRawIng) ? _topRawIng.map(i => i.label_name || i.name || "").join(", ") : _topRawIng;
 
   return (
     <div style={{ marginBottom: "1.75rem" }}>
@@ -501,7 +504,7 @@ function TrendingSection({ openProductFromPost, trendingList, friendScans = {}, 
         onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.transform = "none"; }}>
         <div style={{ width: 78, height: 78, flexShrink: 0, background: "#ffffff", borderRadius: "0.65rem", overflow: "hidden", position: "relative" }}>
           <ProductImage src={topImage || null} name={topProduct.productName} brand={topBrand} barcode={topProduct.barcode || ""} size="full" />
-          {topProduct.ingredients && topProduct.ingredients.trim().length >= 10 && topScore > 0 && (() => {
+          {topIngStr.trim().length >= 10 && topScore > 0 && (() => {
             const ps = poreStyle(topScore);
             return (
               <div style={{ position: "absolute", top: "6px", left: "6px", background: ps.color, borderRadius: "0.4rem", padding: "2px 7px", display: "flex", alignItems: "center", gap: "3px" }}>
@@ -543,11 +546,12 @@ function TrendingSection({ openProductFromPost, trendingList, friendScans = {}, 
       {rest.length > 0 && (
         <div style={{ display: "flex", gap: "0.6rem", overflowX: "auto", paddingLeft: "1rem", paddingRight: "1rem", paddingBottom: "0.5rem", scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
           {rest.map((p, i) => {
-            const liveP = productCache.get(p.id) || productCache.get(p.productName) || p;
+            const liveP = productCache.get(p.productId) || productCache.get(p.productName) || p;
             const liveImg = getProductImage(liveP) || p.productImage || p.image || null;
             const liveBr = liveP.brand || p.brand || "";
             const liveSc = liveP.poreScore ?? p.poreScore ?? 0;
-            const hasIng = (liveP.ingredients || p.ingredients || "").trim().length >= 10;
+            const rawIngP = liveP.ingredients || p.ingredients || "";
+            const hasIng = (Array.isArray(rawIngP) ? rawIngP.map(i => i.label_name || i.name || "").join(", ") : rawIngP).trim().length >= 10;
             return (
               <button key={p.productName + i} onClick={() => openProductFromPost(p)}
                 style={{ flexShrink: 0, width: "110px", background: T.surface, borderRadius: "0.85rem", border: `1px solid ${T.border}`, padding: 0, cursor: "pointer", textAlign: "left", overflow: "hidden", display: "flex", flexDirection: "column", transition: "all 0.18s" }}
@@ -583,6 +587,7 @@ function TrendingSection({ openProductFromPost, trendingList, friendScans = {}, 
 // ---------------------------------------------------------------------------
 
 export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile, embedded = false }) {
+  const productCache = useProductCache();
   const [posts, setPosts]       = useState([]);
   const [loading, setLoading]   = useState(true);
   const [tab, setTab]           = useState("forYou");
@@ -737,46 +742,28 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
     { id: "mock_15", uid: "seed_u15", displayName: "Ava Chen", photoURL: "https://i.pravatar.cc/150?img=48", productName: "Neutrogena Hydro Boost Gel", brand: "Neutrogena", poreScore: 1, productImage: "https://www.neutrogena.com/dw/image/v2/BBPF_PRD/on/demandware.static/-/Sites-neutrogena-master/default/Hydro-Boost-Water-Gel-1.7oz.jpg", communityRating: 7, postType: "wantToTry", ingredients: "water, dimethicone, glycerin, dimethicone/vinyl dimethicone crosspolymer, sodium hyaluronate, phenoxyethanol, carbomer, sodium hydroxide", flaggedIngredients: [], likes: ["seed_u03", "seed_u06", "seed_u10"], comments: [{ uid: "seed_u15", displayName: "Ava Chen", photoURL: "https://i.pravatar.cc/150?img=48", text: "the drugstore version of the Tatcha — adding to my list!" }], createdAt: { seconds: Math.floor(Date.now() / 1000) - 237600 } },
   ];
 
-  async function openProductFromPost(post) {
-    try {
-      const q = query(collection(db, "products"),
-        where("productName", "==", post.productName), limit(1));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const p = { id: snap.docs[0].id, .../** @type {any} */(snap.docs[0].data()) };
-        const ingA = (p.ingredients || "").trim();
-        const ingB = (post.ingredients || "").trim();
-        const ing = ingA.length >= ingB.length ? (ingA || ingB) : (ingB || ingA);
-        const liveScore = ing.length > 10
-          ? (() => { const r = analyzeIngredients(ing); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })()
-          : null;
-        const computedScore = liveScore ?? p.poreScore ?? post.poreScore ?? 0;
-        setSelectedProduct({
-          productName: p.productName || post.productName,
-          brand: p.brand || post.brand,
-          image: p.adminImage || p.image || post.productImage || "",
-          poreScore: computedScore,
-          communityRating: p.communityRating || post.communityRating,
-          ingredients: ing,
-          flaggedIngredients: ing ? analyzeIngredients(ing).found : (post.flaggedIngredients || []),
-          buyUrl: p.buyUrl || amazonUrl(post.productName, post.brand, post.barcode, post.asin, post.buyUrl),
-        });
-        return;
-      }
-    } catch (e) { /* fall through */ }
-    const ing = (post.ingredients || "").trim();
+  function openProductFromPost(post) {
+    const pName = post.productName || post.name || "";
+    const cached = productCache.get(post.productId) || productCache.get(pName);
+    const normalizeIng = raw => Array.isArray(raw) ? raw.map(i => i.label_name || i.name || "").join(", ") : (raw || "");
+    const ingA = normalizeIng(cached?.ingredients);
+    const ingB = normalizeIng(post.ingredients);
+    const ing = ingA.length >= ingB.length ? (ingA || ingB) : (ingB || ingA);
     const liveScore = ing.length > 10
       ? (() => { const r = analyzeIngredients(ing); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })()
       : null;
-    const pName = post.productName || post.name || "";
     setSelectedProduct({
-      productName: pName, brand: post.brand,
-      image: post.adminImage || post.image || post.productImage || "",
-      poreScore: liveScore ?? post.poreScore ?? 0,
-      communityRating: post.communityRating,
+      id: cached?.id || post.productId || "",
+      productId: cached?.id || post.productId || "",
+      _productId: cached?.id || post.productId || "",
+      productName: pName,
+      brand: cached?.brand || post.brand || "",
+      image: getProductImage(cached) || post.productImage || post.image || "",
+      poreScore: liveScore ?? cached?.poreScore ?? post.poreScore ?? 0,
+      communityRating: cached?.communityRating || post.communityRating,
       ingredients: ing,
       flaggedIngredients: ing ? analyzeIngredients(ing).found : (post.flaggedIngredients || []),
-      buyUrl: post.buyUrl || amazonUrl(pName, post.brand, post.barcode, post.asin, post.buyUrl),
+      buyUrl: cached?.buyUrl || post.buyUrl || amazonUrl(pName, post.brand, post.barcode, post.asin, post.buyUrl),
     });
   }
 

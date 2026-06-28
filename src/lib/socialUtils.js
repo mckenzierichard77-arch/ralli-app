@@ -33,7 +33,8 @@ export async function upsertProduct(barcode, data) {
     const updates = {};
     if (data.productName && !existing.productName) updates.productName = data.productName;
     if (data.brand && !existing.brand) updates.brand = data.brand;
-    if (data.ingredients && (!existing.ingredients || existing.ingredients.trim().length < 10)) updates.ingredients = data.ingredients;
+    const existingIng = Array.isArray(existing.ingredients) ? existing.ingredients.map(i => i.label_name || i.name || "").join(", ") : (existing.ingredients || "");
+    if (data.ingredients && (!existingIng || existingIng.trim().length < 10)) updates.ingredients = data.ingredients;
     if (cleanImg && !existing.image && !existing.adminImage) updates.image = cleanImg;
     if (obfImg && !existing.obfImage) updates.obfImage = obfImg;
     if (Object.keys(updates).length) { updates.updatedAt = Date.now(); await updateDoc(ref, updates); }
@@ -69,7 +70,10 @@ export async function recordScan(uid, displayName, photoURL, productId, productN
     let productImage = "";
     try {
       const prodSnap = await getDoc(doc(db, "products", productId));
-      if (prodSnap.exists()) productImage = prodSnap.data().adminImage || prodSnap.data().image || "";
+      if (prodSnap.exists()) {
+        const d = prodSnap.data();
+        productImage = d.adminImage || d.image_url || d.image || "";
+      }
     } catch (e) {}
 
     const postRef = await addDoc(collection(db, "posts"), {
