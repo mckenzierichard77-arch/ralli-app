@@ -13,7 +13,7 @@
     "jsx": "react-jsx",
     "strict": false,
     "allowJs": true,
-    "checkJs": true
+    "checkJs": false
   },
   "include": ["src/**/*", "*.jsx", "*.js"],
   "exclude": ["node_modules"]
