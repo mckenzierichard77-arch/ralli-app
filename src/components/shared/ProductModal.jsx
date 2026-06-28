@@ -15,7 +15,7 @@ import { db } from "../../lib/firebase.js";
 import { poreStyle } from "./PoreScoreBadge.jsx";
 import { ShareProductModal } from "./ShareProductModal.jsx";
 import { useProduct } from "../providers/ProductCacheProvider.jsx";
-import { postScan } from "../../lib/socialUtils.js";
+import { postScan, recordScan } from "../../lib/socialUtils.js";
 import { ProductImage } from "../ui/ProductImage.jsx";
 
 function communityColor(r) {
@@ -470,7 +470,12 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
             const dispName = profile?.displayName || user.displayName || "Anonymous";
             const phURL = profile?.photoURL || user.photoURL || "";
             const brand = product.brand || "";
-            const postId = await postScan(user.uid, dispName, phURL, name, brand, pScore, null, ingText, analysis.found || [], reactionType);
+            let postId;
+            if (pid) {
+              postId = await recordScan(user.uid, dispName, phURL, pid, name, brand, pScore, ingText, analysis.found || [], null, reactionType);
+            } else {
+              postId = await postScan(user.uid, dispName, phURL, name, brand, pScore, null, ingText, analysis.found || [], reactionType);
+            }
             console.log(`[toggleList] created ${reactionType} post for "${name}" → postId=${postId || "(unknown)"}`);
           }
         } catch (e) { console.warn(`[toggleList] failed to create ${field} post for "${name}":`, e?.message || e); }
