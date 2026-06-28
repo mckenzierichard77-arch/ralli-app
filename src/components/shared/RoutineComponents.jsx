@@ -281,15 +281,16 @@ export function ListSection({ title, icon, color, items, onAdd, onRemove, isPriv
           : { overflowX: "auto", scrollbarWidth: "none", msOverflowStyle: "none", WebkitOverflowScrolling: "touch", padding: "0.85rem 1rem", display: "flex", gap: "0.65rem", alignItems: "stretch" }
         }>
           {items.map((item, i) => {
-            const prod = productCache.get(item)
-              || allProducts.find(p => (p.productName || "").toLowerCase() === item.toLowerCase())
-              || allProducts.find(p => (p.productName || "").toLowerCase().includes(item.toLowerCase().split(" ").slice(0, 2).join(" ")));
-            const _cardIng = prod?.ingredients || "";
+            const itemLower = item.toLowerCase();
+            const prod = allProducts.find(p => (p.image_url || "").includes("cloudinary") && (p.productName || p.name || "").toLowerCase() === itemLower)
+              || allProducts.find(p => (p.productName || p.name || "").toLowerCase() === itemLower)
+              || allProducts.find(p => (p.productName || p.name || "").toLowerCase().includes(itemLower.split(" ").slice(0, 2).join(" ")));
+            const _cardIng = Array.isArray(prod?.ingredients) ? prod.ingredients.map(i => i.label_name || i.name || "").join(", ") : (prod?.ingredients || "");
             const _cardScore = _cardIng.trim()
               ? Math.round(analyzeIngredients(_cardIng).avgScore ?? 0)
               : (prod?.poreScore ?? null);
             const ps = _cardScore != null ? poreStyle(_cardScore) : null;
-            const imgSrc = getProductImage(prod);
+            const imgSrc = prod?.image_url || prod?.adminImage || "";
             const hasImg = imgSrc.startsWith("http");
             const cardStyle = layout === "grid"
               ? { background: "#fff", borderRadius: "1rem", border: `1px solid ${T.border}`, cursor: onItemTap ? "pointer" : "default", display: "flex", flexDirection: "column", overflow: "hidden", transition: "border-color 0.15s,box-shadow 0.15s", position: "relative", minWidth: 0 }

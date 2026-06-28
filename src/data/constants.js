@@ -74,7 +74,7 @@ export const FOUNDERS = [
 ];
 
 export const ADMIN_UIDS = []; // add your UID here once you see it in Profile
-export const ADMIN_EMAILS = ["mckenzierichard77@gmail.com", "morganrichard777@gmail.com"];
+export const ADMIN_EMAILS = ["mckenzierichard77@gmail.com", "morganrichard777@gmail.com", "angela@theralliapp.com"];
 export const VA_EMAILS = [
   "banilaroselyn0628@gmail.com",
 ];

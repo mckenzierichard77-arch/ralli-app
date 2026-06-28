@@ -5,13 +5,9 @@ import { db } from "./firebase.js";
 // Filters out blob URLs, empty strings, and low-quality OBF images.
 export function getProductImage(p) {
   if (!p) return "";
-  const candidates = [p.adminImage, p.image, p.productImage];
-  for (const raw of candidates) {
+  for (const raw of [p.adminImage, p.image_url, p.image, p.productImage]) {
     const url = (raw || "").trim();
-    if (!url) continue;
-    if (!url.startsWith("http")) continue;
-    if (url.includes("openbeautyfacts")) continue;
-    return url;
+    if (url.startsWith("http")) return url;
   }
   return "";
 }

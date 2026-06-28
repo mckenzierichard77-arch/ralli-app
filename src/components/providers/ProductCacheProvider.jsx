@@ -22,12 +22,12 @@ export function ProductCacheProvider({ children }) {
         snap.forEach(d => {
           const data = { id: d.id, ...d.data() };
           ix[d.id] = data;
-          const nameLower = (data.productName || "").toLowerCase().trim();
+          const nameLower = (data.productName || data.name || "").toLowerCase().trim();
           if (nameLower) {
             const existing = ixn[nameLower];
             if (!existing) ixn[nameLower] = data;
             else {
-              const score = p => (p.adminImage?2:0) + (p.image?1:0) + ((p.ingredients||"").length>10?2:0) + (p.communityRating?1:0) + (p.scanCount||0)*0.01;
+              const score = p => (p.adminImage?3:0) + (p.image_url?2:0) + (p.image?1:0) + ((p.ingredients||"").length>10?2:0) + (p.communityRating?1:0) + (p.scanCount||0)*0.01;
               if (score(data) > score(existing)) ixn[nameLower] = data;
             }
           }

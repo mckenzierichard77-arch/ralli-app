@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import ReactDOM from "react-dom";
 import {
   getDocs, getDoc, doc, query, collection, where, orderBy, limit,
-  addDoc, updateDoc, setDoc, serverTimestamp, increment,
+  updateDoc, setDoc, serverTimestamp, increment,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { T } from "../../data/tokens.js";
@@ -18,6 +18,7 @@ import { poreStyle, PoreScoreBadge } from "../shared/PoreScoreBadge.jsx";
 import { ProductModal } from "../shared/ProductModal.jsx";
 import { ProductImage } from "../ui/ProductImage.jsx";
 import { GlossaryPage } from "./GlossaryPage.jsx";
+import { AddProductModal } from "../ui/AddProductModal.jsx";
 
 // ---------------------------------------------------------------------------
 // Module-level helpers (ScanPage-only)
@@ -28,7 +29,7 @@ let _productCache = null;
 async function getProductCache() {
   if (_productCache) return _productCache;
   const snap = await getDocs(collection(db, "products"));
-  _productCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  _productCache = snap.docs.map(d => ({ id: d.id, .../** @type {any} */(d.data()) }));
   setTimeout(() => { _productCache = null; }, 5 * 60 * 1000);
   return _productCache;
 }
@@ -96,7 +97,7 @@ async function getProductByBarcode(barcode) {
   if (!barcode) return null;
   try {
     const snap = await getDoc(doc(db, "products", barcode));
-    if (snap.exists()) return { id: snap.id, ...snap.data() };
+    if (snap.exists()) return { id: snap.id, .../** @type {any} */(snap.data()) };
     return null;
   } catch { return null; }
 }
@@ -110,150 +111,36 @@ async function postScan(uid, displayName, photoURL, productName, brand, poreScor
 async function searchProducts(searchTerm) {
   const q = searchTerm.toLowerCase().trim();
   if (!q) return [];
-  const seen = new Set();
-  const results = [];
 
-  // 1. Search Firestore cache first (instant)
-  try {
-    const allCached = await getProductCache();
-    allCached.forEach(p => {
-      const nameMatch  = (p.productName || "").toLowerCase().includes(q);
-      const brandMatch = (p.brand || "").toLowerCase().includes(q);
-      if (nameMatch || brandMatch) {
-        const key = `${p.brand || ""} ${p.productName || ""}`.toLowerCase().trim();
-        if (!seen.has(key)) {
-          seen.add(key);
-          results.push({
-            code: p.barcode || p.id,
-            name: p.productName,
-            brand: p.brand || "",
-            image: p.adminImage || p.image || "",
-            ingredients: p.ingredients || "",
-            poreScore: p.poreScore ?? null,
-            communityRating: p.communityRating || null,
-            scanCount: p.scanCount || 0,
-            buyUrl: p.buyUrl || "",
-            source: p.source || "cache",
-            _productId: p.id,
-            _cached: true,
-            _approved: !!p.approved,
-          });
-        }
-      }
-    });
-  } catch {}
+  const all = await getProductCache();
+  const qt = q;
 
-  // 2. Query OBF live in parallel
-  try {
-    const r = await fetch(
-      `https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(searchTerm)}&search_simple=1&action=process&json=1&page_size=20&fields=product_name,brands,ingredients_text,ingredients_text_en,code,image_front_small_url`,
-      { signal: AbortSignal.timeout(6000) }
-    );
-    const d = await r.json();
-    const newToCache = [];
-    (d.products || []).filter(p => p.product_name && (p.brands || p.product_name)).forEach(p => {
-      const brand = p.brands?.split(",")[0]?.trim() || "";
-      const key   = `${brand} ${p.product_name}`.toLowerCase().trim();
-      const ingredients = p.ingredients_text_en || p.ingredients_text || "";
-      let poreScore = null;
-      try {
-        const analysis = analyzeIngredients(ingredients);
-        if (analysis?.avgScore != null) poreScore = Math.round(analysis.avgScore);
-      } catch {}
+  const normalize = s => s.toLowerCase().replace(/['‘’]/g, "");
+  const tokens = normalize(qt).split(/\s+/).filter(Boolean);
 
-      if (!seen.has(key)) {
-        seen.add(key);
-        const result = {
-          code: p.code,
-          name: p.product_name,
-          brand,
-          image: "",
-          obfImage: p.image_front_small_url || "",
-          ingredients,
-          poreScore,
-          source: "obf",
-          _cached: false,
-        };
-        results.push(result);
-        newToCache.push({
-          productName: p.product_name,
-          brand,
-          barcode: p.code || "",
-          image: "",
-          obfImage: p.image_front_small_url || "",
-          ingredients,
-          poreScore: poreScore ?? 0,
-          category: guessCategory(p.product_name || ""),
-          buyUrl: `https://www.amazon.com/s?k=${encodeURIComponent(brand + " " + p.product_name)}`,
-          approved: false,
-          hidden: false,
-          pendingReview: true,
-          source: "obf-search",
-          isRequest: true,
-          scanCount: 0,
-          uniqueScanners: [],
-          communityRating: null,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-      }
-    });
-
-    if (newToCache.length > 0) {
-      (async () => {
-        try {
-          const existing = await getProductCache();
-          const existingBarcodes = new Set(existing.map(p => p.barcode).filter(Boolean));
-          const existingKeys = new Set(existing.map(p => `${p.brand || ""} ${p.productName || ""}`.toLowerCase().trim()));
-          for (const p of newToCache) {
-            const k = `${p.brand || ""} ${p.productName || ""}`.toLowerCase().trim();
-            if (!existingBarcodes.has(p.barcode) && !existingKeys.has(k)) {
-              await addDoc(collection(db, "products"), p);
-            }
-          }
-          _productCache = null;
-        } catch (e) { console.error("cache error", e); }
-      })();
-    }
-  } catch (e) { console.error("OBF search error", e); }
-
-  const qt = searchTerm.toLowerCase().trim();
-
-  function dedupeKey(r) {
-    const norm = s => (s || "")
-      .toLowerCase()
-      .replace(/\b\d+(\.\d+)?\s?(fl\s?oz|oz|ml|g| g|l|gram|grams|ounce|ounces)\b/g, " ")
-      .replace(/[^a-z0-9]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    return `${norm(r.brand)}|${norm(r.name)}`;
-  }
-  function richness(r) {
-    const tier   = r._cached && r._approved ? (r.image ? 4 : 3) : r._cached ? 2 : 1;
-    const ingLen = (r.ingredients || "").length;
-    const activity = (r.scanCount || 0) + (r.communityRating ? 10 : 0);
-    return tier * 100000 + ingLen + activity;
-  }
-  const bestByKey = new Map();
-  for (const r of results) {
-    const k = dedupeKey(r);
-    if (!k.replace(/[|\s]/g, "")) { bestByKey.set(Symbol(), r); continue; }
-    const existing = bestByKey.get(k);
-    if (!existing || richness(r) > richness(existing)) bestByKey.set(k, r);
-  }
-  const deduped = Array.from(bestByKey.values());
-
-  return deduped
+  return all
+    .filter(p => {
+      const imageUrl = p.image_url || p.adminImage || "";
+      if (!imageUrl || !imageUrl.includes("cloudinary")) return false;
+      const haystack = normalize(`${p.brand || ""} ${p.name || p.productName || ""}`);
+      return tokens.every(t => haystack.includes(t));
+    })
+    .map(p => ({
+      code:        p.id,
+      name:        p.name  || p.productName || "",
+      brand:       p.brand || "",
+      image:       p.image_url || p.adminImage || "",
+      ingredients: p.ingredients || "",
+      poreScore:   p.poreScore ?? null,
+      _productId:  p.id,
+      _cached:     true,
+      _approved:   true,
+    }))
     .sort((a, b) => {
-      const tierA = a._cached && a._approved ? (a.image ? 0 : 1) : a._cached ? 2 : 3;
-      const tierB = b._cached && b._approved ? (b.image ? 0 : 1) : b._cached ? 2 : 3;
-      if (tierA !== tierB) return tierA - tierB;
-      const aExact = (a.name || "").toLowerCase().startsWith(qt) ? 0 : 1;
-      const bExact = (b.name || "").toLowerCase().startsWith(qt) ? 0 : 1;
+      const aExact = (a.name).toLowerCase().startsWith(qt) ? 0 : 1;
+      const bExact = (b.name).toLowerCase().startsWith(qt) ? 0 : 1;
       if (aExact !== bExact) return aExact - bExact;
-      const aActivity = (a.scanCount || 0) + (a.communityRating ? 10 : 0);
-      const bActivity = (b.scanCount || 0) + (b.communityRating ? 10 : 0);
-      return bActivity - aActivity;
+      return (a.name).localeCompare(b.name);
     })
     .slice(0, 30);
 }
@@ -331,118 +218,6 @@ const todayTip = SKIN_TIPS[Math.floor(Date.now() / 86400000) % SKIN_TIPS.length]
 // ---------------------------------------------------------------------------
 // Sub-components (ScanPage-only)
 // ---------------------------------------------------------------------------
-
-function AddProductModal({ onClose, onAdded, user, prefillBarcode = "", prefillName = "" }) {
-  const [productName, setProductName] = useState(prefillName);
-  const [brand, setBrand]             = useState("");
-  const [barcode, setBarcode]         = useState(prefillBarcode);
-  const [ingredients, setIngredients] = useState("");
-  const [saving, setSaving]           = useState(false);
-  const [saved, setSaved]             = useState(false);
-  const [err, setErr]                 = useState("");
-
-  async function handleSave() {
-    if (!productName.trim() || !ingredients.trim()) {
-      setErr("Product name and ingredients are required."); return;
-    }
-    setSaving(true); setErr("");
-    try {
-      const key = (barcode || productName).toLowerCase().trim().replace(/\s+/g, "-");
-      await setDoc(doc(db, "community_products", key), {
-        barcode: barcode.trim(),
-        productName: productName.trim(),
-        brand: brand.trim(),
-        ingredients: ingredients.trim(),
-        addedBy: user?.uid || "anonymous",
-        addedByName: user?.displayName || "",
-        addedAt: serverTimestamp(),
-        verifiedCount: 1,
-      });
-      setSaved(true);
-      setTimeout(() => {
-        onAdded({ productName: productName.trim(), brand: brand.trim(), ingredients: ingredients.trim(), barcode: barcode.trim() });
-        onClose();
-      }, 1200);
-    } catch (e) { setErr("Failed to save. Please try again."); }
-    finally { setSaving(false); }
-  }
-
-  const inp = { width: "100%", padding: "0.75rem 1rem", borderRadius: "0.65rem", border: `1px solid ${T.border}`, fontSize: "0.85rem", color: T.text, background: "#FFFFFF", outline: "none", fontFamily: "'Inter',sans-serif", boxSizing: "border-box", marginBottom: "0.75rem" };
-
-  return ReactDOM.createPortal(
-    <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.45)", zIndex: 9000, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center" }} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: T.surface, borderRadius: "1.5rem 1.5rem 0 0", width: "100%", maxWidth: "480px", padding: "1.5rem 1.25rem 2.5rem", maxHeight: "90vh", overflowY: "auto" }} className="fu">
-        {/* Handle */}
-        <div style={{ width: "2.5rem", height: "0.25rem", background: T.border, borderRadius: "999px", margin: "0 auto 1.25rem" }} />
-
-        <div style={{ fontSize: "1.1rem", fontWeight: "700", color: T.text, marginBottom: "0.3rem", fontFamily: "'Inter',sans-serif" }}>Add missing product</div>
-        <div style={{ fontSize: "0.8rem", color: T.textMid, marginBottom: "1.25rem", lineHeight: 1.5 }}>
-          Help the Ralli community — add this product and everyone benefits instantly.
-        </div>
-
-        <div style={{ fontSize: "0.72rem", color: T.textMid, fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.35rem" }}>Product name *</div>
-        <input style={inp} value={productName} onChange={e => setProductName(e.target.value)} placeholder="e.g. Hydro Boost Water Gel" />
-
-        <div style={{ fontSize: "0.72rem", color: T.textMid, fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.35rem" }}>Brand</div>
-        <input style={inp} value={brand} onChange={e => setBrand(e.target.value)} placeholder="e.g. Neutrogena" />
-
-        <div style={{ fontSize: "0.72rem", color: T.textMid, fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.35rem" }}>Barcode (if known)</div>
-        <input style={inp} value={barcode} onChange={e => setBarcode(e.target.value)} placeholder="e.g. 070501103603" />
-
-        <div style={{ fontSize: "0.72rem", color: T.textMid, fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.35rem" }}>Ingredient list * <span style={{ fontWeight: "400", textTransform: "none", letterSpacing: 0, color: T.textLight }}>— copy from the product label or brand website</span></div>
-        <textarea style={{ ...inp, minHeight: "120px", resize: "vertical", lineHeight: 1.5 }} value={ingredients} onChange={e => setIngredients(e.target.value)} placeholder="Water, Glycerin, Niacinamide, Hyaluronic Acid..." />
-
-        {err && <div style={{ fontSize: "0.8rem", color: T.rose, marginBottom: "0.75rem" }}>{err}</div>}
-
-        {saved ? (
-          <div style={{ padding: "0.9rem", background: "#F0FBF0", border: "1px solid #4CAF5044", borderRadius: "0.75rem", textAlign: "center", fontSize: "0.85rem", color: "#2E7D32", fontWeight: "600" }}>
-            Saved! Analysing ingredients…
-          </div>
-        ) : (
-          <button onClick={handleSave} disabled={saving}
-            style={{ width: "100%", padding: "0.95rem", background: T.accent, color: "#FFFFFF", border: "none", borderRadius: "0.75rem", fontSize: "0.9rem", fontWeight: "600", cursor: "pointer", fontFamily: "'Inter',sans-serif", opacity: saving ? 0.6 : 1 }}>
-            {saving ? "Saving…" : "Save & analyse"}
-          </button>
-        )}
-      </div>
-    </div>,
-    document.body
-  );
-}
-
-
-function SearchResultCard({ p, onSelect }) {
-  const productCache = useProductCache();
-  const live = productCache.get(p._productId) || productCache.get(p.code) || productCache.get(p.name) || null;
-  const fromCatalog = p.source === "catalog" || !!live;
-  const ingText = live?.ingredients || p.ingredients || "";
-  const hasIng  = ingText.trim().length > 0;
-  const pScore  = hasIng ? Math.round(analyzeIngredients(ingText).avgScore || 0) : (live?.poreScore ?? p.poreScore ?? null);
-  const ps      = pScore !== null ? poreStyle(pScore) : null;
-  const liveImg = (live ? getProductImage(live) : "") || p.image || null;
-  const liveBr  = live?.brand || p.brand || "";
-  return (
-    <button onClick={() => onSelect(p)} style={{ background: T.surface, border: `1.5px solid ${fromCatalog ? T.sage + "66" : T.border}`, borderRadius: "0.75rem", cursor: "pointer", textAlign: "left", padding: 0, overflow: "hidden", transition: "all 0.15s", display: "flex", flexDirection: "column", position: "relative" }} onMouseEnter={e => { e.currentTarget.style.borderColor = T.accent; }} onMouseLeave={e => { e.currentTarget.style.borderColor = fromCatalog ? T.sage + "66" : T.border; }}>
-      <div style={{ width: "100%", aspectRatio: "1/1", background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative" }}>
-        <ProductImage src={liveImg} name={p.name} brand={liveBr} barcode={p.code || ""} />
-        {pScore != null && <div style={{ position: "absolute", top: "6px", right: "6px" }}><PoreScoreBadge score={pScore} size="sm" /></div>}
-        {fromCatalog && <div style={{ position: "absolute", top: "5px", left: "5px", fontSize: "0.48rem", fontWeight: "700", background: T.sage, color: "#fff", borderRadius: "999px", padding: "0.12rem 0.4rem", letterSpacing: "0.04em", display: "flex", alignItems: "center", gap: "2px" }}>✓ Verified</div>}
-        {!fromCatalog && p.source === "makeup" && <div style={{ position: "absolute", top: "5px", left: "5px", fontSize: "0.48rem", fontWeight: "700", background: T.rose + "22", color: T.rose, border: `1px solid ${T.rose}33`, borderRadius: "999px", padding: "0.1rem 0.35rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Makeup</div>}
-        {!fromCatalog && !hasIng && <div style={{ position: "absolute", bottom: "5px", left: "5px", fontSize: "0.45rem", fontWeight: "600", background: "rgba(0,0,0,0.5)", color: "#fff", borderRadius: "999px", padding: "0.1rem 0.35rem" }}>No ingredients</div>}
-      </div>
-      <div style={{ padding: "0.5rem 0.6rem" }}>
-        <div style={{ fontSize: "0.75rem", color: T.text, fontWeight: "600", lineHeight: "1.3", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{getProductDisplayName({ productName: p.name, brand: liveBr })}</div>
-        {liveBr && <div style={{ fontSize: "0.65rem", color: T.textMid, fontWeight: "400", marginTop: "1px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{liveBr}</div>}
-        {(p.communityRating || p.scanCount > 0) && (
-          <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginTop: "0.3rem", flexWrap: "wrap" }}>
-            {p.communityRating && <span style={{ fontSize: "0.58rem", color: T.textMid, fontWeight: "600" }}>⭐ {p.communityRating}/10</span>}
-            {p.scanCount > 0 && <span style={{ fontSize: "0.55rem", color: T.textLight }}>{p.scanCount} {p.scanCount === 1 ? "rally" : "rallies"}</span>}
-          </div>
-        )}
-      </div>
-    </button>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // ScanPage
@@ -598,7 +373,16 @@ export function ScanPage({ user, profile, onPosted, onUpdateProfile, onUserTap =
     console.info(`Photo: ${file.name} ${(file.size / 1024).toFixed(0)}kb ${file.type}`);
     if (!ANTHROPIC_KEY) console.error("No ANTHROPIC_KEY set — AI scan will fail");
     try {
-      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
+      const b64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => {
+          const result = r.result;
+          if (typeof result !== "string") return rej(new Error("Unexpected file reader result"));
+          res(result.split(",")[1]);
+        };
+        r.onerror = rej;
+        r.readAsDataURL(file);
+      });
       console.info("Sending image to Claude AI…");
       const result = await extractFromPhoto(b64, file.type, photoMode);
       console.info(`AI response: ${result.slice(0, 120)}`);
@@ -788,8 +572,9 @@ export function ScanPage({ user, profile, onPosted, onUpdateProfile, onUserTap =
                         setSearchRes([]); setHasSearched(false); setSearchErr("");
                       } else {
                         setSearchLoading(true);
-                        clearTimeout(window._scanSearchTimer);
-                        window._scanSearchTimer = setTimeout(async () => {
+                        const scanWindow = /** @type {Window & { _scanSearchTimer?: ReturnType<typeof setTimeout> }} */ (window);
+                        clearTimeout(scanWindow._scanSearchTimer);
+                        scanWindow._scanSearchTimer = setTimeout(async () => {
                           try {
                             const res = await searchProducts(e.target.value);
                             setSearchRes(res); setHasSearched(true);
@@ -874,9 +659,7 @@ export function ScanPage({ user, profile, onPosted, onUpdateProfile, onUserTap =
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.25rem", flexShrink: 0 }}>
                           <PoreScoreBadge score={res.avgScore != null ? Math.round(res.avgScore) : null} size="sm" />
-                          {p._cached && p._approved
-                            ? <span style={{ fontSize: "0.5rem", color: T.sage, background: T.sage + "15", padding: "0.05rem 0.3rem", borderRadius: "999px", border: `1px solid ${T.sage}30`, fontWeight: "700" }}>✓ In Ralli</span>
-                            : null}
+                          {/* ✓ In Ralli badge — commented out until approved field is added to product schema */}
                         </div>
                       </button>
                     );

@@ -13,3 +13,12 @@ build/
 # editor
 .vscode/
 .DS_Store
+
+# Claude Code / agents
+.claude/
+.agents/
+skills-lock.json
+
+# logs
+firestore-debug.log
+*.log
