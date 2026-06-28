@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
 import { T } from "../../data/tokens.js";
-import { resolveProductImage } from "../../lib/imageUtils.js";
 
 export const IMG_CACHE = new Map();
 
@@ -26,41 +25,26 @@ export function PlaceholderCard({ name, brand }) {
 }
 
 export function ProductImage({ src, name, brand, barcode, size = "full" }) {
-  const [imgSrc, setImgSrc] = useState(null);
   const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  const OBF_REVS = ["3", "2", "1", "4", "5"];
 
-  useEffect(() => {
-    setFailed(false); setAttempt(0);
-    const cacheKey = `${barcode || ""}|${brand || ""}|${name || ""}`.toLowerCase();
-    if (IMG_CACHE.has(cacheKey)) { setImgSrc(IMG_CACHE.get(cacheKey)); return; }
-    if (src) { IMG_CACHE.set(cacheKey, src); setImgSrc(src); return; }
-    if (name) {
-      resolveProductImage(brand, name, barcode).then(img => {
-        if (img) { IMG_CACHE.set(cacheKey, img); setImgSrc(img); }
-        else setImgSrc(null);
-      });
-    } else {
-      setImgSrc(null);
-    }
-  }, [src, barcode, name, brand]);
-
-  function handleError() {
-    const nextAttempt = attempt + 1;
-    if (barcode && nextAttempt < OBF_REVS.length) {
-      setAttempt(nextAttempt);
-      const b = barcode.replace(/\D/g, "");
-      const path = b.length === 13
-        ? `${b.slice(0, 3)}/${b.slice(3, 6)}/${b.slice(6, 9)}/${b.slice(9)}`
-        : b;
-      setImgSrc(`https://images.openbeautyfacts.org/images/products/${path}/front_en.${OBF_REVS[nextAttempt]}.full.jpg`);
-    } else {
-      setFailed(true);
-    }
-  }
+  useEffect(() => { setFailed(false); }, [src]);
 
   const dim = size === "full" ? { width: "100%", height: "100%" } : { width: size, height: size };
-  if (!imgSrc || failed) return <div style={{ ...dim, borderRadius: "inherit", overflow: "hidden", flexShrink: 0 }}><PlaceholderCard name={name} brand={brand} /></div>;
-  return <img src={imgSrc} alt={name || ""} style={{ ...dim, objectFit: "contain", padding: "8px", background: "#ffffff", mixBlendMode: "multiply", filter: "brightness(1.05) contrast(1.05)" }} onError={handleError} />;
+
+  if (!src || failed) {
+    return (
+      <div style={{ ...dim, borderRadius: "inherit", overflow: "hidden", flexShrink: 0 }}>
+        <PlaceholderCard name={name} brand={brand} />
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt={name || ""}
+      style={{ ...dim, objectFit: "contain", padding: "8px", background: "#ffffff", mixBlendMode: "multiply", filter: "brightness(1.05) contrast(1.05)" }}
+      onError={() => setFailed(true)}
+    />
+  );
 }

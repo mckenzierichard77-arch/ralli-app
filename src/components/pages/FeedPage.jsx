@@ -31,7 +31,7 @@ async function fetchCuratedRecs() {
       limit(12)
     ));
     if (!snap.empty) {
-      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      return snap.docs.map(d => ({ id: d.id, .../** @type {any} */(d.data()) }));
     }
   } catch {}
   return CURATED_RECS_FALLBACK;
@@ -85,7 +85,7 @@ async function getNotifications(uid) {
   try {
     const q = query(collection(db, "notifications"), where("toUid", "==", uid), orderBy("createdAt", "desc"), limit(30));
     const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return snap.docs.map(d => ({ id: d.id, .../** @type {any} */(d.data()) }));
   } catch { return []; }
 }
 
@@ -97,7 +97,7 @@ async function getFeed(followingIds, currentUid) {
     }
     const q = query(collection(db, "posts"), where("uid", "in", ids), orderBy("createdAt", "desc"), limit(20));
     const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return snap.docs.map(d => ({ id: d.id, .../** @type {any} */(d.data()) }));
   } catch (e) {
     return [];
   }
@@ -107,7 +107,7 @@ async function getGlobalFeed() {
   try {
     const q = query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(30));
     const snap = await getDocs(q);
-    const posts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const posts = snap.docs.map(d => ({ id: d.id, .../** @type {any} */(d.data()) }));
     console.log("[getGlobalFeed] found", posts.length, "posts");
     console.log("[getGlobalFeed] postTypes:", posts.map(p => p.postType));
     console.log("[getGlobalFeed] uids:", [...new Set(posts.map(p => p.uid))]);
@@ -121,7 +121,7 @@ async function getGlobalFeed() {
 async function searchUsers(q) {
   try {
     const snap = await getDocs(collection(db, "users"));
-    return snap.docs.map(d => d.data()).filter(u =>
+    return snap.docs.map(d => /** @type {any} */(d.data())).filter(u =>
       u.displayName?.toLowerCase().includes(q.toLowerCase()) ||
       u.email?.toLowerCase().includes(q.toLowerCase())
     ).slice(0, 10);
@@ -133,7 +133,7 @@ let _productCache = null;
 async function getProductCache() {
   if (_productCache) return _productCache;
   const snap = await getDocs(collection(db, "products"));
-  _productCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  _productCache = snap.docs.map(d => ({ id: d.id, .../** @type {any} */(d.data()) }));
   setTimeout(() => { _productCache = null; }, 5 * 60 * 1000);
   return _productCache;
 }
@@ -246,7 +246,7 @@ async function searchProducts(searchTerm) {
 }
 
 function getDailyMessage() {
-  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).valueOf()) / 86400000);
   return DAILY_MESSAGES[dayOfYear % DAILY_MESSAGES.length];
 }
 
@@ -349,7 +349,8 @@ function FeedSkeleton() {
   );
 }
 
-function CardReveal({ children, delay = 0 }) {
+/** @type {React.FC<{ delay?: number }>} */
+const CardReveal = ({ children, delay = 0 }) => {
   const ref = React.useRef(null);
   React.useEffect(() => {
     const el = ref.current; if (!el) return;
@@ -362,7 +363,7 @@ function CardReveal({ children, delay = 0 }) {
   return <div ref={ref} className="card-hidden" style={{ transitionDelay: `${delay}ms` }}>{children}</div>;
 }
 
-function PageHero({ pageTitle, pageIcon, fixed, rightAction }) {
+function PageHero({ pageTitle, pageIcon, fixed, rightAction = null }) {
   const [msg, setMsg] = useState(fixed || getDailyMessage());
 
   useEffect(() => {
@@ -371,7 +372,7 @@ function PageHero({ pageTitle, pageIcon, fixed, rightAction }) {
     getDocs(collection(db, "config", "editorial", "entries"))
       .then(snap => {
         const quotes = snap.docs
-          .map(d => ({ ...d.data() }))
+          .map(d => ({ .../** @type {any} */(d.data()) }))
           .filter(e => e.type === "quote" && e.scheduledFor <= now)
           .sort((a, b) => b.scheduledFor - a.scheduledFor);
         if (quotes[0]) setMsg(quotes[0].value);
@@ -398,7 +399,7 @@ function ContactSuggestions({ currentUid, currentProfile, onFollow, onUserTap })
         const snap = await getDocs(collection(db, "users"));
         const already = new Set([...(currentProfile?.following || []), currentUid]);
         const all = snap.docs
-          .map(d => ({ uid: d.id, ...d.data() }))
+          .map(d => ({ uid: d.id, .../** @type {any} */(d.data()) }))
           .filter(u => u.uid && !already.has(u.uid) && u.displayName)
           .map(u => ({ ...u, followerCount: (u.followers || []).length }))
           .sort((a, b) => b.followerCount - a.followerCount)
@@ -451,7 +452,7 @@ function TrendingSection({ openProductFromPost, trendingList, friendScans = {}, 
         const snap = await getDocs(query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(300)));
         const map = {};
         snap.docs.forEach(d => {
-          const p = d.data();
+          const p = /** @type {any} */(d.data());
           const ts = p.createdAt?.seconds ? p.createdAt.seconds * 1000 : 0;
           if (ts < weekAgo) return;
           const key = (p.productName || "").toLowerCase().trim();
@@ -605,7 +606,7 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
     getDocs(collection(db, "products")).then(snap => {
       const map = {};
       snap.docs.forEach(d => {
-        const p = d.data();
+        const p = /** @type {any} */(d.data());
         const img = p.adminImage || p.image || "";
         if (img && p.productName) {
           map[p.productName.toLowerCase().trim()] = img;
@@ -646,7 +647,7 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
       const q = query(collection(db, "posts"), where("uid", "in", ids), orderBy("createdAt", "desc"), limit(30));
       unsubFeed = onSnapshot(q, snap => {
         console.log("[FeedPage] snapshot fired —", snap.docs.length, "raw docs");
-        const fetched = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const fetched = snap.docs.map(d => ({ id: d.id, .../** @type {any} */(d.data()) }));
         const FEED_TYPES = new Set(["brokeout", "wantToTry", "loved", "commented", "rated", "scan", "search"]);
         const realPosts = fetched.filter(post => FEED_TYPES.has(post.postType))
           .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
@@ -680,7 +681,7 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
         await Promise.all(chunks.map(async chunk => {
           const snap = await getDocs(query(collection(db, "users"), where("__name__", "in", chunk)));
           snap.docs.forEach(d => {
-            const u = d.data(); const uid = d.id;
+            const u = /** @type {any} */(d.data()); const uid = d.id;
             (u.routine || []).forEach(productName => {
               if (!productName) return;
               const key = productName.toLowerCase().trim();
@@ -699,7 +700,7 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
         const snap = await getDocs(query(collection(db, "users"), limit(50)));
         const counts = {};
         snap.docs.forEach(d => {
-          const u = d.data();
+          const u = /** @type {any} */(d.data());
           if (!u || !Array.isArray(u.routine)) return;
           const seen = new Set();
           u.routine.forEach(productName => {
@@ -742,7 +743,7 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
         where("productName", "==", post.productName), limit(1));
       const snap = await getDocs(q);
       if (!snap.empty) {
-        const p = { id: snap.docs[0].id, ...snap.docs[0].data() };
+        const p = { id: snap.docs[0].id, .../** @type {any} */(snap.docs[0].data()) };
         const ingA = (p.ingredients || "").trim();
         const ingB = (post.ingredients || "").trim();
         const ing = ingA.length >= ingB.length ? (ingA || ingB) : (ingB || ingA);
@@ -820,7 +821,7 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
         const following = new Set(profile?.following || []);
         const myFollowing = profile?.following || [];
         const others = snap.docs
-          .map(d => ({ uid: d.id, ...d.data() }))
+          .map(d => ({ uid: d.id, .../** @type {any} */(d.data()) }))
           .filter(u => u.uid !== user.uid && !following.has(u.uid))
           .map(u => {
             const followerCount = (u.followers || []).length;
@@ -845,10 +846,10 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
         if (followingIds.length > 0) {
           const friendDocs = await Promise.all(
             followingIds.slice(0, 10).map(uid =>
-              getDoc(doc(db, "users", uid)).then(d => d.exists() ? { uid: d.id, ...d.data() } : null).catch(() => null)
+              getDoc(doc(db, "users", uid)).then(d => d.exists() ? { uid: d.id, .../** @type {any} */(d.data()) } : null).catch(() => null)
             )
           );
-          const friends = friendDocs.filter(Boolean);
+          const friends = /** @type {any[]} */(friendDocs.filter(Boolean));
 
           const productCount = {};
           const productFriends = {};
@@ -1098,7 +1099,7 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
               const realPosts = posts.filter(p => !p.uid?.startsWith("seed_"));
               const hasFriendPosts = realPosts.length > 0;
               const recentNotifs = (notifs || []).filter(n => ["like", "comment", "follow"].includes(n.type)).slice(0, 5);
-              const doFollow = async uid => { await followUser(user.uid, uid, profile?.displayName || "Someone", profile?.photoURL || ""); onUpdateProfile({ ...profile, following: [...(profile?.following || []), uid] }); };
+              const doFollow = async uid => { await followUser(user.uid, uid); onUpdateProfile({ ...profile, following: [...(profile?.following || []), uid] }); };
 
               const FeedSectionLabel = ({ label, icon = null, color = T.textLight }) => (
                 <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.6rem", fontWeight: "700", color, textTransform: "uppercase", letterSpacing: "0.12em", padding: "1.1rem 1rem 0.5rem", fontFamily: "'Inter',sans-serif", borderLeft: `3px solid ${T.iceBlue}`, marginLeft: "0.5rem" }}>
@@ -1164,9 +1165,11 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
 
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", padding: "0 0.75rem" }}>
                       {displayFeed.map((p, i) => (
-                        <CardReveal key={p.id} delay={i * 30}>
-                          <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName || ""} currentUserPhoto={profile?.photoURL || ""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap} />
-                        </CardReveal>
+                        <div key={p.id}>
+                          <CardReveal delay={i * 30}>
+                            <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName || ""} currentUserPhoto={profile?.photoURL || ""} onUserTap={onUserTap} onProductTap={openProductFromPost} onDeleted={() => {}} productImageMap={productImageMap} />
+                          </CardReveal>
+                        </div>
                       ))}
                     </div>
 
@@ -1195,9 +1198,11 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
                     {(() => {
                       const realCommunityPosts = posts.filter(p => !p.uid?.startsWith("seed_") && p.uid && p.postType);
                       return realCommunityPosts.slice(0, 6).map((p, i) => (
-                        <CardReveal key={p.id || p.uid + i} delay={i * 40}>
-                          <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName || ""} currentUserPhoto={profile?.photoURL || ""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap} />
-                        </CardReveal>
+                        <div key={p.id || p.uid + i}>
+                          <CardReveal delay={i * 40}>
+                            <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName || ""} currentUserPhoto={profile?.photoURL || ""} onUserTap={onUserTap} onProductTap={openProductFromPost} onDeleted={() => {}} productImageMap={productImageMap} />
+                          </CardReveal>
+                        </div>
                       ));
                     })()}
                   </div>
@@ -1211,9 +1216,11 @@ export function FeedPage({ user, profile, refreshKey, onUserTap, onUpdateProfile
                 <div style={{ paddingBottom: "1rem" }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", padding: "0 0.75rem" }}>
                     {allFollowingPosts.map((p, i) => (
-                      <CardReveal key={p.id} delay={i * 40}>
-                        <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName || ""} currentUserPhoto={profile?.photoURL || ""} onUserTap={onUserTap} onProductTap={openProductFromPost} productImageMap={productImageMap} />
-                      </CardReveal>
+                      <div key={p.id}>
+                        <CardReveal delay={i * 40}>
+                          <PostCard post={p} currentUid={user.uid} currentUserName={profile?.displayName || ""} currentUserPhoto={profile?.photoURL || ""} onUserTap={onUserTap} onProductTap={openProductFromPost} onDeleted={() => {}} productImageMap={productImageMap} />
+                        </CardReveal>
+                      </div>
                     ))}
                   </div>
                   {friendCount < 8 && (

@@ -1,5 +1,20 @@
 import { INGDB } from "../data/ingredients.js";
 
+let ingredientLookupCache = null;
+export function getIngredientLookup() {
+  if (ingredientLookupCache) return ingredientLookupCache;
+  const lookup = [];
+  for (const [name, data] of Object.entries(INGDB)) {
+    const allNames = [name, ...(data.aliases || [])];
+    for (const n of allNames) {
+      if (n) lookup.push({ pattern: n.toLowerCase(), canonical: name, data });
+    }
+  }
+  lookup.sort((a, b) => b.pattern.length - a.pattern.length);
+  ingredientLookupCache = lookup;
+  return lookup;
+}
+
 // Shared ingredient-pattern matcher used by analyzeIngredients and the product-modal pill renderer.
 // Long patterns (>=5 chars): plain substring match.
 // Short patterns (<=4 chars): exact token match or hyphen-bounded chemical notation prefix/suffix.
@@ -17,17 +32,13 @@ export function matchIngredientPattern(token, pattern) {
 }
 
 export function analyzeIngredients(text) {
-  const lower = (text || "").toLowerCase();
+  const str = Array.isArray(text)
+    ? text.map(i => i.label_name || i.name || "").join(", ")
+    : (text || "");
+  const lower = String(str).toLowerCase();
   const tokens = lower.split(/[,;]\s*/).map(t => t.trim()).filter(Boolean);
 
-  const lookup = [];
-  for (const [name, data] of Object.entries(INGDB)) {
-    const allNames = [name, ...(data.aliases || [])];
-    for (const n of allNames) {
-      if (n) lookup.push({ pattern: n.toLowerCase(), canonical: name, data });
-    }
-  }
-  lookup.sort((a, b) => b.pattern.length - a.pattern.length);
+  const lookup = getIngredientLookup();
 
   const found = [];
   const seenCanonical = new Set();

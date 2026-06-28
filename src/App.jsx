@@ -32,10 +32,14 @@ import { WelcomeBackScreen } from "./components/shared/WelcomeBackScreen.jsx";
 import { OurStoryPopup } from "./components/shared/OurStoryPopup.jsx";
 
 // ── ErrorBoundary ──────────────────────────────────────────────
+/**
+ * @typedef {{ error: any, info: any }} ErrorBoundaryState
+ */
+/** @extends {React.Component<{}, ErrorBoundaryState>} */
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null, info: null }; }
   static getDerivedStateFromError(e) { return { error: e }; }
-  componentDidCatch(error, info) { this.setState({ info }); console.error("App error:", error, info); }
+  componentDidCatch(error, info) { (this)["setState"]({ info }); console.error("App error:", error, info); }
   render() {
     if (this.state.error) {
       const isFirebase = this.state.error?.message?.includes("Firebase") || this.state.error?.message?.includes("network") || this.state.error?.message?.includes("fetch");
@@ -52,7 +56,7 @@ class ErrorBoundary extends React.Component {
               ? "Couldn't reach the server. Check your connection and try again."
               : "An unexpected error occurred. Tapping retry usually fixes it."}
           </div>
-          <button onClick={() => this.setState({ error: null, info: null })}
+          <button onClick={() => { const self = /** @type {any} */ (this); self.setState({ error: null, info: null }); }}
             style={{padding:"0.75rem 2rem",background:"#111827",color:"#fff",border:"none",borderRadius:"0.65rem",fontSize:"0.85rem",fontWeight:"600",cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>
             Try again
           </button>
@@ -64,7 +68,7 @@ class ErrorBoundary extends React.Component {
         </div>
       );
     }
-    return this.props.children;
+    return (this)["props"].children;
   }
 }
 

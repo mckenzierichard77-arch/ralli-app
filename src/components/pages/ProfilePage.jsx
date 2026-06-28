@@ -13,7 +13,6 @@ import { analyzeIngredients } from "../../lib/ingredientUtils.js";
 import { getProductImage } from "../../lib/imageUtils.js";
 import { isAdmin, isVA, enrichedByTag } from "../../lib/userUtils.js";
 import { postScan, followUser, unfollowUser, queryFollowersOf, getUserPosts } from "../../lib/socialUtils.js";
-import { useProductCache } from "../providers/ProductCacheProvider.jsx";
 import { Avatar } from "../ui/Avatar.jsx";
 import { ProductImage } from "../ui/ProductImage.jsx";
 import { PlaceholderCard } from "../ui/ProductImage.jsx";
@@ -291,8 +290,7 @@ function ListItemImage({name, color}) {
 // ---------------------------------------------------------------------------
 // ListSection — routine / want-to-try / not-for-me list UI
 // ---------------------------------------------------------------------------
-function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onTogglePrivacy, readOnly, onItemTap, allProducts=[], layout="scroll"}) {
-  const productCache = useProductCache();
+function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onTogglePrivacy, readOnly, onItemTap, allProducts=[], imageRefs={}, layout="scroll"}) {
   const [input, setInput] = useState("");
   const [adding, setAdding] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -396,15 +394,8 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
           : {overflowX:"auto",scrollbarWidth:"none",msOverflowStyle:"none",WebkitOverflowScrolling:"touch",padding:"0.85rem 1rem",display:"flex",gap:"0.65rem",alignItems:"stretch"}
         }>
           {items.map((item,i)=>{
-            const prod = productCache.get(item)
-              || allProducts.find(p=>(p.productName||"").toLowerCase()===item.toLowerCase())
-              || allProducts.find(p=>(p.productName||"").toLowerCase().includes(item.toLowerCase().split(" ").slice(0,2).join(" ")));
-            const _cardIng = prod?.ingredients || "";
-            const _cardScore = _cardIng.trim()
-              ? Math.round(analyzeIngredients(_cardIng).avgScore ?? 0)
-              : (prod?.poreScore ?? null);
-            const ps = _cardScore != null ? poreStyle(_cardScore) : null;
-            const imgSrc = getProductImage(prod);
+            const ref = Object.values(imageRefs).find(r => r.name === item);
+            const imgSrc = ref?.image_url || "";
             const hasImg = imgSrc.startsWith("http");
             const cardStyle = layout === "grid"
               ? {background:"#fff",borderRadius:"1rem",border:`1px solid ${T.border}`,cursor:onItemTap?"pointer":"default",display:"flex",flexDirection:"column",overflow:"hidden",transition:"border-color 0.15s,box-shadow 0.15s",position:"relative",minWidth:0}
@@ -436,13 +427,8 @@ function ListSection({title, icon, color, items, onAdd, onRemove, isPrivate, onT
                   }
                 </div>
                 <div style={{padding:"0.5rem 0.55rem",flex:1,display:"flex",flexDirection:"column",gap:"0.2rem"}}>
-                  {prod?.brand&&<div style={{fontSize:"0.52rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.07em",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prod.brand}</div>}
-                  <div style={{fontSize:"0.7rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{getProductDisplayName({productName: item, brand: prod?.brand||""})}</div>
-                  {ps&&(
-                    <div style={{marginTop:"auto",display:"inline-flex",alignItems:"center",gap:"2px",background:ps.color+"15",borderRadius:"999px",padding:"0.12rem 0.4rem",alignSelf:"flex-start"}}>
-                      <span style={{fontSize:"0.6rem",fontWeight:"800",color:ps.color}}>{_cardScore}/5</span>
-                    </div>
-                  )}
+                  {ref?.brand&&<div style={{fontSize:"0.52rem",fontWeight:"700",color:T.textLight,textTransform:"uppercase",letterSpacing:"0.07em",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ref.brand}</div>}
+                  <div style={{fontSize:"0.7rem",fontWeight:"600",color:T.text,fontFamily:"'Inter',sans-serif",lineHeight:1.25,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{getProductDisplayName({productName: item, brand: ref?.brand||""})}</div>
                 </div>
               </div>
             );
@@ -1936,21 +1922,22 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       {activeTab==="routine"&&(
         <div className="fu">
           {(()=>{
-            const allProds = [...shopProducts, ...posts];
+            const routineRefs = profile?.routineRefs || {};
             function openListItem(name) {
-              const found = allProds.find(p=>(p.productName||p.name||"").toLowerCase()===name.toLowerCase());
+              const ref = Object.values(routineRefs).find(r => r.name === name);
               setSelectedProduct({
-                id: found?.id || "",
-                productId: found?.id || "",
+                id: ref?.id||"",
+                productId: ref?.id||"",
+                _productId: ref?.id||"",
                 productName: name,
-                brand: found?.brand||"",
-                poreScore: found?.poreScore??0,
-                communityRating: found?.communityRating||null,
-                image: getProductImage(found),
-                adminImage: found?.adminImage||"",
-                ingredients: found?.ingredients||"",
-                flaggedIngredients: found?.flaggedIngredients||[],
-                buyUrl: found?.buyUrl||"",
+                brand: ref?.brand||"",
+                image: ref?.image_url||"",
+                image_url: ref?.image_url||"",
+                poreScore: 0,
+                communityRating: null,
+                ingredients: "",
+                flaggedIngredients: [],
+                buyUrl: "",
               });
             }
             return (<>
@@ -1962,7 +1949,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             onTogglePrivacy={()=>togglePrivacy("routine")}
             onAdd={v=>addToList("routine",v)}
             onRemove={v=>removeFromList("routine",v)}
-            allProducts={allProds}
+            imageRefs={routineRefs}
             onItemTap={openListItem}
           />
           <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate} onUserTap={onUserTap}/>
@@ -1974,21 +1961,24 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       {activeTab==="lists"&&(
         <div className="fu">
           {(()=>{
-            const allProds = [...shopProducts, ...posts];
+            const wantToTryRefs = profile?.wantToTryRefs || {};
+            const brokeoutRefs = profile?.brokeoutRefs || {};
             function openListItem(name) {
-              const found = allProds.find(p=>(p.productName||p.name||"").toLowerCase()===name.toLowerCase());
+              const ref = Object.values(wantToTryRefs).find(r => r.name === name)
+                || Object.values(brokeoutRefs).find(r => r.name === name);
               setSelectedProduct({
-                id: found?.id || "",
-                productId: found?.id || "",
+                id: ref?.id||"",
+                productId: ref?.id||"",
+                _productId: ref?.id||"",
                 productName: name,
-                brand: found?.brand||"",
-                poreScore: found?.poreScore??0,
-                communityRating: found?.communityRating||null,
-                image: getProductImage(found),
-                adminImage: found?.adminImage||"",
-                ingredients: found?.ingredients||"",
-                flaggedIngredients: found?.flaggedIngredients||[],
-                buyUrl: found?.buyUrl||"",
+                brand: ref?.brand||"",
+                image: ref?.image_url||"",
+                image_url: ref?.image_url||"",
+                poreScore: 0,
+                communityRating: null,
+                ingredients: "",
+                flaggedIngredients: [],
+                buyUrl: "",
               });
             }
             return (<>
@@ -1999,7 +1989,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             onTogglePrivacy={()=>togglePrivacy("wantToTry")}
             onAdd={v=>addToList("wantToTry",v)}
             onRemove={v=>removeFromList("wantToTry",v)}
-            allProducts={allProds}
+            imageRefs={wantToTryRefs}
             onItemTap={openListItem}
           />
           <ListSection
@@ -2009,7 +1999,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
             onTogglePrivacy={()=>togglePrivacy("brokeout")}
             onAdd={v=>addToList("brokeout",v)}
             onRemove={v=>removeFromList("brokeout",v)}
-            allProducts={allProds}
+            imageRefs={brokeoutRefs}
             onItemTap={openListItem}
           />
           <ProductModal product={selectedProduct} onClose={()=>setSelectedProduct(null)} user={user} profile={profile} onUpdateProfile={onUpdate} onUserTap={onUserTap}/>

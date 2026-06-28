@@ -3,13 +3,13 @@ import ReactDOM from "react-dom";
 import {
   doc, getDoc, getDocs, addDoc, setDoc, deleteDoc, updateDoc,
   collection, query, where, limit, serverTimestamp, increment,
-  arrayRemove, arrayUnion,
+  arrayRemove, arrayUnion, deleteField,
 } from "firebase/firestore";
 import { T } from "../../data/tokens.js";
 import { ACTIVES } from "../../data/actives.js";
 import { INGDB, INGDB_META } from "../../data/ingredients.js";
 import { AMAZON_AFFILIATE_TAG } from "../../data/constants.js";
-import { analyzeIngredients, matchIngredientPattern } from "../../lib/ingredientUtils.js";
+import { analyzeIngredients, matchIngredientPattern, getIngredientLookup } from "../../lib/ingredientUtils.js";
 import { getProductImage } from "../../lib/imageUtils.js";
 import { db } from "../../lib/firebase.js";
 import { poreStyle } from "./PoreScoreBadge.jsx";
@@ -241,12 +241,18 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
   const productName = incomingProduct?.productName || incomingProduct?.name || "";
   const canonicalProduct = useProduct(incomingProduct?.id || incomingProduct?.productId || productName, null);
   const product = useMemo(() => {
-    if (!canonicalProduct) return incomingProduct || {};
-    return {
+    const base = !canonicalProduct ? (incomingProduct || {}) : {
       ...(incomingProduct || {}),
       ...canonicalProduct,
       flaggedIngredients: canonicalProduct.flaggedIngredients || incomingProduct?.flaggedIngredients || [],
-      image: getProductImage(canonicalProduct) || incomingProduct?.image || "",
+      image: getProductImage(canonicalProduct) || incomingProduct?.image_url || incomingProduct?.image || "",
+    };
+    const ing = base.ingredients;
+    return {
+      ...base,
+      ingredients: Array.isArray(ing)
+        ? ing.map(i => i.label_name || i.name || "").join(", ")
+        : (ing || ""),
     };
   }, [incomingProduct, canonicalProduct]);
 
@@ -255,21 +261,25 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
   const modalRef = useRef(null);
 
   useEffect(() => {
-    const scrollY = window.pageYOffset;
-    const scrollEls = Array.from(document.querySelectorAll("*")).filter(el => {
-      if (modalRef.current && modalRef.current.contains(el)) return false;
-      const s = window.getComputedStyle(el);
-      return (s.overflowY === "auto" || s.overflowY === "scroll") && el.scrollHeight > el.clientHeight;
-    });
-    const saved = scrollEls.map(el => ({ el, top: el.scrollTop }));
-    scrollEls.forEach(el => { el.style.overflow = "hidden"; });
-    document.body.style.cssText += `;overflow:hidden;position:fixed;top:-${scrollY}px;width:100%;`;
+    const scrollY = window.scrollY || window.pageYOffset || 0;
+    const prevBodyOverflow = document.body.style.overflow;
+    const prevBodyPosition = document.body.style.position;
+    const prevBodyTop = document.body.style.top;
+    const prevBodyWidth = document.body.style.width;
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+
+    document.body.style.overflow = "hidden";
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.width = "100%";
+    document.documentElement.style.overflow = "hidden";
+
     return () => {
-      saved.forEach(({ el, top }) => { el.style.overflow = ""; el.scrollTop = top; });
-      document.body.style.overflow = "";
-      document.body.style.position = "";
-      document.body.style.top = "";
-      document.body.style.width = "";
+      document.body.style.overflow = prevBodyOverflow;
+      document.body.style.position = prevBodyPosition;
+      document.body.style.top = prevBodyTop;
+      document.body.style.width = prevBodyWidth;
+      document.documentElement.style.overflow = prevHtmlOverflow;
       window.scrollTo(0, scrollY);
     };
   }, []);
@@ -337,12 +347,61 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
     });
   }, [user?.uid, productName]);
 
-  const _ingAnalysis = product.ingredients ? analyzeIngredients(product.ingredients) : null;
+  const _ingAnalysis = useMemo(() => product.ingredients ? analyzeIngredients(product.ingredients) : null, [product.ingredients]);
+  const safeHighlights = useMemo(() => {
+    if (!product.ingredients) return [];
+    const res = _ingAnalysis || analyzeIngredients(product.ingredients);
+    return (res.found || [])
+      .filter(i => i.score === 0 && !i.irritant)
+      .filter(i => ["niacinamide", "hyaluronic acid", "sodium hyaluronate", "ceramide", "glycerin", "centella asiatica", "salicylic acid", "retinol", "panthenol", "allantoin", "squalane", "zinc pca", "azelaic acid", "alpha-arbutin"].includes(i.name.toLowerCase()))
+      .slice(0, 3);
+  }, [_ingAnalysis, product.ingredients]);
   const liveScore = _ingAnalysis
     ? (_ingAnalysis.avgScore != null ? Math.round(_ingAnalysis.avgScore) : (_ingAnalysis.poreCloggers?.length ? 1 : 0))
     : (product.poreScore ?? 0);
   const ps = poreStyle(liveScore);
   const cc = communityColor(product.communityRating || 0);
+
+  const { poreCloggers: modalCloggers, irritants: modalIrritants } = useMemo(() => {
+    if (_ingAnalysis) return { poreCloggers: (_ingAnalysis.poreCloggers || []).sort((a, b) => b.score - a.score).slice(0, 6), irritants: (_ingAnalysis.irritants || []).slice(0, 6) };
+    if (product.flaggedIngredients?.length) {
+      const mapped = product.flaggedIngredients.map(raw => {
+        if (raw && typeof raw === "object") return { name: raw.name || "", score: raw.score ?? 3, note: raw.note ?? "Potential pore-clogger", irritant: raw.irritant };
+        const rawName = String(raw || "");
+        const key = rawName.toLowerCase().replace(/\s*\(.*?\)/g, "").trim();
+        const dbEntry = INGDB[key] || Object.entries(INGDB).find(([k, v]) => k === key || (v.aliases || []).some(a => a === key))?.[1];
+        return { name: rawName, score: dbEntry?.score ?? 3, note: dbEntry?.note ?? "Potential pore-clogger", irritant: dbEntry?.irritant };
+      });
+      return { poreCloggers: mapped.filter(i => i.score >= 1).sort((a, b) => b.score - a.score), irritants: mapped.filter(i => i.irritant && i.score < 1) };
+    }
+    return { poreCloggers: [], irritants: [] };
+  }, [_ingAnalysis, product.flaggedIngredients]);
+
+  const ingredientChips = useMemo(() => {
+    if (!product.ingredients?.trim()) return null;
+    const lookup = getIngredientLookup();
+    return product.ingredients.split(",").map((ingRaw, i) => {
+      const trimmed = ingRaw.trim();
+      if (!trimmed) return null;
+      const lowered = trimmed.toLowerCase();
+      const hit = lookup.find(entry => matchIngredientPattern(lowered, entry.pattern));
+      const dbEntry = hit ? hit.data : null;
+      const isPoreClogger = !!(dbEntry && dbEntry.score >= 1);
+      const isIrritant = !!(dbEntry && dbEntry.irritant && !isPoreClogger);
+      const isSelected = selectedIngredient?.name === trimmed;
+      const styleByKind = (() => {
+        if (isPoreClogger) return { bg: "#FAECE7", color: "#712B13", icon: " ⚠", weight: "600" };
+        if (isIrritant) return { bg: "#FBF1DE", color: "#8B6914", icon: " ⓘ", weight: "600" };
+        return { bg: T.surfaceAlt, color: T.textMid, icon: "", weight: "400" };
+      })();
+      return (
+        <button key={i} onClick={() => setSelectedIngredient(isSelected ? null : { name: trimmed, irritant: dbEntry?.irritant, score: dbEntry?.score ?? 0 })}
+          style={{ fontSize: "0.6rem", padding: "0.18rem 0.55rem", borderRadius: 20, cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.12s", border: isSelected ? `1.5px solid ${T.navy}` : "none", background: isSelected ? (isPoreClogger ? "#FAECE7" : isIrritant ? "#FBF1DE" : T.accentSoft) : styleByKind.bg, color: styleByKind.color, fontWeight: styleByKind.weight, outline: "none" }}>
+          {trimmed}{styleByKind.icon}
+        </button>
+      );
+    });
+  }, [product.ingredients, selectedIngredient]);
 
   const _listName = productName || product.name || "";
   const inRoutine = (profile?.routine || []).includes(_listName);
@@ -374,9 +433,17 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
     if (!name.trim()) return;
     if (!inList && navigator.vibrate) navigator.vibrate([8, 40, 8]);
     try {
+      const pid = product._productId || product.productId || product.id || "";
+      const imgUrl = product.image || product.image_url || "";
       if (inList) {
-        await updateDoc(doc(db, "users", user.uid), { [field]: arrayRemove(name) });
-        onUpdateProfile?.(p => ({ ...p, [field]: (p[field] || []).filter(v => v !== name) }));
+        const updates = { [field]: arrayRemove(name) };
+        if (pid) updates[`${field}Refs.${pid}`] = deleteField();
+        await updateDoc(doc(db, "users", user.uid), updates);
+        onUpdateProfile?.(p => {
+          const refs = { ...(p[`${field}Refs`] || {}) };
+          if (pid) delete refs[pid];
+          return { ...p, [field]: (p[field] || []).filter(v => v !== name), [`${field}Refs`]: refs };
+        });
         try {
           const reactionType = field === "routine" ? "loved" : field === "brokeout" ? "brokeout" : field === "wantToTry" ? "wantToTry" : null;
           if (reactionType) {
@@ -386,8 +453,14 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
           }
         } catch (e) { console.warn("toggleList: failed to delete linked post", e); }
       } else {
-        await updateDoc(doc(db, "users", user.uid), { [field]: arrayUnion(name) });
-        onUpdateProfile?.(p => ({ ...p, [field]: [...(p[field] || []), name] }));
+        const updates = { [field]: arrayUnion(name) };
+        if (pid && imgUrl) updates[`${field}Refs.${pid}`] = { id: pid, name, brand: product.brand || "", image_url: imgUrl };
+        await updateDoc(doc(db, "users", user.uid), updates);
+        onUpdateProfile?.(p => {
+          const refs = { ...(p[`${field}Refs`] || {}) };
+          if (pid && imgUrl) refs[pid] = { id: pid, name, brand: product.brand || "", image_url: imgUrl };
+          return { ...p, [field]: [...(p[field] || []), name], [`${field}Refs`]: refs };
+        });
         try {
           const reactionType = field === "routine" ? "loved" : field === "brokeout" ? "brokeout" : field === "wantToTry" ? "wantToTry" : null;
           if (reactionType) {
@@ -408,26 +481,11 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
     } catch (e) { console.error("toggleList error", e); }
   }
 
-  const { poreCloggers: modalCloggers, irritants: modalIrritants } = (() => {
-    if (_ingAnalysis) return { poreCloggers: (_ingAnalysis.poreCloggers || []).sort((a, b) => b.score - a.score).slice(0, 6), irritants: (_ingAnalysis.irritants || []).slice(0, 6) };
-    if (product.flaggedIngredients?.length) {
-      const mapped = product.flaggedIngredients.map(raw => {
-        if (raw && typeof raw === "object") return { name: raw.name || "", score: raw.score ?? 3, note: raw.note ?? "Potential pore-clogger", irritant: raw.irritant };
-        const rawName = String(raw || "");
-        const key = rawName.toLowerCase().replace(/\s*\(.*?\)/g, "").trim();
-        const dbEntry = INGDB[key] || Object.entries(INGDB).find(([k, v]) => k === key || (v.aliases || []).some(a => a === key))?.[1];
-        return { name: rawName, score: dbEntry?.score ?? 3, note: dbEntry?.note ?? "Potential pore-clogger", irritant: dbEntry?.irritant };
-      });
-      return { poreCloggers: mapped.filter(i => i.score >= 1).sort((a, b) => b.score - a.score), irritants: mapped.filter(i => i.irritant && i.score < 1) };
-    }
-    return { poreCloggers: [], irritants: [] };
-  })();
-
   const DIAL_R = 28;
   const DIAL_CIRC = 2 * Math.PI * DIAL_R;
   const dialFill = Math.min(liveScore / 5, 1);
   const dialDash = `${dialFill * DIAL_CIRC} ${DIAL_CIRC}`;
-  const scoreLabel = ["Clear", "Minimal", "Low", "High", "High", "Avoid"][liveScore] || "Clear";
+  const scoreLabel = ["Clear", "Minimal", "Low risk", "Medium risk", "High risk", "Avoid"][liveScore] || "Clear";
   const scoreSubtext = ["Won't clog pores", "Very unlikely to clog", "May affect some skin", "Likely to clog pores", "High clog risk", "Avoid — clogs pores"][liveScore] || "";
 
   const commStars = product.communityRating ? (() => {
@@ -440,9 +498,9 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
   return (
     <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 9500, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center" }}>
       {shareOpen && <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 19000 }}><ShareProductModal user={user || { uid: "" }} product={product} onClose={() => setShareOpen(false)} /></div>}
-      <div onClick={() => { setSelectedIngredient(null); onClose(); }} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(28,28,26,0.45)", backdropFilter: "blur(4px)", cursor: "pointer" }} />
+      <div onClick={() => { setSelectedIngredient(null); onClose(); }} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(28,28,26,0.45)", cursor: "pointer" }} />
 
-      <div ref={modalRef} style={{ position: "relative", width: "100%", maxWidth: "480px", background: T.surface, borderRadius: "1.5rem 1.5rem 0 0", padding: "1.25rem 1.25rem", paddingBottom: "calc(2.5rem + env(safe-area-inset-bottom))", boxShadow: "0 -8px 40px rgba(28,28,26,0.15)", maxHeight: "92vh", overflowY: selectedIngredient ? "hidden" : "auto", zIndex: 1 }} className="fu">
+      <div ref={modalRef} style={{ position: "relative", width: "100%", maxWidth: "480px", background: T.surface, borderRadius: "1.5rem 1.5rem 0 0", padding: "1.25rem 1.25rem", paddingBottom: "calc(2.5rem + env(safe-area-inset-bottom))", boxShadow: "0 -8px 40px rgba(28,28,26,0.15)", maxHeight: "92vh", overflowY: selectedIngredient ? "hidden" : "auto", zIndex: 1 }}>
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "1rem", position: "relative" }}>
           <div style={{ width: "36px", height: "4px", background: T.border, borderRadius: "999px" }} />
@@ -453,7 +511,7 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
         </div>
 
         <div style={{ width: "100%", height: "190px", background: `linear-gradient(135deg,${T.iceBlue}40,${T.surfaceAlt})`, borderRadius: "1rem", overflow: "hidden", marginBottom: "1.1rem", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${T.iceBlue}66` }}>
-          <ProductImage src={getProductImage(product)} name={product.productName} brand={product.brand} barcode={product.barcode} />
+          <ProductImage src={getProductImage(product)} name={product.productName} brand={product.brand} barcode={product.barcode || ""} />
         </div>
 
         <div style={{ marginBottom: "1rem" }}>
@@ -474,7 +532,7 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: "0.55rem", color: T.textLight, fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "0.2rem", fontFamily: "'Inter',sans-serif" }}>Pore Score</div>
-            <div style={{ fontSize: "1rem", fontWeight: "700", color: T.text, fontFamily: "'Inter',sans-serif", lineHeight: 1.2 }}>{scoreLabel} risk</div>
+            <div style={{ fontSize: "1rem", fontWeight: "700", color: T.text, fontFamily: "'Inter',sans-serif", lineHeight: 1.2 }}>{scoreLabel}</div>
             <div style={{ fontSize: "0.68rem", color: T.textLight, fontFamily: "'Inter',sans-serif", marginTop: "0.15rem" }}>{scoreSubtext}</div>
           </div>
           <div style={{ textAlign: "right", flexShrink: 0 }}>
@@ -705,35 +763,7 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
             </div>
             <div style={{ fontSize: "0.58rem", color: T.textLight, marginBottom: "0.5rem", fontFamily: "'Inter',sans-serif" }}>Tap any ingredient to learn more</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.22rem", marginBottom: "0.4rem" }}>
-              {(() => {
-                const lookup = [];
-                for (const [n, d] of Object.entries(INGDB)) {
-                  const all = [n, ...(d.aliases || [])];
-                  for (const v of all) if (v) lookup.push({ pattern: v.toLowerCase(), data: d });
-                }
-                lookup.sort((a, b) => b.pattern.length - a.pattern.length);
-                return product.ingredients.split(",").map((ingRaw, i) => {
-                  const trimmed = ingRaw.trim();
-                  if (!trimmed) return null;
-                  const lowered = trimmed.toLowerCase();
-                  const hit = lookup.find(entry => matchIngredientPattern(lowered, entry.pattern));
-                  const dbEntry = hit ? hit.data : null;
-                  const isPoreClogger = !!(dbEntry && dbEntry.score >= 1);
-                  const isIrritant = !!(dbEntry && dbEntry.irritant && !isPoreClogger);
-                  const isSelected = selectedIngredient?.name === trimmed;
-                  const styleByKind = (() => {
-                    if (isPoreClogger) return { bg: "#FAECE7", color: "#712B13", icon: " ⚠", weight: "600" };
-                    if (isIrritant) return { bg: "#FBF1DE", color: "#8B6914", icon: " ⓘ", weight: "600" };
-                    return { bg: T.surfaceAlt, color: T.textMid, icon: "", weight: "400" };
-                  })();
-                  return (
-                    <button key={i} onClick={() => setSelectedIngredient(isSelected ? null : { name: trimmed, irritant: dbEntry?.irritant, score: dbEntry?.score ?? 0 })}
-                      style={{ fontSize: "0.6rem", padding: "0.18rem 0.55rem", borderRadius: 20, cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.12s", border: isSelected ? `1.5px solid ${T.navy}` : "none", background: isSelected ? (isPoreClogger ? "#FAECE7" : isIrritant ? "#FBF1DE" : T.accentSoft) : styleByKind.bg, color: styleByKind.color, fontWeight: styleByKind.weight, outline: "none" }}>
-                      {trimmed}{styleByKind.icon}
-                    </button>
-                  );
-                });
-              })()}
+              {ingredientChips}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem", fontSize: "0.56rem", fontStyle: "italic", fontFamily: "'Inter',sans-serif" }}>
               <div style={{ color: "#712B13" }}>⚠ may clog pores</div>
