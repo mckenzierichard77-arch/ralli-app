@@ -610,7 +610,7 @@ export function ScanPage({ user, profile, onPosted, onUpdateProfile, onUserTap =
 
           {/* Type tab */}
           {inputMode === "type" && (
-            <div className="fu">
+            <div>
               <div style={{ fontSize: "0.75rem", color: T.textLight, marginBottom: "0.5rem", fontFamily: "'Inter',sans-serif", lineHeight: 1.5 }}>
                 Copy the ingredient list from the product's packaging or brand website and paste it below.
               </div>
@@ -624,7 +624,7 @@ export function ScanPage({ user, profile, onPosted, onUpdateProfile, onUserTap =
 
           {/* Search tab */}
           {inputMode === "search" && (
-            <div className="fu">
+            <div>
               {searchErr && searchErr !== "no_results" && <div style={{ padding: "0.65rem", background: "#FBF0EE", border: `1px solid ${T.rose}44`, borderRadius: "0.5rem", fontSize: "0.78rem", color: T.rose, marginBottom: "0.75rem" }}>{searchErr}</div>}
               {searchErr === "no_results" && (
                 <div style={{ textAlign: "center", padding: "1.25rem 0.5rem" }}>
@@ -675,7 +675,7 @@ export function ScanPage({ user, profile, onPosted, onUpdateProfile, onUserTap =
 
           {/* Results */}
           {results && inputMode === "type" && (
-            <div style={{ marginTop: "1.25rem", borderTop: `1px solid ${T.border}`, paddingTop: "1.25rem" }} className="fu">
+            <div style={{ marginTop: "1.25rem", borderTop: `1px solid ${T.border}`, paddingTop: "1.25rem" }}>
 
               {/* Pore clog score */}
               <div style={{ marginBottom: "0.75rem", padding: "0.6rem 0.85rem", background: poreStyle(Math.round(results.avgScore || 0)).color + "12", borderRadius: "0.75rem", border: `1px solid ${poreStyle(Math.round(results.avgScore || 0)).color}25`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>

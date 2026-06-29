@@ -378,9 +378,11 @@ function ProductModalInner({ product: incomingProduct, onClose, user, profile, o
   }, [_ingAnalysis, product.flaggedIngredients]);
 
   const ingredientChips = useMemo(() => {
-    if (!product.ingredients?.trim()) return null;
+    const rawIng = product.ingredients;
+    const ingStr = Array.isArray(rawIng) ? rawIng.map(i => i.label_name || i.name || "").join(", ") : (rawIng || "");
+    if (!ingStr.trim()) return null;
     const lookup = getIngredientLookup();
-    return product.ingredients.split(",").map((ingRaw, i) => {
+    return ingStr.split(",").map((ingRaw, i) => {
       const trimmed = ingRaw.trim();
       if (!trimmed) return null;
       const lowered = trimmed.toLowerCase();

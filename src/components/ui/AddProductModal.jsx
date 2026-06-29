@@ -43,7 +43,7 @@ export function AddProductModal({ onClose, onAdded, user, prefillBarcode = "", p
 
   return ReactDOM.createPortal(
     <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.45)", zIndex: 9000, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center" }} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: T.surface, borderRadius: "1.5rem 1.5rem 0 0", width: "100%", maxWidth: "480px", padding: "1.5rem 1.25rem 2.5rem", maxHeight: "90vh", overflowY: "auto" }} className="fu">
+      <div style={{ background: T.surface, borderRadius: "1.5rem 1.5rem 0 0", width: "100%", maxWidth: "480px", padding: "1.5rem 1.25rem 2.5rem", maxHeight: "90vh", overflowY: "auto" }}>
         {/* Handle */}
         <div style={{ width: "2.5rem", height: "0.25rem", background: T.border, borderRadius: "999px", margin: "0 auto 1.25rem" }} />
 

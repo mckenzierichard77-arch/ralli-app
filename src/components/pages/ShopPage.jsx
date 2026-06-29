@@ -141,7 +141,9 @@ async function getShopProducts() {
     const CAT_LIMIT = 15;
     const candidates = snap.docs
       .map(d => {
-        const p = { id: d.id, ...d.data() };
+        const raw = d.data();
+        if (Array.isArray(raw.ingredients)) raw.ingredients = raw.ingredients.map(i => i.label_name || i.name || "").join(", ");
+        const p = { id: d.id, ...raw };
         if (p.ingredients && p.ingredients.trim().length > 10) {
           const live = analyzeIngredients(p.ingredients).avgScore;
           if (live != null) p.poreScore = Math.round(live);
@@ -698,15 +700,15 @@ export function AdminFounderPicks() {
       setLoading(true);
       try {
         const prodSnap = await getDocs(collection(db, "products"));
-        setProducts(prodSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => p.approved));
+        setProducts(prodSnap.docs.map(d => { const r = d.data(); if (Array.isArray(r.ingredients)) r.ingredients = r.ingredients.map(i => i.label_name || i.name || "").join(", "); return { id: d.id, ...r }; }).filter(p => p.approved));
       } catch (e) { console.error("AdminFounderPicks products error:", e); }
       try {
         const pickSnap = await getDocs(query(collection(db, "founder_picks"), orderBy("order", "asc")));
-        setPicks(pickSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setPicks(pickSnap.docs.map(d => { const r = d.data(); if (Array.isArray(r.ingredients)) r.ingredients = r.ingredients.map(i => i.label_name || i.name || "").join(", "); return { id: d.id, ...r }; }));
       } catch {
         try {
           const pickSnap = await getDocs(collection(db, "founder_picks"));
-          setPicks(pickSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+          setPicks(pickSnap.docs.map(d => { const r = d.data(); if (Array.isArray(r.ingredients)) r.ingredients = r.ingredients.map(i => i.label_name || i.name || "").join(", "); return { id: d.id, ...r }; }));
         } catch (e) { console.error("AdminFounderPicks picks error:", e); }
       }
       setLoading(false);
@@ -976,9 +978,11 @@ export function ShopPage({ user, profile, onUpdateProfile }) {
       const q = query(collection(db, "products"), where("productName", "==", post.productName || post.name || ""), limit(1));
       const snap = await getDocs(q);
       if (!snap.empty) {
-        const p = { id: snap.docs[0].id, ...snap.docs[0].data() };
+        const rawP = snap.docs[0].data();
+        if (Array.isArray(rawP.ingredients)) rawP.ingredients = rawP.ingredients.map(i => i.label_name || i.name || "").join(", ");
+        const p = { id: snap.docs[0].id, ...rawP };
         const ingA = (p.ingredients || "").trim();
-        const ingB = (post.ingredients || "").trim();
+        const rawIB = post.ingredients || ""; const ingB = (Array.isArray(rawIB) ? rawIB.map(i => i.label_name || i.name || "").join(", ") : rawIB).trim();
         const ing = ingA.length >= ingB.length ? (ingA || ingB) : (ingB || ingA);
         const liveScore = ing.length > 10 ? (() => { const r = analyzeIngredients(ing); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })() : null;
         setSelectedProduct({ id: p.id, productId: p.id, productName: p.productName || post.productName, brand: p.brand || post.brand, image: p.adminImage || p.image || post.productImage || post.image || "", poreScore: liveScore ?? p.poreScore ?? post.poreScore ?? 0, communityRating: p.communityRating || post.communityRating, ingredients: ing, flaggedIngredients: ing ? analyzeIngredients(ing).found : [], buyUrl: p.buyUrl || post.buyUrl || amazonUrl(p.productName || post.productName, p.brand || post.brand, p.barcode || post.barcode, p.asin || post.asin, p.buyUrl || post.buyUrl) });
@@ -986,7 +990,7 @@ export function ShopPage({ user, profile, onUpdateProfile }) {
       }
     } catch (e) {}
     const pName = post.productName || post.name || "";
-    const ing = (post.ingredients || "").trim();
+    const rawIngFb = post.ingredients || ""; const ing = (Array.isArray(rawIngFb) ? rawIngFb.map(i => i.label_name || i.name || "").join(", ") : rawIngFb).trim();
     const liveScore = ing.length > 10 ? (() => { const r = analyzeIngredients(ing); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })() : null;
     setSelectedProduct({ productName: pName, brand: post.brand, image: post.adminImage || post.image || post.productImage || "", poreScore: liveScore ?? post.poreScore ?? 0, communityRating: post.communityRating, ingredients: ing, flaggedIngredients: ing ? analyzeIngredients(ing).found : [], buyUrl: post.buyUrl || amazonUrl(pName, post.brand, post.barcode, post.asin, post.buyUrl) });
   }
