@@ -53,7 +53,8 @@ export function analyzeRoutine(routine, shopProducts) {
     if (!product?.ingredients) return { name, score: null, poreScore: null, flagged: [], irritants: [], totalIngredients: 0 };
     const res = analyzeIngredients(product.ingredients);
     const displayPoreScore = Math.round(res.avgScore ?? 0);
-    const totalIngredients = (product.ingredients || "").split(",").filter(t => t.trim()).length;
+    const _ingR = product.ingredients; const _ingS = Array.isArray(_ingR) ? _ingR.map(i => i.label_name || i.name || "").join(", ") : (_ingR || "");
+    const totalIngredients = _ingS.split(",").filter(t => t.trim()).length;
     return {
       name,
       poreScore: displayPoreScore,

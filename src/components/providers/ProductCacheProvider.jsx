@@ -20,7 +20,11 @@ export function ProductCacheProvider({ children }) {
         const ix = {};
         const ixn = {};
         snap.forEach(d => {
-          const data = { id: d.id, ...d.data() };
+          const raw = d.data();
+          if (Array.isArray(raw.ingredients)) {
+            raw.ingredients = raw.ingredients.map(i => i.label_name || i.name || "").join(", ");
+          }
+          const data = { id: d.id, ...raw };
           ix[d.id] = data;
           const nameLower = (data.productName || data.name || "").toLowerCase().trim();
           if (nameLower) {

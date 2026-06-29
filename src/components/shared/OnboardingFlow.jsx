@@ -274,7 +274,7 @@ export function OnboardingFlow({ user, profile, onComplete }) {
           ))}
         </div>
 
-        <div style={{ background: "#ffffff", borderRadius: "2rem", padding: "2rem 1.75rem", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }} className="fu">
+        <div style={{ background: "#ffffff", borderRadius: "2rem", padding: "2rem 1.75rem", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
           <div style={{ fontSize: "1.35rem", fontWeight: "700", color: T.text, fontFamily: "'Inter',sans-serif", letterSpacing: "-0.02em", marginBottom: "0.5rem", lineHeight: 1.25, whiteSpace: "pre-line", textAlign: "center" }}>{s.title}</div>
           <div style={{ fontSize: "0.82rem", color: T.textMid, lineHeight: 1.6, textAlign: "center" }}>{s.subtitle}</div>
           {s.content}

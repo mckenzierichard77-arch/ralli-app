@@ -97,7 +97,8 @@ export function UserPage({ uid, currentUid, currentProfile, onUpdateProfile, onB
       if (!product?.ingredients) return { name, score: null, poreScore: null, flagged: [], irritants: [], totalIngredients: 0 };
       const res = analyzeIngredients(product.ingredients);
       const displayPoreScore = Math.round(res.avgScore ?? 0);
-      return { name, poreScore: displayPoreScore, flagged: (res.poreCloggers || []).sort((a, b) => b.score - a.score), irritants: (res.irritants || []), totalIngredients: (product.ingredients || "").split(",").filter(t => t.trim()).length, hasData: true };
+      const _ingR = product.ingredients; const _ingS = Array.isArray(_ingR) ? _ingR.map(i => i.label_name || i.name || "").join(", ") : (_ingR || "");
+      return { name, poreScore: displayPoreScore, flagged: (res.poreCloggers || []).sort((a, b) => b.score - a.score), irritants: (res.irritants || []), totalIngredients: _ingS.split(",").filter(t => t.trim()).length, hasData: true };
     });
     const withData = results.filter(r => r.hasData);
     if (!withData.length) return { results, overall: null, grade: null, gradeColor: T.textLight, label: "Add products with ingredients", withData: 0, productCount: 0, toWatchCount: 0, toWatchList: [], totalIngredients: 0, overlaps: [] };

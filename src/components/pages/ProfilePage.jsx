@@ -104,7 +104,9 @@ async function getShopProducts() {
     const CAT_LIMIT = 15;
     const candidates = snap.docs
       .map(d => {
-        const p = {id:d.id,...d.data()};
+        const raw = d.data();
+        if (Array.isArray(raw.ingredients)) raw.ingredients = raw.ingredients.map(i => i.label_name || i.name || "").join(", ");
+        const p = {id:d.id,...raw};
         if (p.ingredients && p.ingredients.trim().length > 10) {
           const live = analyzeIngredients(p.ingredients).avgScore;
           if (live != null) p.poreScore = Math.round(live);
@@ -180,7 +182,8 @@ function analyzeRoutine(routine, shopProducts) {
     if (!product?.ingredients) return { name, score: null, poreScore: null, flagged: [], irritants: [], totalIngredients: 0 };
     const res = analyzeIngredients(product.ingredients);
     const displayPoreScore = Math.round(res.avgScore ?? 0);
-    const totalIngredients = (product.ingredients || "").split(",").filter(t => t.trim()).length;
+    const _ingR = product.ingredients; const _ingS = Array.isArray(_ingR) ? _ingR.map(i => i.label_name || i.name || "").join(", ") : (_ingR || "");
+    const totalIngredients = _ingS.split(",").filter(t => t.trim()).length;
     return {
       name,
       poreScore: displayPoreScore,
@@ -1584,9 +1587,11 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       const q = query(collection(db,"products"), where("productName","==", post.productName||post.name||""), limit(1));
       const snap = await getDocs(q);
       if (!snap.empty) {
-        const p = {id:snap.docs[0].id, ...snap.docs[0].data()};
+        const rawP = snap.docs[0].data();
+        if (Array.isArray(rawP.ingredients)) rawP.ingredients = rawP.ingredients.map(i => i.label_name || i.name || "").join(", ");
+        const p = {id:snap.docs[0].id, ...rawP};
         const ingA = (p.ingredients||"").trim();
-        const ingB = (post.ingredients||"").trim();
+        const rawIB = post.ingredients||""; const ingB = (Array.isArray(rawIB) ? rawIB.map(i => i.label_name || i.name || "").join(", ") : rawIB).trim();
         const ing = ingA.length >= ingB.length ? (ingA||ingB) : (ingB||ingA);
         const liveScore = ing.length > 10 ? (() => { const r = analyzeIngredients(ing); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })() : null;
         setSelectedProduct({ id: p.id, productId: p.id, productName: p.productName||post.productName, brand: p.brand||post.brand, image: p.adminImage||p.image||post.productImage||post.image||"", poreScore: liveScore ?? p.poreScore ?? post.poreScore ?? 0, communityRating: p.communityRating||post.communityRating, ingredients: ing, flaggedIngredients: ing ? analyzeIngredients(ing).found : [], buyUrl: p.buyUrl||post.buyUrl||amazonUrl(p.productName||post.productName, p.brand||post.brand, p.barcode||post.barcode, p.asin||post.asin, p.buyUrl||post.buyUrl) });
@@ -1594,7 +1599,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       }
     } catch(e) {}
     const pName = post.productName||post.name||"";
-    const ing = (post.ingredients||"").trim();
+    const rawIngFb = post.ingredients||""; const ing = (Array.isArray(rawIngFb) ? rawIngFb.map(i => i.label_name || i.name || "").join(", ") : rawIngFb).trim();
     const liveScore = ing.length > 10 ? (() => { const r = analyzeIngredients(ing); return r.avgScore != null ? Math.round(r.avgScore) : (r.poreCloggers?.length ? 1 : 0); })() : null;
     setSelectedProduct({ productName: pName, brand: post.brand, image: post.adminImage||post.image||post.productImage||"", poreScore: liveScore ?? post.poreScore ?? 0, communityRating: post.communityRating, ingredients: ing, flaggedIngredients: ing ? analyzeIngredients(ing).found : [], buyUrl: post.buyUrl||amazonUrl(pName, post.brand, post.barcode, post.asin, post.buyUrl) });
   }
@@ -1873,7 +1878,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       </div>
 
       {editing&&(
-        <div style={{background:T.surface,borderRadius:"0.75rem",border:`1px solid ${T.border}`,padding:"1rem",marginBottom:"1rem"}} className="fu">
+        <div style={{background:T.surface,borderRadius:"0.75rem",border:`1px solid ${T.border}`,padding:"1rem",marginBottom:"1rem"}}>
           <input value={bio} onChange={e=>setBio(e.target.value)} placeholder="Add a bio…" style={{width:"100%",padding:"0.65rem 0.9rem",borderRadius:"0.5rem",border:`1px solid ${T.border}`,fontSize:"0.85rem",color:T.text,background:"#FFFFFF",outline:"none",fontFamily:"'Inter',sans-serif",marginBottom:"0.6rem"}} onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border}/>
           <div style={{fontSize:"0.72rem",color:T.textLight,marginBottom:"0.25rem",fontFamily:"'Inter',sans-serif"}}>Phone <span style={{fontStyle:"italic"}}>(so contacts can find you)</span></div>
           <input value={phoneEdit} onChange={e=>setPhoneEdit(e.target.value)} placeholder="+1 (555) 000-0000" type="tel" style={{width:"100%",padding:"0.65rem 0.9rem",borderRadius:"0.5rem",border:`1px solid ${T.border}`,fontSize:"0.85rem",color:T.text,background:"#FFFFFF",outline:"none",fontFamily:"'Inter',sans-serif",marginBottom:"0.75rem",boxSizing:"border-box"}} onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border}/>
@@ -1920,7 +1925,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       )}
 
       {activeTab==="routine"&&(
-        <div className="fu">
+        <div>
           {(()=>{
             const routineRefs = profile?.routineRefs || {};
             function openListItem(name) {
@@ -1959,7 +1964,7 @@ function MyProfilePage({user, profile, onUpdate, onUserTap, onAdminTap=()=>{}}) 
       )}
 
       {activeTab==="lists"&&(
-        <div className="fu">
+        <div>
           {(()=>{
             const wantToTryRefs = profile?.wantToTryRefs || {};
             const brokeoutRefs = profile?.brokeoutRefs || {};
